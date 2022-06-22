@@ -1,0 +1,96 @@
+# This workflow will install Python dependencies, run tests and lint with a
+# single version of Python. For more information see:
+# https://help.github.com/actions/language-and-framework-guides\
+# /using-python-with-github-actions
+
+name: Test post_install
+
+on:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      DB: "viindoo_test_post_install"
+      DB_HOST: "localhost"
+      DB_PASSWORD: "viindoo"
+      DB_PORT: 5432
+      DB_USERNAME: "viindoo"
+      ODOO: "./odoo/odoo-bin"
+      PGHOST: "localhost"
+      PGPASSWORD: "viindoo"
+      PGUSER: "viindoo"
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: 3.9
+      - name: Configure Postgres
+        uses: harmon758/postgresql-action@v1
+        with:
+          postgresql version: "10"
+          postgresql user: ${DB_USERNAME}
+          postgresql password: ${DB_PASSWORD}
+      - name: Wait / Sleep
+        uses: jakejarvis/wait-action@v0.1.0
+      - name: Check out Odoo
+        uses: actions/checkout@v2
+        with:
+          path: odoo
+      - name: Configuration
+        run: |
+          sudo apt update
+          sudo apt install \
+              expect \
+              expect-dev \
+              libevent-dev \
+              libldap2-dev \
+              libsasl2-dev \
+              libxml2-dev \
+              libxslt1-dev \
+              nodejs \
+              python3-lxml \
+              python3-passlib \
+              python3-psycopg2 \
+              python3-serial \
+              python3-simplejson \
+              python3-werkzeug \
+              python3-yaml \
+              unixodbc-dev \
+              wkhtmltopdf
+      - name: Requirements Installation
+        run: |
+          sudo npm install -g less less-plugin-clean-css
+          pip install -q -r odoo/requirements.txt
+          # select modules and perform the upgrade
+      - name: Test post_install
+        run: |
+          ALL_MODULES=base,$(\
+              dir odoo/addons -1 \
+              | grep -Ev ',|hw_drivers|hw_escpos|hw_posbox_homepage|hw_proxy|pad|pad_project|l10n_latam_base|l10n_ua|l10n_hk|l10n_es_edi_sii|l10n_au|l10n_dk|l10n_uk|l10n_id|l10n_bo|l10n_il|l10n_cn_small_business|l10n_hr|l10n_co_pos|l10n_cz|l10n_ae|l10n_pt|l10n_it_stock_ddt|l10n_id_efaktur|l10n_de_repair|l10n_be_edi|l10n_it|l10n_gt|l10n_ch|l10n_dz|l10n_pa|l10n_cr|l10n_ve|l10n_tr|l10n_eu_service|l10n_sg|l10n_de_skr03|l10n_ie|l10n_jp|l10n_ro|l10n_nz|l10n_fr|l10n_de_sale|l10n_in_sale|l10n_ar_website_sale|l10n_de_stock|l10n_us|l10n_pe|l10n_cn_standard|l10n_it_edi_sdicoop|l10n_cn_city|l10n_sa|l10n_mn|l10n_in_sale_stock|l10n_do|l10n_cl|l10n_ar|l10n_lt|l10n_vn|l10n_syscohada|l10n_nl|l10n_br|l10n_mx|l10n_hn|l10n_ch_qriban|l10n_in_purchase_stock|l10n_si|l10n_be|l10n_fi|l10n_in_pos|l10n_za|l10n_at|l10n_ma|l10n_pl|l10n_ec|l10n_fr_pos_cert|l10n_in|l10n_in_stock|l10n_th|l10n_ca|l10n_de_skr04|l10n_uy|l10n_de_purchase|l10n_latam_invoice_document|l10n_et|l10n_se_ocr|l10n_es|l10n_hu|l10n_no|l10n_be_invoice_bba|l10n_in_purchase|l10n_gr|l10n_sk|l10n_co|l10n_it_edi|l10n_de|l10n_multilang|l10n_cn|l10n_fr_fec|l10n_se|l10n_lu|l10n_ae_pos|note_pad|odoo|l10n_fr_facturx_chorus_pro|l10n_account_edi_ubl_cii_tests|l10n_eg|l10n_eg_edi_eta|l10n_eu_oss|l10n_fi_sale|l10n_gcc_invoice|l10n_gcc_pos|l10n_in_edi|l10n_ke|l10n_nl_edi|l10n_no_edi|l10n_pk|l10n_sa_invoice|l10n_sa_pos|l10n_tw|hw_l10n_eg_eta' \
+              | sed 's/ /,/g' \
+              | paste -d, -s),$(\
+              dir odoo/odoo/addons -1 \
+              | grep -Ev ',|hw_drivers|hw_escpos|hw_posbox_homepage|hw_proxy|pad|pad_project|l10n_latam_base|l10n_ua|l10n_hk|l10n_es_edi_sii|l10n_au|l10n_dk|l10n_uk|l10n_id|l10n_bo|l10n_il|l10n_cn_small_business|l10n_hr|l10n_co_pos|l10n_cz|l10n_ae|l10n_pt|l10n_it_stock_ddt|l10n_id_efaktur|l10n_de_repair|l10n_be_edi|l10n_it|l10n_gt|l10n_ch|l10n_dz|l10n_pa|l10n_cr|l10n_ve|l10n_tr|l10n_eu_service|l10n_sg|l10n_de_skr03|l10n_ie|l10n_jp|l10n_ro|l10n_nz|l10n_fr|l10n_de_sale|l10n_in_sale|l10n_ar_website_sale|l10n_de_stock|l10n_us|l10n_pe|l10n_cn_standard|l10n_it_edi_sdicoop|l10n_cn_city|l10n_sa|l10n_mn|l10n_in_sale_stock|l10n_do|l10n_cl|l10n_ar|l10n_lt|l10n_vn|l10n_syscohada|l10n_nl|l10n_br|l10n_mx|l10n_hn|l10n_ch_qriban|l10n_in_purchase_stock|l10n_si|l10n_be|l10n_fi|l10n_in_pos|l10n_za|l10n_at|l10n_ma|l10n_pl|l10n_ec|l10n_fr_pos_cert|l10n_in|l10n_in_stock|l10n_th|l10n_ca|l10n_de_skr04|l10n_uy|l10n_de_purchase|l10n_latam_invoice_document|l10n_et|l10n_se_ocr|l10n_es|l10n_hu|l10n_no|l10n_be_invoice_bba|l10n_in_purchase|l10n_gr|l10n_sk|l10n_co|l10n_it_edi|l10n_de|l10n_multilang|l10n_cn|l10n_fr_fec|l10n_se|l10n_lu|l10n_ae_pos|note_pad|odoo|l10n_fr_facturx_chorus_pro|l10n_account_edi_ubl_cii_tests|l10n_eg|l10n_eg_edi_eta|l10n_eu_oss|l10n_fi_sale|l10n_gcc_invoice|l10n_gcc_pos|l10n_in_edi|l10n_ke|l10n_nl_edi|l10n_no_edi|l10n_pk|l10n_sa_invoice|l10n_sa_pos|l10n_tw|hw_l10n_eg_eta' \
+              | sed 's/ /,/g' \
+              | paste -d, -s)
+          ADDONS_PATHS="\
+              $GITHUB_WORKSPACE/odoo/addons \
+              $GITHUB_WORKSPACE/odoo/odoo/addons"
+          echo Installed modules $ALL_MODULES
+          # Silence redundant logs from unlinking records (1 line is enough)
+          # to prevent log overflow
+          ODOO_TESTS=1 $ODOO \
+              --addons-path=`echo $ADDONS_PATHS | awk -v OFS="," '$1=$1'` \
+              --database=$DB \
+              --db_host=$DB_HOST \
+              --db_password=$DB_PASSWORD \
+              --db_port=$DB_PORT \
+              --db_user=$DB_USERNAME \
+              --load=base,web \
+              --log-handler odoo.models.unlink:WARNING \
+              --init `echo $ALL_MODULES | awk -v OFS="," '$1=$1'` \
+              --test-enable \
+              --test-tags=post_install,-at_install,-/web:WebSuite.test_js,-:TestIsMultiLang.test_02_url_lang_code_underscore,-:TestUi.test_01_main_flow_tour,-:WebSuite.test_check_suite,-:TestTermCount.test_export_empty_string,-:TestLifoPrice.test_lifoprice,-:BuckarooTest.test_redirect_form_values,-:SipsTest.test_redirect_form_values,-pad,-pad_project \
+              --stop-after-init
