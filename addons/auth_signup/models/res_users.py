@@ -123,13 +123,10 @@ class ResUsers(models.Model):
             invite_partner = user.create_uid.partner_id
             if invite_partner:
                 # notify invite user that new user is connected
-                title = _("%s connected", user.name)
-                message = _("This is his first connection. Wish him welcome")
-                self.env['bus.bus'].sendone(
-                    (self._cr.dbname, 'res.partner', invite_partner.id),
-                    {'type': 'user_connection', 'title': title,
-                     'message': message, 'partner_id': user.partner_id.id}
-                )
+                self.env['bus.bus']._sendone(invite_partner, 'res.users/connection', {
+                    'username': user.name,
+                    'partnerId': user.partner_id.id,
+                })
 
     def _create_user_from_template(self, values):
         template_user_id = literal_eval(self.env['ir.config_parameter'].sudo().get_param('base.template_portal_user_id', 'False'))
@@ -164,6 +161,8 @@ class ResUsers(models.Model):
 
     def action_reset_password(self):
         """ create signup token for each user, and send their signup url by email """
+        if self.env.context.get('install_mode', False):
+            return
         if self.filtered(lambda user: not user.active):
             raise UserError(_("You cannot perform this action on an archived user."))
         # prepare reset password signup
@@ -185,22 +184,22 @@ class ResUsers(models.Model):
             template = self.env.ref('auth_signup.reset_password_email')
         assert template._name == 'mail.template'
 
-        template_values = {
-            'email_to': '${object.email|safe}',
+        email_values = {
             'email_cc': False,
             'auto_delete': True,
-            'partner_to': False,
+            'recipient_ids': [],
+            'partner_ids': [],
             'scheduled_date': False,
         }
-        template.write(template_values)
 
         for user in self:
             if not user.email:
                 raise UserError(_("Cannot send email: user %s has no email address.", user.name))
+            email_values['email_to'] = user.email
             # TDE FIXME: make this template technical (qweb)
             with self.env.cr.savepoint():
                 force_send = not(self.env.context.get('import_file', False))
-                template.send_mail(user.id, force_send=force_send, raise_exception=True)
+                template.send_mail(user.id, force_send=force_send, raise_exception=True, email_values=email_values)
             _logger.info("Password reset email sent for user <%s> to <%s>", user.login, user.email)
 
     def send_unregistered_user_reminder(self, after_days=5):

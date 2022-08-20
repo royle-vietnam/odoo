@@ -86,14 +86,57 @@ class Query(object):
         self._where_params.extend(where_params)
 
     def join(self, lhs_alias, lhs_column, rhs_table, rhs_column, link, extra=None, extra_params=()):
-        """ Add an INNER JOIN to the current table (if necessary), and return
-        the alias corresponding to ``rhs_table``.
+        """
+        Perform a join between a table already present in the current Query object and
+        another table.
+
+        :param str lhs_alias: alias of a table already defined in the current Query object.
+        :param str lhs_column: column of `lhs_alias` to be used for the join's ON condition.
+        :param str rhs_table: name of the table to join to `lhs_alias`.
+        :param str rhs_column: column of `rhs_alias` to be used for the join's ON condition.
+        :param str link: used to generate the alias for the joined table, this string should
+            represent the relationship (the link) between both tables.
+        :param str extra: an sql string of a predicate or series of predicates to append to the
+            join's ON condition, `lhs_alias` and `rhs_alias` can be injected if the string uses
+            the `lhs` and `rhs` variables with the `str.format` syntax. e.g.::
+
+                query.join(..., extra="{lhs}.name != {rhs}.name OR ...", ...)
+
+        :param tuple extra_params: a tuple of values to be interpolated into `extra`, this is
+            done by psycopg2.
+
+        Full example:
+
+        >>> rhs_alias = query.join(
+        ...     "res_users",
+        ...     "partner_id",
+        ...     "res_partner",
+        ...     "id",
+        ...     "partner_id",           # partner_id is the "link" from res_users to res_partner
+        ...     "{lhs}.\"name\" != %s",
+        ...     ("Mitchell Admin",),
+        ... )
+        >>> rhs_alias
+        res_users_res_partner__partner_id
+
+        From the example above, the resulting query would be something like::
+
+            SELECT ...
+            FROM "res_users" AS "res_users"
+            JOIN "res_partner" AS "res_users_res_partner__partner_id"
+                ON "res_users"."partner_id" = "res_users_res_partner__partner_id"."id"
+                AND "res_users"."name" != 'Mitchell Admin'
+            WHERE ...
+
         """
         return self._join('JOIN', lhs_alias, lhs_column, rhs_table, rhs_column, link, extra, extra_params)
 
     def left_join(self, lhs_alias, lhs_column, rhs_table, rhs_column, link, extra=None, extra_params=()):
         """ Add a LEFT JOIN to the current table (if necessary), and return the
         alias corresponding to ``rhs_table``.
+
+        See the documentation of :meth:`~odoo.osv.query.Query.join` for a better overview of the
+        arguments and what they do.
         """
         return self._join('LEFT JOIN', lhs_alias, lhs_column, rhs_table, rhs_column, link, extra, extra_params)
 
@@ -127,6 +170,22 @@ class Query(object):
             (" ORDER BY %s" % self.order) if self.order else "",
             (" LIMIT %d" % self.limit) if self.limit else "",
             (" OFFSET %d" % self.offset) if self.offset else "",
+        )
+        return query_str, params
+
+    def subselect(self, *args):
+        """ Similar to :meth:`.select`, but for sub-queries.
+            This one avoids the ORDER BY clause when possible.
+        """
+        if self.limit or self.offset:
+            # in this case, the ORDER BY clause is necessary
+            return self.select(*args)
+
+        from_clause, where_clause, params = self.get_sql()
+        query_str = 'SELECT {} FROM {} WHERE {}'.format(
+            ", ".join(args or [f'"{next(iter(self._tables))}".id']),
+            from_clause,
+            where_clause or "TRUE",
         )
         return query_str, params
 

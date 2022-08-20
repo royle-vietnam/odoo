@@ -1,54 +1,29 @@
-odoo.define('mail/static/src/components/chatter/chatter.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    ActivityBox: require('mail/static/src/components/activity_box/activity_box.js'),
-    AttachmentBox: require('mail/static/src/components/attachment_box/attachment_box.js'),
-    ChatterTopbar: require('mail/static/src/components/chatter_topbar/chatter_topbar.js'),
-    Composer: require('mail/static/src/components/composer/composer.js'),
-    ThreadView: require('mail/static/src/components/thread_view/thread_view.js'),
-};
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
+import { useUpdate } from '@mail/component_hooks/use_update/use_update';
+import { useComponentToModel } from '@mail/component_hooks/use_component_to_model/use_component_to_model';
+import { useRefToModel } from '@mail/component_hooks/use_ref_to_model/use_ref_to_model';
 
 const { Component } = owl;
 const { useRef } = owl.hooks;
 
-class Chatter extends Component {
+export class Chatter extends Component {
 
     /**
      * @override
      */
     constructor(...args) {
         super(...args);
-        useStore(props => {
-            const chatter = this.env.models['mail.chatter'].get(props.chatterLocalId);
-            const thread = chatter ? chatter.thread : undefined;
-            let attachments = [];
-            if (thread) {
-                attachments = thread.allAttachments;
-            }
-            return {
-                attachments: attachments.map(attachment => attachment.__state),
-                chatter: chatter ? chatter.__state : undefined,
-                thread: thread ? thread.__state : undefined,
-            };
-        }, {
-            compareDepth: {
-                attachments: 1,
-            },
-        });
+        useUpdate({ func: () => this._update() });
+        useComponentToModel({ fieldName: 'component', modelName: 'mail.chatter', propNameAsRecordLocalId: 'chatterLocalId' });
+        useRefToModel({ fieldName: 'threadRef', modelName: 'mail.chatter', propNameAsRecordLocalId: 'chatterLocalId', refName: 'thread' });
         /**
-         * Reference of the composer. Useful to focus it.
+         * Reference of the scroll Panel (Real scroll element). Useful to pass the Scroll element to
+         * child component to handle proper scrollable element.
          */
-        this._composerRef = useRef('composer');
-    }
-
-    mounted() {
-        this._update();
-    }
-
-    patched() {
-        this._update();
+        this._scrollPanelRef = useRef('scrollPanel');
+        this.getScrollableElement = this.getScrollableElement.bind(this);
     }
 
     //--------------------------------------------------------------------------
@@ -59,7 +34,17 @@ class Chatter extends Component {
      * @returns {mail.chatter}
      */
     get chatter() {
-        return this.env.models['mail.chatter'].get(this.props.chatterLocalId);
+        return this.messaging && this.messaging.models['mail.chatter'].get(this.props.chatterLocalId);
+    }
+
+    /**
+     * @returns {Element|undefined} Scrollable Element
+     */
+    getScrollableElement() {
+        if (!this._scrollPanelRef.el) {
+            return;
+        }
+        return this._scrollPanelRef.el;
     }
 
     //--------------------------------------------------------------------------
@@ -80,39 +65,21 @@ class Chatter extends Component {
      * @private
      */
     _update() {
+        if (!this.chatter) {
+            return;
+        }
         if (this.chatter.thread) {
             this._notifyRendered();
         }
-        if (this.chatter.isDoFocus) {
-            this.chatter.update({ isDoFocus: false });
-            const composer = this._composerRef.comp;
-            if (composer) {
-                composer.focus();
-            }
-        }
-    }
-
-    //--------------------------------------------------------------------------
-    // Handlers
-    //--------------------------------------------------------------------------
-
-    /**
-     * @private
-     */
-    _onComposerMessagePosted() {
-        this.chatter.update({ isComposerVisible: false });
     }
 
 }
 
 Object.assign(Chatter, {
-    components,
     props: {
         chatterLocalId: String,
     },
     template: 'mail.Chatter',
 });
 
-return Chatter;
-
-});
+registerMessagingComponent(Chatter);

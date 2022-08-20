@@ -1,15 +1,11 @@
-odoo.define('website_slides.editor', function (require) {
-"use strict";
+/** @odoo-module **/
 
-var core = require('web.core');
-var Dialog = require('web.Dialog');
-var QWeb = core.qweb;
-var WebsiteNewMenu = require('website.newMenu');
-var TagCourseDialog = require('website_slides.channel_tag.add').TagCourseDialog;
-var wUtils = require('website.utils');
+import { _t } from 'web.core';
+import Dialog from 'web.Dialog';
+import WebsiteNewMenu from 'website.newMenu';
+import SlidesCourseTagAdd from '@website_slides/js/slides_course_tag_add';
 
-var _t = core._t;
-
+const TagCourseDialog = SlidesCourseTagAdd.TagCourseDialog;
 
 var ChannelCreateDialog = Dialog.extend({
     template: 'website.slide.channel.create',
@@ -184,5 +180,4 @@ WebsiteNewMenu.include({
         });
         return def;
      },
-});
 });

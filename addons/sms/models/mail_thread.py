@@ -21,7 +21,7 @@ class MailThread(models.AbstractModel):
         res = {}
         if self.ids:
             self._cr.execute(""" SELECT msg.res_id, COUNT(msg.res_id) FROM mail_message msg
-                                 RIGHT JOIN mail_message_res_partner_needaction_rel rel
+                                 RIGHT JOIN mail_notification rel
                                  ON rel.mail_message_id = msg.id AND rel.notification_type = 'sms' AND rel.notification_status in ('exception')
                                  WHERE msg.author_id = %s AND msg.model = %s AND msg.res_id in %s AND msg.message_type != 'user_notification'
                                  GROUP BY msg.res_id""",
@@ -53,13 +53,15 @@ class MailThread(models.AbstractModel):
         """
         partners = self.env['res.partner']
         for fname in self._sms_get_partner_fields():
-            partners |= self.mapped(fname)
+            partners = partners.union(*self.mapped(fname))  # ensure ordering
         return partners
 
     def _sms_get_number_fields(self):
         """ This method returns the fields to use to find the number to use to
         send an SMS on a record. """
-        return ['mobile']
+        if 'mobile' in self:
+            return ['mobile']
+        return []
 
     def _sms_get_recipients_info(self, force_field=False, partner_fallback=True):
         """" Get SMS recipient information on current record set. This method
@@ -155,8 +157,9 @@ class MailThread(models.AbstractModel):
             'default_res_model': self._name,
             'default_composition_mode': 'mass',
             'default_template_id': template.id if template else False,
-            'default_body': body if body and not template else False,
         }
+        if body and not template:
+            composer_context['default_body'] = body
         if active_domain is not None:
             composer_context['default_use_active_domain'] = True
             composer_context['default_active_domain'] = repr(active_domain)
@@ -178,7 +181,7 @@ class MailThread(models.AbstractModel):
 
         :param template: a valid sms.template record;
         :param template_xmlid: XML ID of an sms.template (if no template given);
-        :param template_fallback: plaintext (jinja-enabled) in case template
+        :param template_fallback: plaintext (inline_template-enabled) in case template
           and template xml id are falsy (for example due to deleted data);
         """
         self.ensure_one()
@@ -223,7 +226,7 @@ class MailThread(models.AbstractModel):
                     sms_numbers = [False]
 
         if subtype_id is False:
-            subtype_id = self.env['ir.model.data'].xmlid_to_res_id('mail.mt_note')
+            subtype_id = self.env['ir.model.data']._xmlid_to_res_id('mail.mt_note')
 
         return self.message_post(
             body=plaintext2html(html2plaintext(body)), partner_ids=partner_ids or [],  # TDE FIXME: temp fix otherwise crash mail_thread.py
@@ -269,7 +272,7 @@ class MailThread(models.AbstractModel):
         }
 
         # notify from computed recipients_data (followers, specific recipients)
-        partners_data = [r for r in recipients_data['partners'] if r['notif'] == 'sms']
+        partners_data = [r for r in recipients_data if r['notif'] == 'sms']
         partner_ids = [r['id'] for r in partners_data]
         if partner_ids:
             for partner in self.env['res.partner'].sudo().browse(partner_ids):
@@ -294,7 +297,7 @@ class MailThread(models.AbstractModel):
                 partner_id=False,
                 number=n,
                 state='outgoing' if n else 'error',
-                error_code='' if n else 'sms_number_missing',
+                failure_type='' if n else 'sms_number_missing',
             ) for n in tocreate_numbers]
 
         # create sms and notification
@@ -323,7 +326,7 @@ class MailThread(models.AbstractModel):
                 'sms_id': sms.id,
                 'is_read': True,  # discard Inbox notification
                 'notification_status': 'ready' if sms.state == 'outgoing' else 'exception',
-                'failure_type': '' if sms.state == 'outgoing' else sms.error_code,
+                'failure_type': '' if sms.state == 'outgoing' else sms.failure_type,
             } for sms in sms_all if (sms.partner_id and sms.partner_id.id not in existing_pids) or (not sms.partner_id and sms.number not in existing_numbers)]
             if notif_create_values:
                 self.env['mail.notification'].sudo().create(notif_create_values)

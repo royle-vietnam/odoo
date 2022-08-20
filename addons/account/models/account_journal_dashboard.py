@@ -71,6 +71,19 @@ class account_journal(models.Model):
     json_activity_data = fields.Text(compute='_get_json_activity_data')
     show_on_dashboard = fields.Boolean(string='Show journal on dashboard', help="Whether this journal should be displayed on the dashboard or not", default=True)
     color = fields.Integer("Color Index", default=0)
+    entries_count = fields.Integer(compute='_compute_entries_count')
+
+    def _compute_entries_count(self):
+        res = {
+            r['journal_id'][0]: r['journal_id_count']
+            for r in self.env['account.move'].read_group(
+                domain=[('journal_id', 'in', self.ids)],
+                fields=['journal_id'],
+                groupby=['journal_id'],
+            )
+        }
+        for journal in self:
+            journal.entries_count = res.get(journal.id, 0)
 
     def _graph_title_and_key(self):
         if self.type in ['sale', 'purchase']:
@@ -144,7 +157,7 @@ class account_journal(models.Model):
 
     def get_bar_graph_datas(self):
         data = []
-        today = fields.Datetime.now(self)
+        today = fields.Date.today()
         data.append({'label': _('Due'), 'value':0.0, 'type': 'past'})
         day_of_week = int(format_datetime(today, 'e', locale=get_lang(self.env).code))
         first_day_of_week = today + timedelta(days=-day_of_week+1)
@@ -166,23 +179,29 @@ class account_journal(models.Model):
         (select_sql_clause, query_args) = self._get_bar_graph_select_query()
         query = ''
         start_date = (first_day_of_week + timedelta(days=-7))
+        weeks = []
         for i in range(0,6):
             if i == 0:
                 query += "("+select_sql_clause+" and invoice_date_due < '"+start_date.strftime(DF)+"')"
+                weeks.append((start_date.min, start_date))
             elif i == 5:
                 query += " UNION ALL ("+select_sql_clause+" and invoice_date_due >= '"+start_date.strftime(DF)+"')"
+                weeks.append((start_date, start_date.max))
             else:
                 next_date = start_date + timedelta(days=7)
                 query += " UNION ALL ("+select_sql_clause+" and invoice_date_due >= '"+start_date.strftime(DF)+"' and invoice_date_due < '"+next_date.strftime(DF)+"')"
+                weeks.append((start_date, next_date))
                 start_date = next_date
-
+        # Ensure results returned by postgres match the order of data list
         self.env.cr.execute(query, query_args)
         query_results = self.env.cr.dictfetchall()
         is_sample_data = True
         for index in range(0, len(query_results)):
             if query_results[index].get('aggr_date') != None:
                 is_sample_data = False
-                data[index]['value'] = query_results[index].get('total')
+                aggr_date = query_results[index]['aggr_date']
+                week_index = next(i for i in range(0, len(weeks)) if weeks[i][0] <= aggr_date < weeks[i][1])
+                data[week_index]['value'] = query_results[index].get('total')
 
         [graph_title, graph_key] = self._graph_title_and_key()
 
@@ -231,9 +250,9 @@ class account_journal(models.Model):
             last_balance = last_statement.balance_end
             has_at_least_one_statement = bool(last_statement)
             bank_account_balance, nb_lines_bank_account_balance = self._get_journal_bank_account_balance(
-                domain=[('move_id.state', '=', 'posted')])
+                domain=[('parent_state', '=', 'posted')])
             outstanding_pay_account_balance, nb_lines_outstanding_pay_account_balance = self._get_journal_outstanding_payments_account_balance(
-                domain=[('move_id.state', '=', 'posted')])
+                domain=[('parent_state', '=', 'posted')])
 
             self._cr.execute('''
                 SELECT COUNT(st_line.id)
@@ -262,23 +281,10 @@ class account_journal(models.Model):
             self.env.cr.execute(query, query_args)
             query_results_drafts = self.env.cr.dictfetchall()
 
-            today = fields.Date.context_today(self)
-            query = '''
-                SELECT
-                    (CASE WHEN move_type IN ('out_refund', 'in_refund') THEN -1 ELSE 1 END) * amount_residual AS amount_total,
-                    currency_id AS currency,
-                    move_type,
-                    invoice_date,
-                    company_id
-                FROM account_move move
-                WHERE journal_id = %s
-                AND date <= %s
-                AND state = 'posted'
-                AND payment_state in ('not_paid', 'partial')
-                AND move_type IN ('out_invoice', 'out_refund', 'in_invoice', 'in_refund', 'out_receipt', 'in_receipt');
-            '''
-            self.env.cr.execute(query, (self.id, today))
+            (query, query_args) = self._get_late_bills_query()
+            self.env.cr.execute(query, query_args)
             late_query_results = self.env.cr.dictfetchall()
+
             curr_cache = {}
             (number_waiting, sum_waiting) = self._count_results_and_sum_amounts(query_results_to_pay, currency, curr_cache=curr_cache)
             (number_draft, sum_draft) = self._count_results_and_sum_amounts(query_results_drafts, currency, curr_cache=curr_cache)
@@ -358,6 +364,22 @@ class account_journal(models.Model):
             AND move.move_type IN ('out_invoice', 'out_refund', 'in_invoice', 'in_refund', 'out_receipt', 'in_receipt');
         ''', {'journal_id': self.id})
 
+    def _get_late_bills_query(self):
+        return """
+            SELECT
+                (CASE WHEN move_type IN ('out_refund', 'in_refund') THEN -1 ELSE 1 END) * amount_residual AS amount_total,
+                currency_id AS currency,
+                move_type,
+                invoice_date,
+                company_id
+            FROM account_move move
+            WHERE journal_id = %(journal_id)s
+            AND invoice_date_due < %(today)s
+            AND state = 'posted'
+            AND payment_state in ('not_paid', 'partial')
+            AND move_type IN ('out_invoice', 'out_refund', 'in_invoice', 'in_refund', 'out_receipt', 'in_receipt');
+        """, {'journal_id': self.id, 'today': fields.Date.context_today(self)}
+
     def _count_results_and_sum_amounts(self, results_dict, target_currency, curr_cache=None):
         """ Loops on a query result to count the total number of invoices and sum
         their amount_total field (expressed in the given target currency).
@@ -428,6 +450,25 @@ class account_journal(models.Model):
             })
         return action
 
+    def action_create_vendor_bill(self):
+        """ This function is called by the "Import" button of Vendor Bills,
+        visible on dashboard if no bill has been created yet.
+        """
+        self.env.company.sudo().set_onboarding_step_done('account_setup_bill_state')
+
+        new_wizard = self.env['account.tour.upload.bill'].create({})
+        view_id = self.env.ref('account.account_tour_upload_bill').id
+
+        return {
+            'type': 'ir.actions.act_window',
+            'name': _('Import your first bill'),
+            'view_mode': 'form',
+            'res_model': 'account.tour.upload.bill',
+            'target': 'new',
+            'res_id': new_wizard.id,
+            'views': [[view_id, 'form']],
+        }
+
     def to_check_ids(self):
         self.ensure_one()
         domain = self.env['account.move.line']._get_suspense_moves_domain()
@@ -456,7 +497,7 @@ class account_journal(models.Model):
         action_name = self._select_action_to_open()
 
         # Set 'account.' prefix if missing.
-        if '.' not in action_name:
+        if not action_name.startswith("account."):
             action_name = 'account.%s' % action_name
 
         action = self.env["ir.actions.act_window"]._for_xml_id(action_name)
@@ -480,7 +521,7 @@ class account_journal(models.Model):
             if self.type == 'sale':
                 action['domain'] = [(domain_type_field, 'in', ('out_invoice', 'out_refund', 'out_receipt'))]
             elif self.type == 'purchase':
-                action['domain'] = [(domain_type_field, 'in', ('in_invoice', 'in_refund', 'in_receipt'))]
+                action['domain'] = [(domain_type_field, 'in', ('in_invoice', 'in_refund', 'in_receipt', 'entry'))]
 
         return action
 
@@ -500,7 +541,7 @@ class account_journal(models.Model):
             action_ref = 'account.action_account_payments_transfer'
         else:
             action_ref = 'account.action_account_payments'
-        [action] = self.env.ref(action_ref).read()
+        action = self.env['ir.actions.act_window']._for_xml_id(action_ref)
         action['context'] = dict(ast.literal_eval(action.get('context')), default_journal_id=self.id, search_default_journal_id=self.id)
         if payment_type == 'transfer':
             action['context'].update({
@@ -518,10 +559,9 @@ class account_journal(models.Model):
         ctx = dict(self.env.context, default_journal_id=self.id)
         if ctx.get('search_default_journal', False):
             ctx.update(search_default_journal_id=self.id)
+            ctx['search_default_journal'] = False  # otherwise it will do a useless groupby in bank statements
         ctx.pop('group_by', None)
-        ir_model_obj = self.env['ir.model.data']
-        model, action_id = ir_model_obj.get_object_reference('account', action_name)
-        [action] = self.env[model].browse(action_id).read()
+        action = self.env['ir.actions.act_window']._for_xml_id(f"account.{action_name}")
         action['context'] = ctx
         if ctx.get('use_domain', False):
             action['domain'] = isinstance(ctx['use_domain'], list) and ctx['use_domain'] or ['|', ('journal_id', '=', self.id), ('journal_id', '=', False)]

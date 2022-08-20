@@ -33,6 +33,7 @@
 
 {
     'name': 'Germany SKR03 - Accounting',
+    'icon': '/l10n_de/static/description/icon.png',
     'version': '3.0',
     'author': 'openbig.org',
     'website': 'http://www.openbig.org',
@@ -48,7 +49,7 @@ German accounting chart and localization.
         'data/l10n_de_skr03_chart_data.xml',
         'data/account.account.template.csv',
         'data/l10n_de_skr03_chart_post_data.xml',
-        'data/account_data.xml',
+        'data/account_tax_group_data.xml',
         'data/account_tax_fiscal_position_data.xml',
         'data/account_reconcile_model_template.xml',
         'data/account_chart_template_data.xml',
@@ -56,5 +57,6 @@ German accounting chart and localization.
     'demo': [
         'demo/demo_company.xml',
     ],
-    'auto_install': True
+    'auto_install': True,
+    'license': 'LGPL-3',
 }

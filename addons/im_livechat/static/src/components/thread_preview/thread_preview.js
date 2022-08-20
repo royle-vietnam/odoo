@@ -1,13 +1,12 @@
-odoo.define('im_livechat/static/src/components/thread_preview/thread_preview.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    ThreadPreview: require('mail/static/src/components/thread_preview/thread_preview.js'),
-};
+import { ThreadPreview } from '@mail/components/thread_preview/thread_preview';
 
-const { patch } = require('web.utils');
+import { patch } from 'web.utils';
 
-patch(components.ThreadPreview, 'im_livechat/static/src/components/thread_preview/thread_preview.js', {
+const components = { ThreadPreview };
+
+patch(components.ThreadPreview.prototype, 'im_livechat/static/src/components/thread_preview/thread_preview.js', {
 
     //--------------------------------------------------------------------------
     // Public
@@ -22,7 +21,5 @@ patch(components.ThreadPreview, 'im_livechat/static/src/components/thread_previe
         }
         return this._super(...args);
     }
-
-});
 
 });

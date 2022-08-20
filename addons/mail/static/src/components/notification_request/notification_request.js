@@ -1,29 +1,10 @@
-odoo.define('mail/static/src/components/notification_request/notification_request.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    PartnerImStatusIcon: require('mail/static/src/components/partner_im_status_icon/partner_im_status_icon.js'),
-};
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 
-class NotificationRequest extends Component {
-
-    /**
-     * @override
-     */
-    constructor(...args) {
-        super(...args);
-        useStore(props => {
-            return {
-                isDeviceMobile: this.env.messaging.device.isMobile,
-                partnerRoot: this.env.messaging.partnerRoot
-                    ? this.env.messaging.partnerRoot.__state
-                    : undefined,
-            };
-        });
-    }
+export class NotificationRequest extends Component {
 
     //--------------------------------------------------------------------------
     // Public
@@ -35,7 +16,7 @@ class NotificationRequest extends Component {
     getHeaderText() {
         return _.str.sprintf(
             this.env._t("%s has a request"),
-            this.env.messaging.partnerRoot.nameOrDisplayName
+            this.messaging.partnerRoot.nameOrDisplayName
         );
     }
 
@@ -51,13 +32,12 @@ class NotificationRequest extends Component {
      * @param {string} value
      */
     _handleResponseNotificationPermission(value) {
-        // manually force recompute because the permission is not in the store
-        this.env.messaging.messagingMenu.update();
+        this.messaging.refreshIsNotificationPermissionDefault();
         if (value !== 'granted') {
-            this.env.services['bus_service'].sendNotification(
-                this.env._t("Permission denied"),
-                this.env._t("Odoo will not have the permission to send native notifications on this device.")
-            );
+            this.env.services['bus_service'].sendNotification({
+                message: this.env._t("Odoo will not have the permission to send native notifications on this device."),
+                title: this.env._t("Permission denied"),
+            });
         }
     }
 
@@ -74,19 +54,16 @@ class NotificationRequest extends Component {
         if (def) {
             def.then(this._handleResponseNotificationPermission.bind(this));
         }
-        if (!this.env.messaging.device.isMobile) {
-            this.env.messaging.messagingMenu.close();
+        if (!this.messaging.device.isMobile) {
+            this.messaging.messagingMenu.close();
         }
     }
 
 }
 
 Object.assign(NotificationRequest, {
-    components,
     props: {},
     template: 'mail.NotificationRequest',
 });
 
-return NotificationRequest;
-
-});
+registerMessagingComponent(NotificationRequest);

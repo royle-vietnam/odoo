@@ -22,8 +22,8 @@ var LIVECHAT_COOKIE_HISTORY = 'im_livechat_history';
 var HISTORY_LIMIT = 15;
 
 var RATING_TO_EMOJI = {
-    "10": "😊",
-    "5": "😐",
+    "5": "😊",
+    "3": "😐",
     "1": "😞"
 };
 
@@ -48,6 +48,7 @@ var LivechatButton = Widget.extend({
         'close_chat_window': '_onCloseChatWindow',
         'post_message_chat_window': '_onPostMessageChatWindow',
         'save_chat_window': '_onSaveChatWindow',
+        'updated_typing_partners': '_onUpdatedTypingPartners',
         'updated_unread_counter': '_onUpdatedUnreadCounter',
     },
     events: {
@@ -70,31 +71,25 @@ var LivechatButton = Widget.extend({
         this._messages = [];
         this._serverURL = serverURL;
     },
-    willStart: function () {
-        var self = this;
+    async willStart() {
         var cookie = utils.get_cookie('im_livechat_session');
-        var ready;
-        if (!cookie) {
-            ready = session.rpc('/im_livechat/init', { channel_id: this.options.channel_id })
-                .then(function (result) {
-                    if (!result.available_for_me) {
-                        return Promise.reject();
-                    }
-                    self._rule = result.rule;
-                });
-        } else {
+        if (cookie) {
             var channel = JSON.parse(cookie);
-            ready = session.rpc('/mail/chat_history', { uuid: channel.uuid, limit: 100 })
-                .then(function (history) {
-                    self._history = history;
-                });
+            this._history = await session.rpc('/mail/chat_history', {uuid: channel.uuid, limit: 100});
+            this._history.reverse().forEach(message => { message.body = utils.Markup(message.body); });
+        } else {
+            const result = await session.rpc('/im_livechat/init', {channel_id: this.options.channel_id});
+            if (!result.available_for_me) {
+                return Promise.reject();
+            }
+            this._rule = result.rule;
         }
-        return ready.then(this._loadQWebTemplate.bind(this));
+        return this._loadQWebTemplate();
     },
     start: function () {
         this.$el.text(this.options.button_text);
         if (this._history) {
-            _.each(this._history.reverse(), this._addMessage.bind(this));
+            this._history.forEach(m => this._addMessage(m));
             this._openChat();
         } else if (!config.device.isMobile && this._rule.action === 'auto_popup') {
             var autoPopupCookie = utils.get_cookie('im_livechat_auto_popup');
@@ -174,12 +169,16 @@ var LivechatButton = Widget.extend({
     },
     /**
      * @private
-     * @param {Array} notification
+     * @param {Object} notification
+     * @param {Object} notification.payload
+     * @param {string} notification.type
      */
-    _handleNotification: function (notification) {
-        const [livechatUUID, notificationData] = notification;
-        if (this._livechat && (livechatUUID === this._livechat.getUUID())) {
-            if (notificationData._type === 'history_command') { // history request
+    _handleNotification: function ({ payload, type }) {
+        switch (type) {
+            case 'im_livechat.history_command': {
+                if (payload.id !== this._livechat._id) {
+                    return;
+                }
                 const cookie = utils.get_cookie(LIVECHAT_COOKIE_HISTORY);
                 const history = cookie ? JSON.parse(cookie) : [];
                 session.rpc('/im_livechat/history', {
@@ -187,16 +186,49 @@ var LivechatButton = Widget.extend({
                     channel_uuid: this._livechat.getUUID(),
                     page_history: history,
                 });
-            } else if ('body' in notificationData) { // normal message
+                return;
+            }
+            case 'mail.channel.partner/typing_status': {
+                if (payload.channel_id !== this._livechat._id) {
+                    return;
+                }
+                const partnerID = payload.partner_id;
+                if (partnerID === this.options.current_partner_id) {
+                    // ignore typing display of current partner.
+                    return;
+                }
+                if (payload.is_typing) {
+                    this._livechat.registerTyping({ partnerID });
+                } else {
+                    this._livechat.unregisterTyping({ partnerID });
+                }
+                return;
+            }
+            case 'mail.channel/new_message': {
+                if (payload.id !== this._livechat._id) {
+                    return;
+                }
+                const notificationData = payload.message;
                 // If message from notif is already in chatter messages, stop handling
                 if (this._messages.some(message => message.getID() === notificationData.id)) {
                     return;
                 }
+                notificationData.body = utils.Markup(notificationData.body);
                 this._addMessage(notificationData);
                 if (this._chatWindow.isFolded() || !this._chatWindow.isAtBottom()) {
                     this._livechat.incrementUnreadCounter();
                 }
                 this._renderMessages();
+                return;
+            }
+            case 'mail.message/insert': {
+                const message = this._messages.find(message => message._id === payload.id);
+                if (!message) {
+                    return;
+                }
+                message._body = utils.Markup(payload.body);
+                this._renderMessages()
+                return;
             }
         }
     },
@@ -262,7 +294,7 @@ var LivechatButton = Widget.extend({
                     self.call('bus_service', 'addChannel', self._livechat.getUUID());
                     self.call('bus_service', 'startPolling');
 
-                    utils.set_cookie('im_livechat_session', utils.unaccent(JSON.stringify(self._livechat.toData())), 60 * 60);
+                    utils.set_cookie('im_livechat_session', utils.unaccent(JSON.stringify(self._livechat.toData()), true), 60 * 60);
                     utils.set_cookie('im_livechat_auto_popup', JSON.stringify(false), 60 * 60);
                     if (livechatData.operator_pid[0]) {
                         // livechatData.operator_pid contains a tuple (id, name)
@@ -371,8 +403,9 @@ var LivechatButton = Widget.extend({
                 attachment_ids: [],
                 author_id: this._livechat.getOperatorPID(),
                 body: this.options.default_message,
-                channel_ids: [this._livechat.getID()],
                 date: time.datetime_to_str(new Date()),
+                model: "mail.channel",
+                res_id: this._livechat.getID(),
             }, { prepend: true });
         }
     },
@@ -397,6 +430,7 @@ var LivechatButton = Widget.extend({
         } else {
             this._closeChat();
         }
+        this._visitorLeaveSession();
     },
     /**
      * @private
@@ -428,7 +462,15 @@ var LivechatButton = Widget.extend({
      */
     _onSaveChatWindow: function (ev) {
         ev.stopPropagation();
-        utils.set_cookie('im_livechat_session', utils.unaccent(JSON.stringify(this._livechat.toData())), 60 * 60);
+        utils.set_cookie('im_livechat_session', utils.unaccent(JSON.stringify(this._livechat.toData()), true), 60 * 60);
+    },
+    /**
+     * @private
+     * @param {OdooEvent} ev
+     */
+    _onUpdatedTypingPartners(ev) {
+        ev.stopPropagation();
+        this._chatWindow.renderHeader();
     },
     /**
      * @private
@@ -437,6 +479,19 @@ var LivechatButton = Widget.extend({
     _onUpdatedUnreadCounter: function (ev) {
         ev.stopPropagation();
         this._chatWindow.renderHeader();
+    },
+    /**
+     * @private
+     * Called when the visitor leaves the livechat chatter the first time (first click on X button)
+     * this will deactivate the mail_channel, notify operator that visitor has left the channel.
+     */
+    _visitorLeaveSession: function () {
+        var cookie = utils.get_cookie('im_livechat_session');
+        if (cookie) {
+            var channel = JSON.parse(cookie);
+            session.rpc('/im_livechat/visitor_leave_session', {uuid: channel.uuid});
+            utils.set_cookie('im_livechat_session', "", -1); // remove cookie
+        }
     },
 });
 
@@ -484,11 +539,13 @@ var Feedback = Widget.extend({
             rate: this.rating,
             reason: reason,
         };
-        this.dp.add(session.rpc('/im_livechat/feedback', args)).then(function () {
+        this.dp.add(session.rpc('/im_livechat/feedback', args)).then(function (response) {
             var emoji = RATING_TO_EMOJI[self.rating] || "??";
-            var content = _.str.sprintf(_t("Rating: %s"), emoji);
-            if (reason) {
-                content += " \n" + reason;
+            if (!reason) {
+                var content = _.str.sprintf(_t("Rating: %s"), emoji);
+            }
+            else {
+                var content = "Rating reason: \n" + reason;
             }
             self.trigger('send_message', { content: content, isFeedback: true });
         });
@@ -534,6 +591,7 @@ var Feedback = Widget.extend({
 
         // only display textearea if bad smiley selected
         if (this.rating !== 5) {
+            this._sendFeedback();
             this.$('.o_livechat_rating_reason').show();
         } else {
             this.$('.o_livechat_rating_reason').hide();
@@ -652,7 +710,8 @@ var WebsiteLivechat = AbstractThread.extend(ThreadTypingMixin, {
      * @returns {im_livechat.legacy.im_livechat.model.WebsiteLivechatMessage[]}
      */
     getMessages: function () {
-        return this._messages;
+        // ignore removed messages
+        return this._messages.filter(message => !message.isEmpty());
     },
     /**
      * @returns {Array}
@@ -813,7 +872,7 @@ var WebsiteLivechatMessage = AbstractMessage.extend({
     getAvatarSource: function () {
         var source = this._serverURL;
         if (this.hasAuthor()) {
-            source += '/web/partner_image/' + this.getAuthorID();
+            source += '/web/image/res.partner/' + this.getAuthorID() + '/avatar_128';
         } else {
             source += '/mail/static/src/img/smiley/avatar.jpg';
         }
@@ -1517,7 +1576,7 @@ return ThreadTypingMixin;
 odoo.define('im_livechat.legacy.mail.model.AbstractMessage', function (require) {
 "use strict";
 
-var mailUtils = require('mail.utils');
+var mailUtils = require('@mail/js/utils');
 
 var Class = require('web.Class');
 var core = require('web.core');
@@ -1610,7 +1669,7 @@ var AbstractMessage = Class.extend({
      */
     getAvatarSource: function () {
         if (this.hasAuthor()) {
-            return '/web/image/res.partner/' + this.getAuthorID() + '/image_128';
+            return '/web/image/res.partner/' + this.getAuthorID() + '/avatar_128';
         }
     },
     /**
@@ -1991,7 +2050,7 @@ var _t = core._t;
 
 /**
  * This is an abstract widget for rendering thread windows.
- * AbstractThreadWindow is kept for legacy reasons. 
+ * AbstractThreadWindow is kept for legacy reasons.
  */
 var AbstractThreadWindow = Widget.extend({
     template: 'im_livechat.legacy.mail.AbstractThreadWindow',
@@ -2819,7 +2878,7 @@ odoo.define('im_livechat.legacy.mail.widget.Thread', function (require) {
 "use strict";
 
 var DocumentViewer = require('im_livechat.legacy.mail.DocumentViewer');
-var mailUtils = require('mail.utils');
+var mailUtils = require('@mail/js/utils');
 
 var core = require('web.core');
 var time = require('web.time');
@@ -2948,7 +3007,7 @@ var ThreadWidget = Widget.extend({
         this._currentThreadID = thread.getID();
 
         // copy so that reverse do not alter order in the thread object
-        var messages = _.clone(thread.getMessages({ domain: options.domain || [] }));
+        var messages = _.clone(thread.getMessages());
 
         var modeOptions = options.isCreateMode ? this._disabledOptions :
                                                     this._enabledOptions;
@@ -3506,6 +3565,7 @@ odoo.define('im_livechat.legacy.mail.DocumentViewer', function (require) {
 
 var core = require('web.core');
 var Widget = require('web.Widget');
+var { hidePDFJSButtons } = require('@web/legacy/js/libs/pdfjs');
 
 var QWeb = core.qweb;
 
@@ -3634,6 +3694,9 @@ var DocumentViewer = Widget.extend({
         this.$('.o_viewer_content').html(QWeb.render('im_livechat.legacy.mail.DocumentViewer.Content', {
             widget: this
         }));
+        if (this.activeAttachment.fileType === 'application/pdf') {
+            hidePDFJSButtons(this.$('.o_viewer_content')[0]);
+        }
         this.$('.o_viewer_img').on("load", _.bind(this._onImageLoaded, this));
         this.$('[data-toggle="tooltip"]').tooltip({ delay: 0 });
         this._reset();
@@ -3891,3 +3954,4 @@ var DocumentViewer = Widget.extend({
 });
 return DocumentViewer;
 });
+

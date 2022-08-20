@@ -1,8 +1,7 @@
-odoo.define('mail/static/src/models/messaging_menu/messaging_menu.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { attr, one2one } = require('mail/static/src/model/model_field.js');
+import { registerNewModel } from '@mail/model/model_core';
+import { attr, one2many } from '@mail/model/model_field';
 
 function factory(dependencies) {
 
@@ -16,11 +15,7 @@ function factory(dependencies) {
          * Close the messaging menu. Should reset its internal state.
          */
         close() {
-            this.update({
-                activeTabId: 'all',
-                isMobileNewMessageToggled: false,
-                isOpen: false,
-            });
+            this.update({ isOpen: false });
         }
 
         /**
@@ -36,6 +31,11 @@ function factory(dependencies) {
          */
         toggleOpen() {
             this.update({ isOpen: !this.isOpen });
+            this.messaging.refreshIsNotificationPermissionDefault();
+            if (this.isOpen) {
+                // populate some needaction messages on threads.
+                this.messaging.inbox.cache.update({ isCacheRefreshRequested: true });
+            }
         }
 
         //----------------------------------------------------------------------
@@ -44,61 +44,22 @@ function factory(dependencies) {
 
         /**
          * @private
-         */
-        _computeInboxMessagesAutoloader() {
-            if (!this.isOpen) {
-                return;
-            }
-            const inbox = this.env.messaging.inbox;
-            if (
-                !inbox ||
-                !inbox.mainCache ||
-                inbox.mainCache.isLoaded ||
-                inbox.mainCache.isLoading
-            ) {
-                return;
-            }
-            // populate some needaction messages on threads.
-            inbox.mainCache.update({ hasToLoadMessages: true });
-        }
-
-        /**
-         * @private
          * @returns {integer}
          */
-        _updateCounter() {
-            if (!this.env.messaging) {
+        _computeCounter() {
+            if (!this.messaging) {
                 return 0;
             }
-            const inboxMailbox = this.env.messaging.inbox;
-            const unreadChannels = this.env.models['mail.thread'].all(thread =>
-                thread.localMessageUnreadCounter > 0 &&
-                thread.model === 'mail.channel'
-            );
-            let counter = unreadChannels.length;
-            if (inboxMailbox) {
-                counter += inboxMailbox.counter;
-            }
-            if (this.messaging.notificationGroupManager) {
-                counter += this.messaging.notificationGroupManager.groups.reduce(
+            const inboxCounter = this.messaging.inbox ? this.messaging.inbox.counter : 0;
+            const unreadChannelsCounter = this.pinnedAndUnreadChannels.length;
+            const notificationGroupsCounter = this.messaging.notificationGroupManager
+                ? this.messaging.notificationGroupManager.groups.reduce(
                     (total, group) => total + group.notifications.length,
                     0
-                );
-            }
-            if (this.messaging.isNotificationPermissionDefault()) {
-                counter++;
-            }
-            return counter;
-        }
-
-        /**
-         * @override
-         */
-        _updateAfter(previous) {
-            const counter = this._updateCounter();
-            if (this.counter !== counter) {
-                this.update({ counter });
-            }
+                )
+                : 0;
+            const notificationPemissionCounter = this.messaging.isNotificationPermissionDefault ? 1 : 0;
+            return inboxCounter + unreadChannelsCounter + notificationGroupsCounter + notificationPemissionCounter;
         }
 
     }
@@ -111,25 +72,13 @@ function factory(dependencies) {
         activeTabId: attr({
             default: 'all',
         }),
-        counter: attr({
-            default: 0,
-        }),
         /**
-         * Dummy field to automatically load messages of inbox when messaging
-         * menu is open.
-         *
-         * Useful because needaction notifications require fetching inbox
-         * messages to work.
+         * States the counter of this messaging menu. The counter is an integer
+         * value to give to the current user an estimate of how many things
+         * (unread threads, notifications, ...) are yet to be processed by him.
          */
-        inboxMessagesAutoloader: attr({
-            compute: '_computeInboxMessagesAutoloader',
-            dependencies: [
-                'isOpen',
-                'messagingInbox',
-                'messagingInboxMainCache',
-                'messagingInboxMainCacheIsLoaded',
-                'messagingInboxMainCacheIsLoading',
-            ],
+        counter: attr({
+            compute: '_computeCounter',
         }),
         /**
          * Determine whether the mobile new message input is visible or not.
@@ -143,28 +92,18 @@ function factory(dependencies) {
         isOpen: attr({
             default: false,
         }),
-        messaging: one2one('mail.messaging', {
-            inverse: 'messagingMenu',
-        }),
-        messagingInbox: one2one('mail.thread', {
-            related: 'messaging.inbox',
-        }),
-        messagingInboxMainCache: one2one('mail.thread_cache', {
-            related: 'messagingInbox.mainCache',
-        }),
-        messagingInboxMainCacheIsLoaded: attr({
-            related: 'messagingInboxMainCache.isLoaded',
-        }),
-        messagingInboxMainCacheIsLoading: attr({
-            related: 'messagingInboxMainCache.isLoading',
+        /**
+         * States all the pinned channels that have unread messages.
+         */
+        pinnedAndUnreadChannels: one2many('mail.thread', {
+            inverse: 'messagingMenuAsPinnedAndUnreadChannel',
+            readonly: true,
         }),
     };
-
+    MessagingMenu.identifyingFields = ['messaging'];
     MessagingMenu.modelName = 'mail.messaging_menu';
 
     return MessagingMenu;
 }
 
 registerNewModel('mail.messaging_menu', factory);
-
-});

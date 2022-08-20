@@ -5,12 +5,15 @@
     'summary': "PCGE Simplified",
     'category': 'Accounting/Localizations/Account Charts',
     'author': 'Vauxoo, Odoo',
+    'website': 'https://www.odoo.com/documentation/user/14.0/accounting/fiscal_localizations/localizations/peru.html',
     'license': 'LGPL-3',
     'depends': [
         'base_vat',
         'base_address_extended',
         'base_address_city',
         'l10n_latam_base',
+        'l10n_latam_invoice_document',
+        'account_debit_note',
     ],
     'data': [
         'security/ir.model.access.csv',
@@ -19,7 +22,10 @@
         'data/account.group.template.csv',
         'data/account.account.template.csv',
         'data/l10n_pe_chart_post_data.xml',
+        'data/account_tax_group_data.xml',
         'data/account_tax_data.xml',
+        'data/fiscal_position_data.xml',
+        'data/l10n_latam_document_type_data.xml',
         'data/account_chart_template_data.xml',
         'data/res.city.csv',
         'data/l10n_pe.res.city.district.csv',
@@ -28,5 +34,6 @@
     ],
     'demo': [
         'demo/demo_company.xml',
+        'demo/demo_partner.xml',
     ],
 }

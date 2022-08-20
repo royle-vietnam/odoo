@@ -1,15 +1,13 @@
-odoo.define('im_livechat/static/src/components/notification_list/notification_list.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    NotificationList: require('mail/static/src/components/notification_list/notification_list.js'),
-};
+import { NotificationList } from '@mail/components/notification_list/notification_list';
+import { patch } from 'web.utils';
 
-const { patch } = require('web.utils');
+const components = { NotificationList };
 
 components.NotificationList._allowedFilters.push('livechat');
 
-patch(components.NotificationList, 'im_livechat/static/src/components/notification_list/notification_list.js', {
+patch(components.NotificationList.prototype, 'im_livechat/static/src/components/notification_list/notification_list.js', {
 
     //--------------------------------------------------------------------------
     // Public
@@ -20,9 +18,9 @@ patch(components.NotificationList, 'im_livechat/static/src/components/notificati
      *
      * @override
      */
-    _useStoreSelectorThreads(props) {
+    _getThreads(props) {
         if (props.filter === 'livechat') {
-            return this.env.models['mail.thread'].all(thread =>
+            return this.messaging.models['mail.thread'].all(thread =>
                 thread.channel_type === 'livechat' &&
                 thread.isPinned &&
                 thread.model === 'mail.channel'
@@ -30,7 +28,5 @@ patch(components.NotificationList, 'im_livechat/static/src/components/notificati
         }
         return this._super(...arguments);
     },
-
-});
 
 });

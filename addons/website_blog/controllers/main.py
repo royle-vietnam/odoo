@@ -15,6 +15,7 @@ from odoo.http import request
 from odoo.osv import expression
 from odoo.tools import html2plaintext
 from odoo.tools.misc import get_lang
+from odoo.tools import sql
 
 
 class WebsiteBlog(http.Controller):
@@ -73,8 +74,9 @@ class WebsiteBlog(http.Controller):
             active_tags = BlogTag.browse(active_tag_ids).exists()
             fixed_tag_slug = ",".join(slug(t) for t in active_tags)
             if fixed_tag_slug != tags:
-                new_url = request.httprequest.full_path.replace("/tag/%s" % tags, "/tag/%s" % fixed_tag_slug, 1)
-                if new_url != request.httprequest.full_path:  # check that really replaced and avoid loop
+                path = request.httprequest.full_path
+                new_url = path.replace("/tag/%s" % tags, fixed_tag_slug and "/tag/%s" % fixed_tag_slug or "", 1)
+                if new_url != path:  # check that really replaced and avoid loop
                     return request.redirect(new_url, 301)
             domain += [('tag_ids', 'in', active_tags.ids)]
 
@@ -95,32 +97,58 @@ class WebsiteBlog(http.Controller):
 
         # if blog, we show blog title, if use_cover and not fullwidth_cover we need pager + latest always
         offset = (page - 1) * self._blog_post_per_page
-        first_post = BlogPost
         if not blog:
-            first_post = BlogPost.search(domain + [('website_published', '=', True)], order="post_date desc, id asc", limit=1)
             if use_cover and not fullwidth_cover:
                 offset += 1
 
-        if search:
-            tags_like_search = BlogTag.search([('name', 'ilike', search)])
-            domain += ['|', '|', '|', ('author_name', 'ilike', search), ('name', 'ilike', search), ('content', 'ilike', search), ('tag_ids', 'in', tags_like_search.ids)]
+        options = {
+            'displayDescription': True,
+            'displayDetail': False,
+            'displayExtraDetail': False,
+            'displayExtraLink': False,
+            'displayImage': False,
+            'allowFuzzy': not request.params.get('noFuzzy'),
+            'blog': str(blog.id) if blog else None,
+            'tag': ','.join([str(id) for id in active_tags.ids]),
+            'date_begin': date_begin,
+            'date_end': date_end,
+            'state': state,
+        }
+        total, details, fuzzy_search_term = request.website._search_with_fuzzy("blog_posts_only", search,
+            limit=page * self._blog_post_per_page, order="is_published desc, post_date desc, id asc", options=options)
+        posts = details[0].get('results', BlogPost)
+        first_post = BlogPost
+        if posts and not blog and posts[0].website_published:
+            first_post = posts[0]
+        posts = posts[offset:offset + self._blog_post_per_page]
 
-        posts = BlogPost.search(domain, offset=offset, limit=self._blog_post_per_page, order="is_published desc, post_date desc, id asc")
-        total = BlogPost.search_count(domain)
+        url_args = dict()
+        if search:
+            url_args["search"] = search
+
+        if date_begin and date_end:
+            url_args["date_begin"] = date_begin
+            url_args["date_end"] = date_end
 
         pager = request.website.pager(
             url=request.httprequest.path.partition('/page/')[0],
             total=total,
             page=page,
             step=self._blog_post_per_page,
+            url_args=url_args,
         )
 
-        all_tags = blog and blogs.all_tags()[blog.id] or blogs.all_tags(join=True)
+        if not blogs:
+            all_tags = request.env['blog.tag']
+        else:
+            all_tags = blogs.all_tags(join=True) if not blog else blogs.all_tags().get(blog.id, request.env['blog.tag'])
         tag_category = sorted(all_tags.mapped('category_id'), key=lambda category: category.name.upper())
         other_tags = sorted(all_tags.filtered(lambda x: not x.category_id), key=lambda tag: tag.name.upper())
 
         # for performance prefetch the first post with the others
         post_ids = (first_post | posts).ids
+        # and avoid accessing related blogs one by one
+        posts.blog_id
 
         return {
             'date_begin': date_begin,
@@ -138,8 +166,9 @@ class WebsiteBlog(http.Controller):
             'state_info': state and {"state": state, "published": published_count, "unpublished": unpublished_count},
             'blogs': blogs,
             'blog': blog,
-            'search': search,
+            'search': fuzzy_search_term or search,
             'search_count': total,
+            'original_search': fuzzy_search_term and search,
         }
 
     @http.route([
@@ -154,13 +183,10 @@ class WebsiteBlog(http.Controller):
     ], type='http', auth="public", website=True, sitemap=True)
     def blog(self, blog=None, tag=None, page=1, search=None, **opt):
         Blog = request.env['blog.blog']
-        if blog and not blog.can_access_from_current_website():
-            raise werkzeug.exceptions.NotFound()
-
         blogs = Blog.search(request.website.website_domain(), order="create_date asc, id asc")
 
         if not blog and len(blogs) == 1:
-            return werkzeug.utils.redirect('/blog/%s' % slug(blogs[0]), code=302)
+            return request.redirect('/blog/%s' % slug(blogs[0]), code=302)
 
         date_begin, date_end, state = opt.get('date_begin'), opt.get('date_end'), opt.get('state')
 
@@ -220,9 +246,6 @@ class WebsiteBlog(http.Controller):
          - 'nav_list': a dict [year][month] for archives navigation
          - 'next_post': next blog post, to direct the user towards the next interesting post
         """
-        if not blog.can_access_from_current_website():
-            raise werkzeug.exceptions.NotFound()
-
         BlogPost = request.env['blog.post']
         date_begin, date_end = post.get('date_begin'), post.get('date_end')
 
@@ -272,17 +295,11 @@ class WebsiteBlog(http.Controller):
         response = request.render("website_blog.blog_post_complete", values)
 
         if blog_post.id not in request.session.get('posts_viewed', []):
-            if not request.session.get('posts_viewed'):
-                request.session['posts_viewed'] = []
-
-            request.session['posts_viewed'].append(blog_post.id)
-            request.session.modified = True
-
-            # Increase counter
-            blog_post.sudo()._write({
-                'visits': blog_post.visits + 1,
-                'write_date': blog_post.write_date,
-            })
+            if sql.increment_field_skiplock(blog_post, 'visits'):
+                if not request.session.get('posts_viewed'):
+                    request.session['posts_viewed'] = []
+                request.session['posts_viewed'].append(blog_post.id)
+                request.session.modified = True
         return response
 
     @http.route('/blog/<int:blog_id>/post/new', type='http', auth="user", website=True)
@@ -297,7 +314,7 @@ class WebsiteBlog(http.Controller):
             'blog_id': blog_id,
             'is_published': False,
         })
-        return werkzeug.utils.redirect("/blog/%s/%s?enable_editor=1" % (slug(new_blog_post.blog_id), slug(new_blog_post)))
+        return request.redirect("/blog/%s/%s?enable_editor=1" % (slug(new_blog_post.blog_id), slug(new_blog_post)))
 
     @http.route('/blog/post_duplicate', type='http', auth="user", website=True, methods=['POST'])
     def blog_post_copy(self, blog_post_id, **post):
@@ -308,15 +325,4 @@ class WebsiteBlog(http.Controller):
         :return redirect to the new blog created
         """
         new_blog_post = request.env['blog.post'].with_context(mail_create_nosubscribe=True).browse(int(blog_post_id)).copy()
-        return werkzeug.utils.redirect("/blog/%s/%s?enable_editor=1" % (slug(new_blog_post.blog_id), slug(new_blog_post)))
-
-    @http.route(['/blog/render_latest_posts'], type='json', auth='public', website=True)
-    def render_latest_posts(self, template, domain, limit=None, order='published_date desc'):
-        dom = expression.AND([
-            [('website_published', '=', True), ('post_date', '<=', fields.Datetime.now())],
-            request.website.website_domain()
-        ])
-        if domain:
-            dom = expression.AND([dom, domain])
-        posts = request.env['blog.post'].search(dom, limit=limit, order=order)
-        return request.website.viewref(template)._render({'posts': posts})
+        return request.redirect("/blog/%s/%s?enable_editor=1" % (slug(new_blog_post.blog_id), slug(new_blog_post)))

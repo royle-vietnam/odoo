@@ -26,13 +26,50 @@ class AccountMoveReversal(models.TransientModel):
             ('modify', 'Full refund and new draft invoice')
         ], string='Credit Method', required=True,
         help='Choose how you want to credit this invoice. You cannot "modify" nor "cancel" if the invoice is already reconciled.')
-    journal_id = fields.Many2one('account.journal', string='Use Specific Journal', help='If empty, uses the journal of the journal entry to be reversed.', check_company=True)
+    journal_id = fields.Many2one(
+        comodel_name='account.journal',
+        string='Use Specific Journal',
+        required=True,
+        compute='_compute_journal_id',
+        readonly=False,
+        store=True,
+        check_company=True,
+        help='If empty, uses the journal of the journal entry to be reversed.',
+    )
     company_id = fields.Many2one('res.company', required=True, readonly=True)
+    available_journal_ids = fields.Many2many('account.journal', compute='_compute_available_journal_ids')
+    country_code = fields.Char(related='company_id.country_id.code')
 
     # computed fields
     residual = fields.Monetary(compute="_compute_from_moves")
     currency_id = fields.Many2one('res.currency', compute="_compute_from_moves")
     move_type = fields.Char(compute="_compute_from_moves")
+
+    @api.depends('move_ids')
+    def _compute_journal_id(self):
+        for record in self:
+            if record.journal_id:
+                record.journal_id = record.journal_id
+            else:
+                journals = record.move_ids.journal_id.filtered(lambda x: x.active)
+                record.journal_id = journals[0] if journals else None
+
+    @api.depends('move_ids')
+    def _compute_available_journal_ids(self):
+        for record in self:
+            if record.move_ids:
+                record.available_journal_ids = self.env['account.journal'].search([
+                    ('company_id', '=', record.company_id.id),
+                    ('type', 'in', record.move_ids.journal_id.mapped('type')),
+                ])
+            else:
+                record.available_journal_ids = self.env['account.journal'].search([('company_id', '=', record.company_id.id)])
+
+    @api.constrains('journal_id', 'move_ids')
+    def _check_journal_type(self):
+        for record in self:
+            if record.journal_id.type not in record.move_ids.journal_id.mapped('type'):
+                raise UserError(_('Journal should be the same type as the reversed entry.'))
 
     @api.model
     def default_get(self, fields):
@@ -52,7 +89,7 @@ class AccountMoveReversal(models.TransientModel):
     @api.depends('move_ids')
     def _compute_from_moves(self):
         for record in self:
-            move_ids = record.move_ids
+            move_ids = record.move_ids._origin
             record.residual = len(move_ids) == 1 and move_ids.amount_residual or 0
             record.currency_id = len(move_ids.currency_id) == 1 and move_ids.currency_id or False
             record.move_type = move_ids.move_type if len(move_ids) == 1 else (any(move.move_type in ('in_invoice', 'out_invoice') for move in move_ids) and 'some_invoice' or False)
@@ -65,7 +102,7 @@ class AccountMoveReversal(models.TransientModel):
                    else _('Reversal of: %s', move.name),
             'date': reverse_date,
             'invoice_date': move.is_invoice(include_receipts=True) and (self.date or move.date) or False,
-            'journal_id': self.journal_id and self.journal_id.id or move.journal_id.id,
+            'journal_id': self.journal_id.id,
             'invoice_payment_term_id': None,
             'invoice_user_id': move.invoice_user_id.id,
             'auto_post': True if reverse_date > fields.Date.context_today(self) else False,
@@ -116,10 +153,13 @@ class AccountMoveReversal(models.TransientModel):
             action.update({
                 'view_mode': 'form',
                 'res_id': moves_to_redirect.id,
+                'context': {'default_move_type':  moves_to_redirect.move_type},
             })
         else:
             action.update({
                 'view_mode': 'tree,form',
                 'domain': [('id', 'in', moves_to_redirect.ids)],
             })
+            if len(set(moves_to_redirect.mapped('move_type'))) == 1:
+                action['context'] = {'default_move_type':  moves_to_redirect.mapped('move_type').pop()}
         return action

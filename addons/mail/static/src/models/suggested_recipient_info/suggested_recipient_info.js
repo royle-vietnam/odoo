@@ -1,8 +1,7 @@
-odoo.define('mail/static/src/models/suggested_recipient_info/suggested_recipient_info.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { attr, many2one } = require('mail/static/src/model/model_field.js');
+import { registerNewModel } from '@mail/model/model_core';
+import { attr, many2one } from '@mail/model/model_field';
 
 function factory(dependencies) {
 
@@ -11,14 +10,6 @@ function factory(dependencies) {
         //----------------------------------------------------------------------
         // private
         //----------------------------------------------------------------------
-
-        /**
-         * @private
-         * @returns {string}
-         */
-        _computeEmail() {
-            return this.partner && this.partner.email || this.email;
-        }
 
         /**
          * Prevents selecting a recipient that does not have a partner.
@@ -47,11 +38,15 @@ function factory(dependencies) {
          * creating a new partner from `this`.
          */
         email: attr({
-            compute: '_computeEmail',
-            dependencies: [
-                'email',
-                'partnerEmail',
-            ],
+            readonly: true,
+        }),
+        /**
+         * States the id of this suggested recipient info. This id does not
+         * correspond to any specific value, it is just a unique identifier
+         * given by the creator of this record.
+         */
+        id: attr({
+            readonly: true,
         }),
         /**
          * Determines whether `this` will be added to recipients when posting a
@@ -60,10 +55,6 @@ function factory(dependencies) {
         isSelected: attr({
             compute: '_computeIsSelected',
             default: true,
-            dependencies: [
-                'isSelected',
-                'partner',
-            ],
         }),
         /**
          * Determines the name of `this`. It serves as visual clue when
@@ -72,27 +63,11 @@ function factory(dependencies) {
          */
         name: attr({
             compute: '_computeName',
-            dependencies: [
-                'name',
-                'partnerNameOrDisplayName',
-            ],
         }),
         /**
          * Determines the optional `mail.partner` associated to `this`.
          */
         partner: many2one('mail.partner'),
-        /**
-         * Serves as compute dependency.
-         */
-        partnerEmail: attr({
-            related: 'partner.email'
-        }),
-        /**
-         * Serves as compute dependency.
-         */
-        partnerNameOrDisplayName: attr({
-            related: 'partner.nameOrDisplayName'
-        }),
         /**
          * Determines why `this` is a suggestion for `this.thread`. It serves as
          * visual clue when displaying `this`.
@@ -103,14 +78,13 @@ function factory(dependencies) {
          */
         thread: many2one('mail.thread', {
             inverse: 'suggestedRecipientInfoList',
+            required: true,
         }),
     };
-
+    SuggestedRecipientInfo.identifyingFields = ['id'];
     SuggestedRecipientInfo.modelName = 'mail.suggested_recipient_info';
 
     return SuggestedRecipientInfo;
 }
 
 registerNewModel('mail.suggested_recipient_info', factory);
-
-});

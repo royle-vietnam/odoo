@@ -3,7 +3,7 @@
 
 from unittest.mock import patch
 
-from odoo.addons.test_mail.tests.common import TestMailCommon
+from odoo.addons.test_mail.tests.common import TestMailCommon, TestMailMultiCompanyCommon
 from odoo.tests.common import tagged
 from odoo.tests import Form
 
@@ -144,7 +144,7 @@ class TestTracking(TestMailCommon):
             'name': 'AutoTemplate',
             'subject': 'autoresponse',
             'email_from': self.env.user.email_formatted,
-            'email_to': "${object.email_from}",
+            'email_to': "{{ object.email_from }}",
             'body_html': "<div>A nice body</div>",
         })
 
@@ -164,6 +164,37 @@ class TestTracking(TestMailCommon):
         new_partner = Partner.search([('email', '=', email_new_partner)])
         self.assertTrue(new_partner)
         self.assertEqual(new_partner.company_id, company1)
+
+    def test_track_invalid_selection(self):
+        # Test: Check that initial invalid selection values are allowed when tracking
+        # Create a record with an initially invalid selection value
+        invalid_value = 'I love writing tests!'
+        record = self.env['mail.test.track.selection'].create({
+            'name': 'Test Invalid Selection Values',
+            "type": "first",
+        })
+
+        self.flush_tracking()
+        self.env.cr.execute(
+            """
+            UPDATE mail_test_track_selection
+               SET type = %s
+             WHERE id = %s
+            """,
+            [invalid_value, record.id]
+        )
+
+        record.invalidate_cache()
+
+        self.assertEqual(record.type, invalid_value)
+
+        # Write a valid selection value
+        record.type = "second"
+
+        self.flush_tracking()
+        self.assertTracking(record.message_ids, [
+            ('type', 'char', invalid_value, 'Second'),
+        ])
 
     def test_track_template(self):
         # Test: Check that default_* keys are not taken into account in _message_track_post_template
@@ -283,6 +314,44 @@ class TestTracking(TestMailCommon):
             ('partner_email', 'char', 'foo@example.com', 'bar@example.com'),
         ])
 
+@tagged('mail_track')
+class TestTrackingMonetary(TestMailMultiCompanyCommon):
+
+    def setUp(self):
+        super(TestTrackingMonetary, self).setUp()
+
+        record = self.env['mail.test.track.monetary'].with_user(self.user_employee).with_context(self._test_context).create({
+            'company_id': self.user_employee.company_id.id,
+        })
+        self.flush_tracking()
+        self.record = record.with_context(mail_notrack=False)
+
+    def test_message_track_monetary(self):
+        """ Update a record with a tracked monetary field """
+
+        # Check if the tracking value have the correct currency and values
+        self.record.write({
+            'revenue': 100,
+        })
+        self.flush_tracking()
+        self.assertEqual(len(self.record.message_ids), 1)
+
+        self.assertTracking(self.record.message_ids[0], [
+            ('revenue', 'monetary', 0, 100),
+        ])
+
+        # Check if the tracking value have the correct currency and values after changing the value and the company
+        self.record.write({
+            'revenue': 200,
+            'company_id': self.company_2.id,
+        })
+        self.flush_tracking()
+        self.assertEqual(len(self.record.message_ids), 2)
+
+        self.assertTracking(self.record.message_ids[0], [
+            ('revenue', 'monetary', 100, 200),
+            ('company_currency', 'many2one', self.user_employee.company_id.currency_id, self.company_2.currency_id)
+        ])
 
 @tagged('mail_track')
 class TestTrackingInternals(TestMailCommon):

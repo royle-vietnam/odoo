@@ -1,33 +1,24 @@
-odoo.define('mail/static/src/components/composer_text_input/composer_text_input.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
-
-const components = {
-    ComposerSuggestionList: require('mail/static/src/components/composer_suggestion_list/composer_suggestion_list.js'),
-};
-const { markEventHandled } = require('mail/static/src/utils/utils.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
+import { useUpdate } from '@mail/component_hooks/use_update/use_update';
+import { markEventHandled } from '@mail/utils/utils';
 
 const { Component } = owl;
 const { useRef } = owl.hooks;
 
-/**
- * ComposerInput relies on a minimal HTML editor in order to support mentions.
- */
-class ComposerTextInput extends Component {
+export class ComposerTextInput extends Component {
 
     /**
      * @override
      */
     constructor(...args) {
         super(...args);
-        useStore(props => {
-            const composer = this.env.models['mail.composer'].get(props.composerLocalId);
-            return {
-                composer: composer ? composer.__state : undefined,
-                isDeviceMobile: this.env.messaging.device.isMobile,
-            };
-        });
+        /**
+         * Updates the composer text input content when composer is mounted
+         * as textarea content can't be changed from the DOM.
+         */
+        useUpdate({ func: () => this._update() });
         /**
          * Last content of textarea from input event. Useful to determine
          * whether the current partner is typing something.
@@ -37,22 +28,12 @@ class ComposerTextInput extends Component {
          * Reference of the textarea. Useful to set height, selection and content.
          */
         this._textareaRef = useRef('textarea');
-    }
-
-    /**
-     * Updates the composer text input content when composer is mounted
-     * as textarea content can't be changed from the DOM.
-     */
-    mounted() {
-        this._update();
-    }
-
-    /**
-     * Updates the composer text input content when composer has changed
-     * as textarea content can't be changed from the DOM.
-     */
-    patched() {
-        this._update();
+        /**
+         * This is the invisible textarea used to compute the composer height
+         * based on the text content. We need it to downsize the textarea
+         * properly without flicker.
+         */
+        this._mirroredTextareaRef = useRef('mirroredTextarea');
     }
 
     //--------------------------------------------------------------------------
@@ -60,45 +41,43 @@ class ComposerTextInput extends Component {
     //--------------------------------------------------------------------------
 
     /**
-     * @returns {mail.composer}
+     * @returns {mail.composer_view}
      */
-    get composer() {
-        return this.env.models['mail.composer'].get(this.props.composerLocalId);
+    get composerView() {
+        return this.messaging && this.messaging.models['mail.composer_view'].get(this.props.composerViewLocalId);
     }
 
     /**
      * @returns {string}
      */
     get textareaPlaceholder() {
-        if (!this.composer) {
+        if (!this.composerView) {
             return "";
         }
-        if (this.composer.thread && this.composer.thread.model !== 'mail.channel') {
-            if (this.composer.isLog) {
-                return this.env._t("Log an internal note...");
-            }
-            return this.env._t("Send a message to followers...");
+        if (!this.composerView.composer.thread) {
+            return "";
         }
-        return this.env._t("Write something...");
-    }
-
-    focus() {
-        this._textareaRef.el.focus();
-    }
-
-    focusout() {
-        this.saveStateInStore();
-        this._textareaRef.el.blur();
+        if (this.composerView.composer.thread.model === 'mail.channel') {
+            if (this.composerView.composer.thread.correspondent) {
+                return _.str.sprintf(this.env._t("Message %s..."), this.composerView.composer.thread.correspondent.nameOrDisplayName);
+            }
+            return _.str.sprintf(this.env._t("Message #%s..."), this.composerView.composer.thread.displayName);
+        }
+        if (this.composerView.composer.isLog) {
+            return this.env._t("Log an internal note...");
+        }
+        return this.env._t("Send a message to followers...");
     }
 
     /**
      * Saves the composer text input state in store
      */
     saveStateInStore() {
-        this.composer.update({
+        this.composerView.composer.update({
             textInputContent: this._getContent(),
-            textInputCursorStart: this._getSelectionStart(),
             textInputCursorEnd: this._getSelectionEnd(),
+            textInputCursorStart: this._getSelectionStart(),
+            textInputSelectionDirection: this._textareaRef.el.selectionDirection,
         });
     }
 
@@ -153,11 +132,27 @@ class ComposerTextInput extends Component {
      * @private
      */
     _update() {
-        this._textareaRef.el.value = this.composer.textInputContent;
-        this._textareaRef.el.setSelectionRange(
-            this.composer.textInputCursorStart,
-            this.composer.textInputCursorEnd
-        );
+        if (!this.composerView) {
+            return;
+        }
+        if (this.composerView.doFocus) {
+            this.composerView.update({ doFocus: false });
+            if (this.messaging.device.isMobile) {
+                this.el.scrollIntoView();
+            }
+            this._textareaRef.el.focus();
+        }
+        if (this.composerView.composer.isLastStateChangeProgrammatic) {
+            this._textareaRef.el.value = this.composerView.composer.textInputContent;
+            if (this.composerView.hasFocus) {
+                this._textareaRef.el.setSelectionRange(
+                    this.composerView.composer.textInputCursorStart,
+                    this.composerView.composer.textInputCursorEnd,
+                    this.composerView.composer.textInputSelectionDirection,
+                );
+            }
+            this.composerView.composer.update({ isLastStateChangeProgrammatic: false });
+        }
         this._updateHeight();
     }
 
@@ -167,8 +162,8 @@ class ComposerTextInput extends Component {
      * @private
      */
     _updateHeight() {
-        this._textareaRef.el.style.height = "0px";
-        this._textareaRef.el.style.height = (this._textareaRef.el.scrollHeight) + "px";
+        this._mirroredTextareaRef.el.value = this.composerView.composer.textInputContent;
+        this._textareaRef.el.style.height = (this._mirroredTextareaRef.el.scrollHeight) + "px";
     }
 
     //--------------------------------------------------------------------------
@@ -178,27 +173,48 @@ class ComposerTextInput extends Component {
     /**
      * @private
      */
+    _onClickTextarea() {
+        if (!this.composerView) {
+            return;
+        }
+        // clicking might change the cursor position
+        this.saveStateInStore();
+    }
+
+    /**
+     * @private
+     */
     _onFocusinTextarea() {
-        this.composer.update({ hasFocus: true });
+        if (!this.composerView) {
+            return;
+        }
+        this.composerView.update({ hasFocus: true });
     }
 
     /**
      * @private
      */
     _onFocusoutTextarea() {
-        this.composer.update({ hasFocus: false });
+        if (!this.composerView) {
+            return;
+        }
+        this.saveStateInStore();
+        this.composerView.update({ hasFocus: false });
     }
 
     /**
      * @private
      */
     _onInputTextarea() {
+        if (!this.composerView) {
+            return;
+        }
+        this.saveStateInStore();
         if (this._textareaLastInputValue !== this._textareaRef.el.value) {
-            this.composer.handleCurrentPartnerIsTyping();
+            this.composerView.handleCurrentPartnerIsTyping();
         }
         this._textareaLastInputValue = this._textareaRef.el.value;
         this._updateHeight();
-        this.saveStateInStore();
     }
 
     /**
@@ -206,11 +222,14 @@ class ComposerTextInput extends Component {
      * @param {KeyboardEvent} ev
      */
     _onKeydownTextarea(ev) {
+        if (!this.composerView) {
+            return;
+        }
         switch (ev.key) {
             case 'Escape':
-                if (this.composer.hasSuggestions) {
+                if (this.composerView.hasSuggestions) {
                     ev.preventDefault();
-                    this.composer.closeSuggestions();
+                    this.composerView.closeSuggestions();
                     markEventHandled(ev, 'ComposerTextInput.closeSuggestions');
                 }
                 break;
@@ -222,7 +241,7 @@ class ComposerTextInput extends Component {
             case 'Home':
             case 'End':
             case 'Tab':
-                if (this.composer.hasSuggestions) {
+                if (this.composerView.hasSuggestions) {
                     // We use preventDefault here to avoid keys native actions but actions are handled in keyUp
                     ev.preventDefault();
                 }
@@ -239,7 +258,10 @@ class ComposerTextInput extends Component {
      * @param {KeyboardEvent} ev
      */
     _onKeydownTextareaEnter(ev) {
-        if (this.composer.hasSuggestions) {
+        if (!this.composerView) {
+            return;
+        }
+        if (this.composerView.hasSuggestions) {
             ev.preventDefault();
             return;
         }
@@ -259,8 +281,7 @@ class ComposerTextInput extends Component {
             !ev.altKey &&
             !ev.ctrlKey &&
             !ev.metaKey &&
-            !ev.shiftKey &&
-            !this.env.messaging.device.isMobile
+            !ev.shiftKey
         ) {
             this.trigger('o-composer-text-input-send-shortcut');
             ev.preventDefault();
@@ -286,66 +307,97 @@ class ComposerTextInput extends Component {
      * @param {KeyboardEvent} ev
      */
     _onKeyupTextarea(ev) {
+        if (!this.composerView) {
+            return;
+        }
         switch (ev.key) {
             case 'Escape':
                 // already handled in _onKeydownTextarea, break to avoid default
                 break;
             // ENTER, HOME, END, UP, DOWN, PAGE UP, PAGE DOWN, TAB: check if navigation in mention suggestions
             case 'Enter':
-                if (this.composer.hasSuggestions) {
-                    this.composer.insertSuggestion();
-                    this.composer.closeSuggestions();
-                    this.focus();
+                if (this.composerView.hasSuggestions) {
+                    this.composerView.insertSuggestion();
+                    this.composerView.closeSuggestions();
+                    this.composerView.update({ doFocus: true });
                 }
                 break;
             case 'ArrowUp':
             case 'PageUp':
-                if (this.composer.hasSuggestions) {
-                    this.composer.setPreviousSuggestionActive();
+                if (ev.key === 'ArrowUp' && !this.composerView.hasSuggestions && !this.composerView.composer.textInputContent && this.composerView.threadView) {
+                    this.composerView.threadView.startEditingLastMessageFromCurrentUser();
+                    break;
+                }
+                if (this.composerView.hasSuggestions) {
+                    this.composerView.setPreviousSuggestionActive();
+                    this.composerView.update({ hasToScrollToActiveSuggestion: true });
                 }
                 break;
             case 'ArrowDown':
             case 'PageDown':
-                if (this.composer.hasSuggestions) {
-                    this.composer.setNextSuggestionActive();
+                if (ev.key === 'ArrowDown' && !this.composerView.hasSuggestions && !this.composerView.composer.textInputContent && this.composerView.threadView) {
+                    this.composerView.threadView.startEditingLastMessageFromCurrentUser();
+                    break;
+                }
+                if (this.composerView.hasSuggestions) {
+                    this.composerView.setNextSuggestionActive();
+                    this.composerView.update({ hasToScrollToActiveSuggestion: true });
                 }
                 break;
             case 'Home':
-                if (this.composer.hasSuggestions) {
-                    this.composer.setFirstSuggestionActive();
+                if (this.composerView.hasSuggestions) {
+                    this.composerView.setFirstSuggestionActive();
+                    this.composerView.update({ hasToScrollToActiveSuggestion: true });
                 }
                 break;
             case 'End':
-                if (this.composer.hasSuggestions) {
-                    this.composer.setLastSuggestionActive();
+                if (this.composerView.hasSuggestions) {
+                    this.composerView.setLastSuggestionActive();
+                    this.composerView.update({ hasToScrollToActiveSuggestion: true });
                 }
                 break;
             case 'Tab':
-                if (this.composer.hasSuggestions) {
+                if (this.composerView.hasSuggestions) {
                     if (ev.shiftKey) {
-                        this.composer.setPreviousSuggestionActive();
+                        this.composerView.setPreviousSuggestionActive();
+                        this.composerView.update({ hasToScrollToActiveSuggestion: true });
                     } else {
-                        this.composer.setNextSuggestionActive();
+                        this.composerView.setNextSuggestionActive();
+                        this.composerView.update({ hasToScrollToActiveSuggestion: true });
                     }
                 }
+                break;
+            case 'Alt':
+            case 'AltGraph':
+            case 'CapsLock':
+            case 'Control':
+            case 'Fn':
+            case 'FnLock':
+            case 'Hyper':
+            case 'Meta':
+            case 'NumLock':
+            case 'ScrollLock':
+            case 'Shift':
+            case 'ShiftSuper':
+            case 'Symbol':
+            case 'SymbolLock':
+                // prevent modifier keys from resetting the suggestion state
                 break;
             // Otherwise, check if a mention is typed
             default:
                 this.saveStateInStore();
-                this.composer.detectSuggestionDelimiter();
         }
     }
 
 }
 
 Object.assign(ComposerTextInput, {
-    components,
     defaultProps: {
         hasMentionSuggestionsBelowPosition: false,
         sendShortcuts: [],
     },
     props: {
-        composerLocalId: String,
+        composerViewLocalId: String,
         hasMentionSuggestionsBelowPosition: Boolean,
         isCompact: Boolean,
         /**
@@ -367,6 +419,4 @@ Object.assign(ComposerTextInput, {
     template: 'mail.ComposerTextInput',
 });
 
-return ComposerTextInput;
-
-});
+registerMessagingComponent(ComposerTextInput, { propsCompareDepth: { sendShortcuts: 1 } });

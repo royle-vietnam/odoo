@@ -3,10 +3,9 @@
 # OpenERP HTTP layer
 #----------------------------------------------------------
 import ast
+import cgi
 import collections
 import contextlib
-import copy
-import datetime
 import functools
 import hashlib
 import hmac
@@ -26,7 +25,7 @@ from os.path import join as opj
 from zlib import adler32
 
 import babel.core
-from datetime import datetime, date
+from datetime import datetime
 import passlib.utils
 import psycopg2
 import json
@@ -50,12 +49,14 @@ except ImportError:
 import odoo
 from .service.server import memory_info
 from .service import security, model as service_model
-from .sql_db import flush_env
 from .tools.func import lazy_property
+from .tools import profiler
 from .tools import ustr, consteq, frozendict, pycompat, unique, date_utils
 from .tools.mimetypes import guess_mimetype
+from .tools.misc import str2bool
 from .tools._vendor import sessions
-from .modules.module import module_manifest
+from .tools._vendor.useragents import UserAgent
+from .modules.module import read_manifest
 
 _logger = logging.getLogger(__name__)
 rpc_request = logging.getLogger(__name__ + '.rpc.request')
@@ -158,21 +159,6 @@ def dispatch_rpc(service_name, method, params):
         odoo.tools.debugger.post_mortem(odoo.tools.config, sys.exc_info())
         raise
 
-def local_redirect(path, query=None, keep_hash=False, code=303):
-    # FIXME: drop the `keep_hash` param, now useless
-    url = path
-    if not query:
-        query = {}
-    if query:
-        url += '?' + urls.url_encode(query)
-    return werkzeug.utils.redirect(url, code)
-
-def redirect_with_hash(url, code=303):
-    # Section 7.1.2 of RFC 7231 requires preservation of URL fragment through redirects,
-    # so we don't need any special handling anymore. This function could be dropped in the future.
-    # seealso : http://www.rfc-editor.org/info/rfc7231
-    #           https://tools.ietf.org/html/rfc7231#section-7.1.2
-    return werkzeug.utils.redirect(url, code)
 
 class WebRequest(object):
     """ Parent class for all Odoo Web request types, mostly deals with
@@ -189,7 +175,7 @@ class WebRequest(object):
 
     .. attribute:: params
 
-        :class:`~collections.Mapping` of request parameters, not generally
+        :class:`~collections.abc.Mapping` of request parameters, not generally
         useful as they're provided directly to the handler method as keyword
         arguments
     """
@@ -241,7 +227,7 @@ class WebRequest(object):
 
     @property
     def context(self):
-        """ :class:`~collections.Mapping` of context values for the current request """
+        """ :class:`~collections.abc.Mapping` of context values for the current request """
         if self._context is None:
             self._context = frozendict(self.session.context)
         return self._context
@@ -307,11 +293,27 @@ class WebRequest(object):
         # WARNING: do not inline or it breaks: raise...from evaluates strictly
         # LTR so would first remove traceback then copy lack of traceback
         new_cause = Exception().with_traceback(exception.__traceback__)
+        new_cause.__cause__ = exception.__cause__ or exception.__context__
         # tries to provide good chained tracebacks, just re-raising exception
         # generates a weird message as stacks just get concatenated, exceptions
         # not guaranteed to copy.copy cleanly & we want `exception` as leaf (for
         # callers to check & look at)
         raise exception.with_traceback(None) from new_cause
+
+    def redirect(self, location, code=303, local=True):
+        # compatibility, Werkzeug support URL as location
+        if isinstance(location, urls.URL):
+            location = location.to_url()
+        if local:
+            location = '/' + urls.url_parse(location).replace(scheme='', netloc='').to_url().lstrip('/')
+        if request and request.db:
+            return request.registry['ir.http']._redirect(location, code)
+        return werkzeug.utils.redirect(location, code, Response=Response)
+
+    def redirect_query(self, location, query=None, code=303, local=True):
+        if query:
+            location += '?' + urls.url_encode(query)
+        return self.redirect(location, code=code, local=local)
 
     def _is_cors_preflight(self, endpoint):
         return False
@@ -333,7 +335,7 @@ class WebRequest(object):
 
         first_time = True
 
-        # Correct exception handling and concurency retry
+        # Correct exception handling and concurrency retry
         @service_model.check
         def checked_call(___dbname, *a, **kw):
             nonlocal first_time
@@ -350,8 +352,7 @@ class WebRequest(object):
             if self._cr is not None:
                 # flush here to avoid triggering a serialization error outside
                 # of this context, which would not retry the call
-                flush_env(self._cr)
-                self._cr.precommit.run()
+                self._cr.flush()
             return result
 
         if self.db:
@@ -512,6 +513,10 @@ def route(route=None, **kw):
             else:
                 routes = [route]
             routing['routes'] = routes
+            wrong = routing.pop('method', None)
+            if wrong:
+                kw.setdefault('methods', wrong)
+                _logger.warning("<function %s.%s> defined with invalid routing parameter 'method', assuming 'methods'", f.__module__, f.__name__)
 
         @functools.wraps(f)
         def response_wrap(*args, **kw):
@@ -536,7 +541,7 @@ def route(route=None, **kw):
 
             if isinstance(response, werkzeug.exceptions.HTTPException):
                 response = response.get_response(request.httprequest.environ)
-            if isinstance(response, werkzeug.wrappers.BaseResponse):
+            if isinstance(response, werkzeug.wrappers.Response):
                 response = Response.force_type(response)
                 response.set_default()
                 return response
@@ -559,7 +564,7 @@ class JsonRequest(WebRequest):
       wrapped in the `JSON-RPC Response
       <http://www.jsonrpc.org/specification#response_object>`_
 
-    Sucessful request::
+    Successful request::
 
       --> {"jsonrpc": "2.0",
            "method": "call",
@@ -753,7 +758,7 @@ class HttpRequest(WebRequest):
                 query = werkzeug.urls.url_encode({
                     'redirect': redirect,
                 })
-                return werkzeug.utils.redirect('/web/login?%s' % query)
+                return request.redirect('/web/login?%s' % query)
         except werkzeug.exceptions.HTTPException as e:
             return e
 
@@ -780,7 +785,7 @@ class HttpRequest(WebRequest):
 
 Odoo URLs are CSRF-protected by default (when accessed with unsafe
 HTTP methods). See
-https://www.odoo.com/documentation/13.0/reference/http.html#csrf for
+https://www.odoo.com/documentation/15.0/developer/reference/addons/http.html#csrf for
 more details.
 
 * if this endpoint is accessed through Odoo via py-QWeb form, embed a CSRF
@@ -819,7 +824,7 @@ more details.
         :param basestring data: response body
         :param headers: HTTP headers to set on the response
         :type headers: ``[(name, value)]``
-        :param collections.Mapping cookies: cookies to set on the client
+        :param collections.abc.Mapping cookies: cookies to set on the client
         """
         response = Response(data, headers=headers)
         if cookies:
@@ -899,7 +904,7 @@ class EndPoint(object):
     def __init__(self, method, routing):
         self.method = method
         self.original = getattr(method, 'original_func', method)
-        self.routing = routing
+        self.routing = frozendict(routing)
         self.arguments = {}
 
     @property
@@ -909,6 +914,29 @@ class EndPoint(object):
 
     def __call__(self, *args, **kw):
         return self.method(*args, **kw)
+
+    # werkzeug will use these EndPoint objects as keys of a dictionary
+    # (the RoutingMap._rules_by_endpoint mapping).
+    # When Odoo clears the routing map, new EndPoint objects are created,
+    # most of them with the same values.
+    # The __eq__ and __hash__ magic methods allow older EndPoint objects
+    # to be still valid keys of the RoutingMap.
+    # For example, website._get_canonical_url_localized may use
+    # such an old endpoint if the routing map was cleared.
+    def __eq__(self, other):
+        try:
+            return self._as_tuple() == other._as_tuple()
+        except AttributeError:
+            return False
+
+    def __hash__(self):
+        return hash(self._as_tuple())
+
+    def _as_tuple(self):
+        return (self.original, self.routing)
+
+    def __repr__(self):
+        return '<EndPoint method=%r routing=%r>' % (self.method, self.routing)
 
 
 def _generate_routing_rules(modules, nodb_only, converters=None):
@@ -1171,6 +1199,14 @@ def session_gc(session_store):
             except OSError:
                 pass
 
+ODOO_DISABLE_SESSION_GC = str2bool(os.environ.get('ODOO_DISABLE_SESSION_GC', '0'))
+
+if ODOO_DISABLE_SESSION_GC:
+    # empty function, in case another module would be
+    # calling it out of setup_session()
+    session_gc = lambda s: None
+
+
 #----------------------------------------------------------
 # WSGI Layer
 #----------------------------------------------------------
@@ -1250,7 +1286,11 @@ class DisableCacheMiddleware(object):
             req = werkzeug.wrappers.Request(environ)
             root.setup_session(req)
             if req.session and req.session.debug and not 'wkhtmltopdf' in req.headers.get('User-Agent'):
-                new_headers = [('Cache-Control', 'no-cache')]
+
+                if "assets" in req.session.debug and (".js" in req.base_url or ".css" in req.base_url):
+                    new_headers = [('Cache-Control', 'no-store')]
+                else:
+                    new_headers = [('Cache-Control', 'no-cache')]
 
                 for k, v in headers:
                     if k.lower() != 'cache-control':
@@ -1272,6 +1312,8 @@ class Root(object):
         # Setup http sessions
         path = odoo.tools.config.session_dir
         _logger.debug('HTTP sessions stored in: %s', path)
+        if ODOO_DISABLE_SESSION_GC:
+            _logger.info('Default session GC disabled, manual GC required.')
         return sessions.FilesystemSessionStore(
             path, session_class=OpenERPSession, renew_missing=True)
 
@@ -1298,21 +1340,21 @@ class Root(object):
         controllers and configure them.  """
         # TODO should we move this to ir.http so that only configured modules are served ?
         statics = {}
+        manifests = addons_manifest
         for addons_path in odoo.addons.__path__:
             for module in sorted(os.listdir(str(addons_path))):
-                if module not in addons_manifest:
+                if module not in manifests:
+                    # Deal with the manifest first
                     mod_path = opj(addons_path, module)
-                    manifest_path = module_manifest(mod_path)
+                    manifest = read_manifest(addons_path, module)
+                    if not manifest or (not manifest.get('installable', True) and 'assets' not in manifest):
+                        continue
+                    manifest['addons_path'] = addons_path
+                    manifests[module] = manifest
+                    # Then deal with the statics
                     path_static = opj(addons_path, module, 'static')
-                    if manifest_path and os.path.isdir(path_static):
-                        with open(manifest_path, 'rb') as fd:
-                            manifest_data = fd.read()
-                        manifest = ast.literal_eval(pycompat.to_text(manifest_data))
-                        if not manifest.get('installable', True):
-                            continue
-                        manifest['addons_path'] = addons_path
+                    if os.path.isdir(path_static):
                         _logger.debug("Loading %s", module)
-                        addons_manifest[module] = manifest
                         statics['/%s/static' % module] = path_static
 
         if statics:
@@ -1384,6 +1426,7 @@ class Root(object):
             response = Response(result, mimetype='text/html')
         else:
             response = result
+            self.set_csp(response)
 
         save_session = (not request.endpoint) or request.endpoint.routing.get('save_session', True)
         if not save_session:
@@ -1409,13 +1452,30 @@ class Root(object):
 
         return response
 
+
+    def set_csp(self, response):
+        # ignore HTTP errors
+        if not isinstance(response, werkzeug.wrappers.Response):
+            return
+
+        headers = response.headers
+        if 'Content-Security-Policy' in headers:
+            return
+
+        mime, _params = cgi.parse_header(headers.get('Content-Type', ''))
+        if not mime.startswith('image/'):
+            return
+
+        headers['Content-Security-Policy'] = "default-src 'none'"
+
+
     def dispatch(self, environ, start_response):
         """
         Performs the actual WSGI dispatching for the application.
         """
         try:
             httprequest = werkzeug.wrappers.Request(environ)
-            httprequest.app = self
+            httprequest.user_agent_class = UserAgent  # use vendored userAgent since it will be removed in 2.1
             httprequest.parameter_storage_class = werkzeug.datastructures.ImmutableOrderedMultiDict
 
             current_thread = threading.current_thread()
@@ -1436,10 +1496,17 @@ class Root(object):
                 except werkzeug.exceptions.HTTPException as e:
                     return request._handle_exception(e)
                 request.set_handler(func, arguments, "none")
-                result = request.dispatch()
+                try:
+                    result = request.dispatch()
+                except Exception as e:
+                    return request._handle_exception(e)
                 return result
 
-            with request:
+            request_manager = request
+            if request.session.profile_session:
+                request_manager = self.get_profiler_context_manager(request)
+
+            with request_manager:
                 db = request.session.db
                 if db:
                     try:
@@ -1451,7 +1518,7 @@ class Root(object):
                         # the registry. That means either
                         # - the database probably does not exists anymore
                         # - the database is corrupted
-                        # - the database version doesnt match the server version
+                        # - the database version doesn't match the server version
                         # Log the user out and fall back to nodb
                         request.session.logout()
                         if request.httprequest.path == '/web':
@@ -1471,13 +1538,45 @@ class Root(object):
         except werkzeug.exceptions.HTTPException as e:
             return e(environ, start_response)
 
+    def get_profiler_context_manager(self, request):
+        """ Return a context manager that combines a profiler and ``request``. """
+        if request.session.profile_session and request.session.db:
+            if request.session.profile_expiration < str(datetime.now()):
+                # avoid having session profiling for too long if user forgets to disable profiling
+                request.session.profile_session = None
+                _logger.warning("Profiling expiration reached, disabling profiling")
+            elif 'set_profiling' in request.httprequest.path:
+                _logger.debug("Profiling disabled on set_profiling route")
+            elif request.httprequest.path.startswith('/longpolling'):
+                _logger.debug("Profiling disabled for longpolling")
+            elif odoo.evented:
+                # only longpolling should be in a evented server, but this is an additional safety
+                _logger.debug("Profiling disabled for evented server")
+            else:
+                try:
+                    prof = profiler.Profiler(
+                        db=request.session.db,
+                        description=request.httprequest.full_path,
+                        profile_session=request.session.profile_session,
+                        collectors=request.session.profile_collectors,
+                        params=request.session.profile_params,
+                    )
+                    return profiler.Nested(prof, request)
+                except Exception:
+                    _logger.exception("Failure during Profiler creation")
+                    request.session.profile_session = None
+        return request
+
     def get_db_router(self, db):
         if not db:
             return self.nodb_routing_map
         return request.registry['ir.http'].routing_map()
 
 def db_list(force=False, httprequest=None):
-    dbs = odoo.service.db.list_dbs(force)
+    try:
+        dbs = odoo.service.db.list_dbs(force)
+    except psycopg2.OperationalError:
+        return []
     return db_filter(dbs, httprequest=httprequest)
 
 def db_filter(dbs, httprequest=None):
@@ -1492,7 +1591,7 @@ def db_filter(dbs, httprequest=None):
         dbs = [i for i in dbs if re.match(r, i)]
     elif odoo.tools.config['db_name']:
         # In case --db-filter is not provided and --database is passed, Odoo will
-        # use the value of --database as a comma seperated list of exposed databases.
+        # use the value of --database as a comma separated list of exposed databases.
         exposed_dbs = set(db.strip() for db in odoo.tools.config['db_name'].split(','))
         dbs = sorted(exposed_dbs.intersection(dbs))
     return dbs
@@ -1591,7 +1690,7 @@ def send_file(filepath_or_fp, mimetype=None, as_attachment=False, filename=None,
     if isinstance(mtime, str):
         try:
             server_format = odoo.tools.misc.DEFAULT_SERVER_DATETIME_FORMAT
-            mtime = datetime.datetime.strptime(mtime.split('.')[0], server_format)
+            mtime = datetime.strptime(mtime.split('.')[0], server_format)
         except Exception:
             mtime = None
     if mtime is not None:
@@ -1629,34 +1728,18 @@ def content_disposition(filename):
 def set_safe_image_headers(headers, content):
     """Return new headers based on `headers` but with `Content-Length` and
     `Content-Type` set appropriately depending on the given `content` only if it
-    is safe to do."""
-    content_type = guess_mimetype(content)
-    safe_types = ['image/jpeg', 'image/png', 'image/gif', 'image/x-icon']
-    if content_type in safe_types:
-        headers = set_header_field(headers, 'Content-Type', content_type)
-    set_header_field(headers, 'Content-Length', len(content))
-    return headers
-
-
-def set_header_field(headers, name, value):
-    """ Return new headers based on `headers` but with `value` set for the
-    header field `name`.
-
-    :param headers: the existing headers
-    :type headers: list of tuples (name, value)
-
-    :param name: the header field name
-    :type name: string
-
-    :param value: the value to set for the `name` header
-    :type value: string
-
-    :return: the updated headers
-    :rtype: list of tuples (name, value)
+    is safe to do, as well as `X-Content-Type-Options: nosniff` so that if the
+    file is of an unsafe type, it is not interpreted as that type if the
+    `Content-type` header was already set to a different mimetype
     """
-    dictheaders = dict(headers)
-    dictheaders[name] = value
-    return list(dictheaders.items())
+    headers = werkzeug.datastructures.Headers(headers)
+    safe_types = {'image/jpeg', 'image/png', 'image/gif', 'image/x-icon'}
+    content_type = guess_mimetype(content)
+    if content_type in safe_types:
+        headers['Content-Type'] = content_type
+    headers['X-Content-Type-Options'] = 'nosniff'
+    headers['Content-Length'] = len(content)
+    return list(headers)
 
 
 #  main wsgi handler

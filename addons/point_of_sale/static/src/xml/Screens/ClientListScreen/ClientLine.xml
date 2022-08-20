@@ -5,7 +5,7 @@
         <tr t-attf-class="client-line {{highlight}}" t-att-data-id="props.partner.id"
             t-on-click="trigger('click-client', {client: props.partner})">
             <td>
-                <t t-esc="props.partner.name" />
+                <t t-esc="props.partner.name or ''" />
                 <span t-if="highlight">
                     <br/><button class="edit-client-button" t-on-click.stop="trigger('click-edit')">EDIT</button>
                 </span>
@@ -20,10 +20,11 @@
                 <t t-esc="props.partner.zip or ''" />
                 <span t-if="highlight"><br/></span>
             </td>
-            <td>
+            <td class="client-line-email">
                 <t t-esc="props.partner.email or ''" />
                 <span t-if="highlight"><br/></span>
             </td>
+            <td class="client-line-last-column-placeholder oe_invisible"></td>
         </tr>
     </t>
 

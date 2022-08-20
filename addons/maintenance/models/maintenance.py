@@ -40,7 +40,7 @@ class MaintenanceEquipmentCategory(models.Model):
         default=lambda self: self.env.company)
     technician_user_id = fields.Many2one('res.users', 'Responsible', tracking=True, default=lambda self: self.env.uid)
     color = fields.Integer('Color Index')
-    note = fields.Text('Comments', translate=True)
+    note = fields.Html('Comments', translate=True)
     equipment_ids = fields.One2many('maintenance.equipment', 'category_id', string='Equipments', copy=False)
     equipment_count = fields.Integer(string="Equipment", compute='_compute_equipment_count')
     maintenance_ids = fields.One2many('maintenance.request', 'category_id', copy=False)
@@ -63,11 +63,11 @@ class MaintenanceEquipmentCategory(models.Model):
         for category in self:
             category.maintenance_count = mapped_data.get(category.id, 0)
 
-    def unlink(self):
+    @api.ondelete(at_uninstall=False)
+    def _unlink_except_contains_maintenance_requests(self):
         for category in self:
             if category.equipment_ids or category.maintenance_ids:
                 raise UserError(_("You cannot delete an equipment category containing equipments or maintenance requests."))
-        return super(MaintenanceEquipmentCategory, self).unlink()
 
     def _alias_get_creation_values(self):
         values = super(MaintenanceEquipmentCategory, self)._alias_get_creation_values()
@@ -125,7 +125,7 @@ class MaintenanceEquipment(models.Model):
     assign_date = fields.Date('Assigned Date', tracking=True)
     effective_date = fields.Date('Effective Date', default=fields.Date.context_today, required=True, help="Date at which the equipment became effective. This date will be used to compute the Mean Time Between Failure.")
     cost = fields.Float('Cost')
-    note = fields.Text('Note')
+    note = fields.Html('Note')
     warranty_date = fields.Date('Warranty Expiration Date')
     color = fields.Integer('Color Index')
     scrap_date = fields.Date('Scrap Date')
@@ -220,9 +220,9 @@ class MaintenanceEquipment(models.Model):
         category_ids = categories._search([], order=order, access_rights_uid=SUPERUSER_ID)
         return categories.browse(category_ids)
 
-    def _create_new_request(self, date):
+    def _prepare_maintenance_request_vals(self, date):
         self.ensure_one()
-        self.env['maintenance.request'].create({
+        return {
             'name': _('Preventive Maintenance - %s', self.name),
             'request_date': date,
             'schedule_date': date,
@@ -234,7 +234,13 @@ class MaintenanceEquipment(models.Model):
             'maintenance_team_id': self.maintenance_team_id.id,
             'duration': self.maintenance_duration,
             'company_id': self.company_id.id or self.env.company.id
-            })
+        }
+
+    def _create_new_request(self, date):
+        self.ensure_one()
+        vals = self._prepare_maintenance_request_vals(date)
+        maintenance_requests = self.env['maintenance.request'].create(vals)
+        return maintenance_requests
 
     @api.model
     def _cron_generate_requests(self):
@@ -280,7 +286,7 @@ class MaintenanceRequest(models.Model):
     name = fields.Char('Subjects', required=True)
     company_id = fields.Many2one('res.company', string='Company',
         default=lambda self: self.env.company)
-    description = fields.Text('Description')
+    description = fields.Html('Description')
     request_date = fields.Date('Request Date', tracking=True, default=fields.Date.context_today,
                                help="Date requested for the maintenance to happen")
     owner_user_id = fields.Many2one('res.users', string='Created by User', default=lambda s: s.env.uid)
@@ -422,12 +428,12 @@ class MaintenanceTeam(models.Model):
     @api.depends('request_ids.stage_id.done')
     def _compute_todo_requests(self):
         for team in self:
-            team.todo_request_ids = team.request_ids.filtered(lambda e: e.stage_id.done==False)
+            team.todo_request_ids = self.env['maintenance.request'].search([('maintenance_team_id', '=', team.id), ('stage_id.done', '=', False)])
             team.todo_request_count = len(team.todo_request_ids)
-            team.todo_request_count_date = len(team.todo_request_ids.filtered(lambda e: e.schedule_date != False))
-            team.todo_request_count_high_priority = len(team.todo_request_ids.filtered(lambda e: e.priority == '3'))
-            team.todo_request_count_block = len(team.todo_request_ids.filtered(lambda e: e.kanban_state == 'blocked'))
-            team.todo_request_count_unscheduled = len(team.todo_request_ids.filtered(lambda e: not e.schedule_date))
+            team.todo_request_count_date = self.env['maintenance.request'].search_count([('maintenance_team_id', '=', team.id), ('schedule_date', '!=', False)])
+            team.todo_request_count_high_priority = self.env['maintenance.request'].search_count([('maintenance_team_id', '=', team.id), ('priority', '=', '3')])
+            team.todo_request_count_block = self.env['maintenance.request'].search_count([('maintenance_team_id', '=', team.id), ('kanban_state', '=', 'blocked')])
+            team.todo_request_count_unscheduled = self.env['maintenance.request'].search_count([('maintenance_team_id', '=', team.id), ('schedule_date', '=', False)])
 
     @api.depends('equipment_ids')
     def _compute_equipment(self):

@@ -17,13 +17,13 @@ class TestCrmMailActivity(TestCrmCommon):
             'name': 'Initial Contact',
             'delay_count': 5,
             'summary': 'ACT 1 : Presentation, barbecue, ... ',
-            'res_model_id': cls.env['ir.model']._get('crm.lead').id,
+            'res_model': 'crm.lead',
         })
         cls.activity_type_2 = cls.env['mail.activity.type'].create({
             'name': 'Call for Demo',
             'delay_count': 6,
             'summary': 'ACT 2 : I want to show you my ERP !',
-            'res_model_id': cls.env['ir.model']._get('crm.lead').id,
+            'res_model': 'crm.lead',
         })
         for activity_type in cls.activity_type_1 + cls.activity_type_2:
             cls.env['ir.model.data'].create({
@@ -42,11 +42,11 @@ class TestCrmMailActivity(TestCrmCommon):
         # Initialize some batch data
         default_order = self.env['crm.lead']._order
         self.assertEqual(default_order, "priority desc, id desc")  # force updating this test is order changes
-        test_leads = self._create_leads_batch(count=10).sorted('id')
+        test_leads = self._create_leads_batch(count=10, partner_ids=[self.contact_1.id, self.contact_2.id, False]).sorted('id')
 
         # assert initial data, ensure we did not break base behavior
         for lead in test_leads:
-            self.assertFalse(lead.activity_date_deadline_my)
+            self.assertFalse(lead.my_activity_date_deadline)
         search_res = self.env['crm.lead'].search([('id', 'in', test_leads.ids)], limit=5, offset=0, order='id ASC')
         self.assertEqual(search_res.ids, test_leads[:5].ids)
         search_res = self.env['crm.lead'].search([('id', 'in', test_leads.ids)], limit=5, offset=5, order='id ASC')
@@ -82,11 +82,11 @@ class TestCrmMailActivity(TestCrmCommon):
         expected_leads_desc = self.env['crm.lead'].browse([test_leads[lid].id for lid in expected_ids_desc])
 
         for idx, lead in enumerate(test_leads):
-            self.assertEqual(lead.activity_date_deadline_my, deadlines_my[idx])
+            self.assertEqual(lead.my_activity_date_deadline, deadlines_my[idx])
             self.assertEqual(lead.activity_date_deadline, deadlines_gl[idx], 'Fail at %s' % idx)
 
         # Let's go for a first batch of search
-        _order = 'activity_date_deadline_my ASC, %s' % default_order
+        _order = 'my_activity_date_deadline ASC, %s' % default_order
         _domain = [('id', 'in', test_leads.ids)]
 
         search_res = self.env['crm.lead'].search(_domain, limit=None, offset=0, order=_order)
@@ -98,7 +98,7 @@ class TestCrmMailActivity(TestCrmCommon):
         search_res = self.env['crm.lead'].search(_domain, limit=None, offset=3, order=_order)
         self.assertEqual(expected_leads_asc[3:].ids, search_res.ids)
 
-        _order = 'activity_date_deadline_my DESC, %s' % default_order
+        _order = 'my_activity_date_deadline DESC, %s' % default_order
         search_res = self.env['crm.lead'].search(_domain, limit=None, offset=0, order=_order)
         self.assertEqual(expected_leads_desc.ids, search_res.ids)
         search_res = self.env['crm.lead'].search(_domain, limit=4, offset=0, order=_order)
@@ -108,7 +108,6 @@ class TestCrmMailActivity(TestCrmCommon):
         search_res = self.env['crm.lead'].search(_domain, limit=None, offset=3, order=_order)
         self.assertEqual(expected_leads_desc[3:].ids, search_res.ids)
 
-
     def test_crm_activity_recipients(self):
         """ This test case checks
                 - no internal subtype followed by client
@@ -116,14 +115,14 @@ class TestCrmMailActivity(TestCrmCommon):
                 - only activity followers are recipients when this kind of activity is logged
         """
         # Add explicitly a the client as follower
-        self.lead_1.message_subscribe([self.contact_1.id])
+        self.lead_1.message_subscribe(partner_ids=[self.contact_1.id])
 
         # Check the client is not follower of any internal subtype
         internal_subtypes = self.lead_1.message_follower_ids.filtered(lambda fol: fol.partner_id == self.contact_1).mapped('subtype_ids').filtered(lambda subtype: subtype.internal)
         self.assertFalse(internal_subtypes)
 
         # Add sale manager as follower of default subtypes
-        self.lead_1.message_subscribe([self.user_sales_manager.partner_id.id], subtype_ids=[self.env.ref('mail.mt_activities').id, self.env.ref('mail.mt_comment').id])
+        self.lead_1.message_subscribe(partner_ids=[self.user_sales_manager.partner_id.id], subtype_ids=[self.env.ref('mail.mt_activities').id, self.env.ref('mail.mt_comment').id])
 
         activity = self.env['mail.activity'].with_user(self.user_sales_leads).create({
             'activity_type_id': self.activity_type_1.id,

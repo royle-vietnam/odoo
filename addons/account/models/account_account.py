@@ -34,6 +34,7 @@ class AccountAccountType(models.Model):
 
 class AccountAccount(models.Model):
     _name = "account.account"
+    _inherit = ['mail.thread']
     _description = "Account"
     _order = "is_off_balance, code, company_id"
     _check_company_auto = True
@@ -45,7 +46,7 @@ class AccountAccount(models.Model):
                 raise ValidationError(_('You cannot have a receivable/payable account that is not reconcilable. (account code: %s)', account.code))
 
     @api.constrains('user_type_id')
-    def _check_user_type_id(self):
+    def _check_user_type_id_unique_current_year_earning(self):
         data_unaffected_earnings = self.env.ref('account.data_unaffected_earnings')
         result = self.read_group([('user_type_id', '=', data_unaffected_earnings.id)], ['company_id'], ['company_id'])
         for res in result:
@@ -54,29 +55,30 @@ class AccountAccount(models.Model):
                                                            ('user_type_id', '=', data_unaffected_earnings.id)])
                 raise ValidationError(_('You cannot have more than one account with "Current Year Earnings" as type. (accounts: %s)', [a.code for a in account_unaffected_earnings]))
 
-    name = fields.Char(string="Account Name", required=True, index=True)
+    name = fields.Char(string="Account Name", required=True, index=True, tracking=True)
     currency_id = fields.Many2one('res.currency', string='Account Currency',
-        help="Forces all moves for this account to have this account currency.")
-    code = fields.Char(size=64, required=True, index=True)
-    deprecated = fields.Boolean(index=True, default=False)
-    used = fields.Boolean(store=False, search='_search_used')
-    user_type_id = fields.Many2one('account.account.type', string='Type', required=True,
+        help="Forces all moves for this account to have this account currency.", tracking=True)
+    code = fields.Char(size=64, required=True, index=True, tracking=True)
+    deprecated = fields.Boolean(index=True, default=False, tracking=True)
+    used = fields.Boolean(compute='_compute_used', search='_search_used')
+    user_type_id = fields.Many2one('account.account.type', string='Type', required=True, tracking=True,
         help="Account Type is used for information purpose, to generate country-specific legal reports, and set the rules to close a fiscal year and generate opening entries.")
     internal_type = fields.Selection(related='user_type_id.type', string="Internal Type", store=True, readonly=True)
     internal_group = fields.Selection(related='user_type_id.internal_group', string="Internal Group", store=True, readonly=True)
     #has_unreconciled_entries = fields.Boolean(compute='_compute_has_unreconciled_entries',
     #    help="The account has at least one unreconciled debit and credit since last time the invoices & payments matching was performed.")
-    reconcile = fields.Boolean(string='Allow Reconciliation', default=False,
+    reconcile = fields.Boolean(string='Allow Reconciliation', default=False, tracking=True,
         help="Check this box if this account allows invoices & payments matching of journal items.")
     tax_ids = fields.Many2many('account.tax', 'account_account_tax_default_rel',
         'account_id', 'tax_id', string='Default Taxes',
         check_company=True,
         context={'append_type_to_tax_name': True})
-    note = fields.Text('Internal Notes')
+    note = fields.Text('Internal Notes', tracking=True)
     company_id = fields.Many2one('res.company', string='Company', required=True, readonly=True,
         default=lambda self: self.env.company)
     tag_ids = fields.Many2many('account.account.tag', 'account_account_account_tag', string='Tags', help="Optional tags you may want to assign for custom reporting")
-    group_id = fields.Many2one('account.group', compute='_compute_account_group', store=True, readonly=False)
+    group_id = fields.Many2one('account.group', compute='_compute_account_group', store=True, readonly=True,
+                               help="Account prefixes can determine account groups.")
     root_id = fields.Many2one('account.root', compute='_compute_account_root', store=True)
     allowed_journal_ids = fields.Many2many('account.journal', string="Allowed Journals", help="Define in which journals this account can be used. If empty, can be used in all journals.")
 
@@ -85,6 +87,9 @@ class AccountAccount(models.Model):
     opening_balance = fields.Monetary(string="Opening Balance", compute='_compute_opening_debit_credit', help="Opening balance value for this account.")
 
     is_off_balance = fields.Boolean(compute='_compute_is_off_balance', default=False, store=True, readonly=True)
+
+    current_balance = fields.Float(compute='_compute_current_balance')
+    related_taxes_amount = fields.Integer(compute='_compute_related_taxes_amount')
 
     _sql_constraints = [
         ('code_company_uniq', 'unique (code,company_id)', 'The code of the account must be unique per company !')
@@ -126,22 +131,57 @@ class AccountAccount(models.Model):
         self.env['account.journal'].flush([
             'currency_id',
             'default_account_id',
-            'payment_debit_account_id',
-            'payment_credit_account_id',
             'suspense_account_id',
         ])
+        self.env['account.payment.method'].flush(['payment_type'])
+        self.env['account.payment.method.line'].flush(['payment_method_id', 'payment_account_id'])
+
         self._cr.execute('''
-            SELECT account.id, journal.id
-            FROM account_account account
-            JOIN res_company company ON company.id = account.company_id
-            JOIN account_journal journal ON
-                journal.default_account_id = account.id
-            WHERE account.id IN %s
-            AND journal.type IN ('bank', 'cash')
-            AND journal.currency_id IS NOT NULL
+            SELECT 
+                account.id, 
+                journal.id
+            FROM account_journal journal
+            JOIN res_company company ON company.id = journal.company_id
+            JOIN account_account account ON account.id = journal.default_account_id
+            WHERE journal.currency_id IS NOT NULL
             AND journal.currency_id != company.currency_id
             AND account.currency_id != journal.currency_id
-        ''', [tuple(self.ids)])
+            AND account.id IN %(accounts)s
+            
+            UNION ALL
+            
+            SELECT 
+                account.id, 
+                journal.id
+            FROM account_journal journal
+            JOIN res_company company ON company.id = journal.company_id
+            JOIN account_payment_method_line apml ON apml.journal_id = journal.id
+            JOIN account_payment_method apm on apm.id = apml.payment_method_id
+            JOIN account_account account ON account.id = COALESCE(apml.payment_account_id, company.account_journal_payment_debit_account_id)
+            WHERE journal.currency_id IS NOT NULL
+            AND journal.currency_id != company.currency_id
+            AND account.currency_id != journal.currency_id
+            AND apm.payment_type = 'inbound'
+            AND account.id IN %(accounts)s
+            
+            UNION ALL
+            
+            SELECT 
+                account.id, 
+                journal.id
+            FROM account_journal journal
+            JOIN res_company company ON company.id = journal.company_id
+            JOIN account_payment_method_line apml ON apml.journal_id = journal.id
+            JOIN account_payment_method apm on apm.id = apml.payment_method_id
+            JOIN account_account account ON account.id = COALESCE(apml.payment_account_id, company.account_journal_payment_credit_account_id)
+            WHERE journal.currency_id IS NOT NULL
+            AND journal.currency_id != company.currency_id
+            AND account.currency_id != journal.currency_id
+            AND apm.payment_type = 'outbound'
+            AND account.id IN %(accounts)s
+        ''', {
+            'accounts': tuple(self.ids)
+        })
         res = self._cr.fetchone()
         if res:
             account = self.env['account.account'].browse(res[0])
@@ -169,7 +209,7 @@ class AccountAccount(models.Model):
             raise UserError(_("You can't change the company of your account since there are some journal items linked to it."))
 
     @api.constrains('user_type_id')
-    def _check_user_type_id(self):
+    def _check_user_type_id_sales_purchase_journal(self):
         if not self:
             return
 
@@ -187,6 +227,43 @@ class AccountAccount(models.Model):
 
         if self._cr.fetchone():
             raise ValidationError(_("The account is already in use in a 'sale' or 'purchase' journal. This means that the account's type couldn't be 'receivable' or 'payable'."))
+
+    @api.constrains('reconcile')
+    def _check_used_as_journal_default_debit_credit_account(self):
+        accounts = self.filtered(lambda a: not a.reconcile)
+        if not accounts:
+            return
+
+        self.flush(['reconcile'])
+        self.env['account.payment.method.line'].flush(['journal_id', 'payment_account_id'])
+
+        self._cr.execute('''
+            SELECT journal.id
+            FROM account_journal journal
+            JOIN res_company company on journal.company_id = company.id
+            LEFT JOIN account_payment_method_line apml ON journal.id = apml.journal_id
+            WHERE (
+                company.account_journal_payment_credit_account_id IN %(accounts)s
+                AND company.account_journal_payment_credit_account_id != journal.default_account_id
+                ) OR (
+                company.account_journal_payment_debit_account_id in %(accounts)s
+                AND company.account_journal_payment_debit_account_id != journal.default_account_id
+                ) OR (
+                apml.payment_account_id IN %(accounts)s
+                AND apml.payment_account_id != journal.default_account_id
+            )
+        ''', {
+            'accounts': tuple(accounts.ids),
+        })
+
+        rows = self._cr.fetchall()
+        if rows:
+            journals = self.env['account.journal'].browse([r[0] for r in rows])
+            raise ValidationError(_(
+                "This account is configured in %(journal_names)s journal(s) (ids %(journal_ids)s) as payment debit or credit account. This means that this account's type should be reconcilable.",
+                journal_names=journals.mapped('display_name'),
+                journal_ids=journals.ids
+            ))
 
     @api.depends('code')
     def _compute_account_root(self):
@@ -214,6 +291,11 @@ class AccountAccount(models.Model):
         """)
         return [('id', 'in' if value else 'not in', [r[0] for r in self._cr.fetchall()])]
 
+    def _compute_used(self):
+        ids = set(self._search_used('=', True)[0][2])
+        for record in self:
+            record.used = record.id in ids
+
     @api.model
     def _search_new_account_code(self, company, digits, prefix):
         for num in range(1, 10000):
@@ -223,8 +305,31 @@ class AccountAccount(models.Model):
                 return new_code
         raise UserError(_('Cannot generate an unused account code.'))
 
+    def _compute_current_balance(self):
+        balances = {
+            read['account_id'][0]: read['balance']
+            for read in self.env['account.move.line'].read_group(
+                domain=[('account_id', 'in', self.ids)],
+                fields=['balance', 'account_id'],
+                groupby=['account_id'],
+            )
+        }
+        for record in self:
+            record.current_balance = balances.get(record.id, 0)
+
+    def _compute_related_taxes_amount(self):
+        for record in self:
+            record.related_taxes_amount = self.env['account.tax'].search_count([
+                '|',
+                ('invoice_repartition_line_ids.account_id', '=', record.id),
+                ('refund_repartition_line_ids.account_id', '=', record.id),
+            ])
+
     def _compute_opening_debit_credit(self):
-        if not self:
+        self.opening_debit = 0
+        self.opening_credit = 0
+        self.opening_balance = 0
+        if not self.ids:
             return
         self.env.cr.execute("""
             SELECT line.account_id,
@@ -250,10 +355,12 @@ class AccountAccount(models.Model):
             account.is_off_balance = account.internal_group == "off_balance"
 
     def _set_opening_debit(self):
-        self._set_opening_debit_credit(self.opening_debit, 'debit')
+        for record in self:
+            record._set_opening_debit_credit(record.opening_debit, 'debit')
 
     def _set_opening_credit(self):
-        self._set_opening_debit_credit(self.opening_credit, 'credit')
+        for record in self:
+            record._set_opening_debit_credit(record.opening_credit, 'credit')
 
     def _set_opening_debit_credit(self, amount, field):
         """ Generic function called by both opening_debit and opening_credit's
@@ -445,9 +552,13 @@ class AccountAccount(models.Model):
 
         return super(AccountAccount, self).write(vals)
 
-    def unlink(self):
+    @api.ondelete(at_uninstall=False)
+    def _unlink_except_contains_journal_items(self):
         if self.env['account.move.line'].search([('account_id', 'in', self.ids)], limit=1):
             raise UserError(_('You cannot perform this action on an account that contains journal items.'))
+
+    @api.ondelete(at_uninstall=False)
+    def _unlink_except_account_set_on_customer(self):
         #Checking whether the account is set as a property to any Partner or not
         values = ['account.account,%s' % (account_id,) for account_id in self.ids]
         partner_prop_acc = self.env['ir.property'].sudo().search([('value_reference', 'in', values)], limit=1)
@@ -456,7 +567,6 @@ class AccountAccount(models.Model):
             raise UserError(
                 _('You cannot remove/deactivate the account %s which is set on a customer or vendor.', account_name)
             )
-        return super(AccountAccount, self).unlink()
 
     def action_read_account(self):
         self.ensure_one()
@@ -472,6 +582,22 @@ class AccountAccount(models.Model):
     def action_duplicate_accounts(self):
         for account in self.browse(self.env.context['active_ids']):
             account.copy()
+
+    def action_open_related_taxes(self):
+        related_taxes_ids = self.env['account.tax'].search([
+            '|',
+            ('invoice_repartition_line_ids.account_id', '=', self.id),
+            ('refund_repartition_line_ids.account_id', '=', self.id),
+        ]).ids
+        return {
+            'type': 'ir.actions.act_window',
+            'name': _('Taxes'),
+            'res_model': 'account.tax',
+            'view_type': 'list',
+            'view_mode': 'list',
+            'views': [[False, 'list'], [False, 'form']],
+            'domain': [('id', 'in', related_taxes_ids)],
+        }
 
 
 class AccountGroup(models.Model):
@@ -579,22 +705,37 @@ class AccountGroup(models.Model):
         The most specific is the one with the longest prefixes and with the starting
         prefix being smaller than the account code and the ending prefix being greater.
         """
-        if not self and not account_ids:
+        company_ids = account_ids.company_id.ids if account_ids else self.company_id.ids
+        account_ids = account_ids.ids if account_ids else []
+        if not company_ids and not account_ids:
             return
-        self.env['account.group'].flush()
-        self.env['account.account'].flush()
-        query = """
-            UPDATE account_account account SET group_id = (
-                SELECT agroup.id FROM account_group agroup
-                WHERE agroup.code_prefix_start <= LEFT(account.code, char_length(agroup.code_prefix_start))
-                AND agroup.code_prefix_end >= LEFT(account.code, char_length(agroup.code_prefix_end))
-                AND agroup.company_id = account.company_id
-                ORDER BY char_length(agroup.code_prefix_start) DESC LIMIT 1
-            ) WHERE account.company_id in %(company_ids)s {where_account};
-        """.format(
-            where_account=account_ids and 'AND account.id IN %(account_ids)s' or ''
-        )
-        self.env.cr.execute(query, {'company_ids': tuple((self.company_id or account_ids.company_id).ids), 'account_ids': account_ids and tuple(account_ids.ids)})
+        self.env['account.group'].flush(self.env['account.group']._fields)
+        self.env['account.account'].flush(self.env['account.account']._fields)
+
+        account_where_clause = ''
+        where_params = [tuple(company_ids)]
+        if account_ids:
+            account_where_clause = 'AND account.id IN %s'
+            where_params.append(tuple(account_ids))
+
+        self._cr.execute(f'''
+            WITH candidates_account_groups AS (
+                SELECT
+                    account.id AS account_id,
+                    ARRAY_AGG(agroup.id ORDER BY char_length(agroup.code_prefix_start) DESC, agroup.id) AS group_ids
+                FROM account_account account
+                LEFT JOIN account_group agroup
+                    ON agroup.code_prefix_start <= LEFT(account.code, char_length(agroup.code_prefix_start))
+                    AND agroup.code_prefix_end >= LEFT(account.code, char_length(agroup.code_prefix_end))
+                    AND agroup.company_id = account.company_id
+                WHERE account.company_id IN %s {account_where_clause}
+                GROUP BY account.id
+            )
+            UPDATE account_account
+            SET group_id = rel.group_ids[1]
+            FROM candidates_account_groups rel
+            WHERE account_account.id = rel.account_id
+        ''', where_params)
         self.env['account.account'].invalidate_cache(fnames=['group_id'])
 
     def _adapt_parent_account_group(self):
@@ -606,21 +747,28 @@ class AccountGroup(models.Model):
         """
         if not self:
             return
-        self.env['account.group'].flush()
+        self.env['account.group'].flush(self.env['account.group']._fields)
         query = """
-            UPDATE account_group agroup SET parent_id = (
-                SELECT parent.id FROM account_group parent
-                WHERE char_length(parent.code_prefix_start) < char_length(agroup.code_prefix_start)
-                AND parent.code_prefix_start <= LEFT(agroup.code_prefix_start, char_length(parent.code_prefix_start))
-                AND parent.code_prefix_end >= LEFT(agroup.code_prefix_end, char_length(parent.code_prefix_end))
-                AND parent.id != agroup.id
-                AND parent.company_id = %(company_id)s
-                ORDER BY char_length(parent.code_prefix_start) DESC LIMIT 1
-            ) WHERE agroup.company_id = %(company_id)s;
+            WITH relation AS (
+       SELECT DISTINCT FIRST_VALUE(parent.id) OVER (PARTITION BY child.id ORDER BY child.id, char_length(parent.code_prefix_start) DESC) AS parent_id,
+                       child.id AS child_id
+                  FROM account_group parent
+                  JOIN account_group child
+                    ON char_length(parent.code_prefix_start) < char_length(child.code_prefix_start)
+                   AND parent.code_prefix_start <= LEFT(child.code_prefix_start, char_length(parent.code_prefix_start))
+                   AND parent.code_prefix_end >= LEFT(child.code_prefix_end, char_length(parent.code_prefix_end))
+                   AND parent.id != child.id
+                   AND parent.company_id = child.company_id
+                 WHERE child.company_id IN %(company_ids)s
+            )
+            UPDATE account_group child
+               SET parent_id = relation.parent_id
+              FROM relation
+             WHERE child.id = relation.child_id;
         """
-        self.env.cr.execute(query, {'company_id': self.company_id.id})
+        self.env.cr.execute(query, {'company_ids': tuple(self.company_id.ids)})
         self.env['account.group'].invalidate_cache(fnames=['parent_id'])
-        self.env['account.group'].search([('company_id', '=', self.company_id.id)])._parent_store_update()
+        self.env['account.group'].search([('company_id', 'in', self.company_id.ids)])._parent_store_update()
 
 
 class AccountRoot(models.Model):

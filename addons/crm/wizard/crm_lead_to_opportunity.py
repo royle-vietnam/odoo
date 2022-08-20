@@ -24,25 +24,25 @@ class Lead2OpportunityPartner(models.TransientModel):
     name = fields.Selection([
         ('convert', 'Convert to opportunity'),
         ('merge', 'Merge with existing opportunities')
-    ], 'Conversion Action', compute='_compute_name', readonly=False, store=True)
+    ], 'Conversion Action', compute='_compute_name', readonly=False, store=True, compute_sudo=False)
     action = fields.Selection([
         ('create', 'Create a new customer'),
         ('exist', 'Link to an existing customer'),
         ('nothing', 'Do not link to a customer')
-    ], string='Related Customer', compute='_compute_action', readonly=False, store=True)
+    ], string='Related Customer', compute='_compute_action', readonly=False, store=True, compute_sudo=False)
     lead_id = fields.Many2one('crm.lead', 'Associated Lead', required=True)
     duplicated_lead_ids = fields.Many2many(
         'crm.lead', string='Opportunities', context={'active_test': False},
-        compute='_compute_duplicated_lead_ids', readonly=False, store=True)
+        compute='_compute_duplicated_lead_ids', readonly=False, store=True, compute_sudo=False)
     partner_id = fields.Many2one(
         'res.partner', 'Customer',
-        compute='_compute_partner_id', readonly=False, store=True)
+        compute='_compute_partner_id', readonly=False, store=True, compute_sudo=False)
     user_id = fields.Many2one(
         'res.users', 'Salesperson',
-        compute='_compute_user_id', readonly=False, store=True)
+        compute='_compute_user_id', readonly=False, store=True, compute_sudo=False)
     team_id = fields.Many2one(
         'crm.team', 'Sales Team',
-        compute='_compute_team_id', readonly=False, store=True)
+        compute='_compute_team_id', readonly=False, store=True, compute_sudo=False)
     force_assignment = fields.Boolean(
         'Force assignment', default=True,
         help='If checked, forces salesman to be updated on updated opportunities even if already set.')
@@ -50,7 +50,8 @@ class Lead2OpportunityPartner(models.TransientModel):
     @api.depends('duplicated_lead_ids')
     def _compute_name(self):
         for convert in self:
-            convert.name = 'merge' if convert.duplicated_lead_ids and len(convert.duplicated_lead_ids) >= 2 else 'convert'
+            if not convert.name:
+                convert.name = 'merge' if convert.duplicated_lead_ids and len(convert.duplicated_lead_ids) >= 2 else 'convert'
 
     @api.depends('lead_id')
     def _compute_action(self):
@@ -77,7 +78,7 @@ class Lead2OpportunityPartner(models.TransientModel):
                 convert.lead_id.partner_id.email if convert.lead_id.partner_id.email else convert.lead_id.email_from,
                 include_lost=True).ids
 
-    @api.depends('action')
+    @api.depends('action', 'lead_id')
     def _compute_partner_id(self):
         for convert in self:
             if convert.action == 'exist':
@@ -101,8 +102,7 @@ class Lead2OpportunityPartner(models.TransientModel):
             user = convert.user_id
             if convert.team_id and user in convert.team_id.member_ids | convert.team_id.user_id:
                 continue
-            team_domain = []
-            team = self.env['crm.team']._get_default_team_id(user_id=user.id, domain=team_domain)
+            team = self.env['crm.team']._get_default_team_id(user_id=user.id, domain=None)
             convert.team_id = team.id
 
     @api.model
@@ -135,7 +135,7 @@ class Lead2OpportunityPartner(models.TransientModel):
                     'user_id': self.user_id.id,
                     'team_id': self.team_id.id,
                 })
-        (to_merge - result_opportunity).unlink()
+        (to_merge - result_opportunity).sudo().unlink()
         return result_opportunity
 
     def _action_convert(self):
@@ -152,18 +152,18 @@ class Lead2OpportunityPartner(models.TransientModel):
                 self._convert_handle_partner(
                     lead, self.action, self.partner_id.id or lead.partner_id.id)
 
-            lead.convert_opportunity(lead.partner_id.id, [], False)
+            lead.convert_opportunity(lead.partner_id.id, user_ids=False, team_id=False)
 
         leads_to_allocate = leads
         if not self.force_assignment:
             leads_to_allocate = leads_to_allocate.filtered(lambda lead: not lead.user_id)
 
         if user_ids:
-            leads_to_allocate.handle_salesmen_assignment(user_ids, team_id=team_id)
+            leads_to_allocate._handle_salesmen_assignment(user_ids, team_id=team_id)
 
     def _convert_handle_partner(self, lead, action, partner_id):
         # used to propagate user_id (salesman) on created partners during conversion
-        lead.with_context(default_user_id=self.user_id.id).handle_partner_assignment(
+        lead.with_context(default_user_id=self.user_id.id)._handle_partner_assignment(
             force_partner_id=partner_id,
             create_missing=(action == 'create')
         )

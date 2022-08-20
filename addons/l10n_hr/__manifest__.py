@@ -59,5 +59,5 @@ Izvori podataka:
     'demo': [
         'demo/demo_company.xml',
     ],
-    "active": False,
+    'license': 'LGPL-3',
 }

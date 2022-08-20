@@ -3,6 +3,7 @@
 
 {
     'name': 'Indian - Purchase Report(GST)',
+    'icon': '/l10n_in/static/description/icon.png',
     'version': '1.0',
     'description': """GST Purchase Report""",
     'category': 'Accounting/Localizations/Purchase',
@@ -17,4 +18,5 @@
     'installable': True,
     'application': False,
     'auto_install': True,
+    'license': 'LGPL-3',
 }

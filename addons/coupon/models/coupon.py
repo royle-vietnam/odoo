@@ -5,6 +5,7 @@ from dateutil.relativedelta import relativedelta
 
 from odoo import api, fields, models, _
 
+from uuid import uuid4
 
 class Coupon(models.Model):
     _name = 'coupon.coupon'
@@ -22,9 +23,9 @@ class Coupon(models.Model):
         Generate 8 bytes (64 bits) barcodes as 16 bytes barcodes are not
         compatible with all scanners.
          """
-        return str(random.getrandbits(64))
+        return str(uuid4())[:22]
 
-    code = fields.Char(default=_generate_code, required=True, readonly=True)
+    code = fields.Char(default=lambda self: self._generate_code(), required=True, readonly=True)
     expiration_date = fields.Date('Expiration Date', compute='_compute_expiration_date')
     state = fields.Selection([
         ('reserved', 'Pending'),
@@ -49,18 +50,21 @@ class Coupon(models.Model):
         for coupon in self.filtered(lambda x: x.program_id.validity_duration > 0):
             coupon.expiration_date = (coupon.create_date + relativedelta(days=coupon.program_id.validity_duration)).date()
 
-    def action_coupon_sent(self):
+    def _get_default_template(self):
+        return False
+
+    def action_coupon_send(self):
         """ Open a window to compose an email, with the edi invoice template
             message loaded by default
         """
         self.ensure_one()
-        template = self.env.ref('coupon.mail_template_sale_coupon', False)
+        default_template = self._get_default_template()
         compose_form = self.env.ref('mail.email_compose_message_wizard_form', False)
         ctx = dict(
             default_model='coupon.coupon',
             default_res_id=self.id,
-            default_use_template=bool(template),
-            default_template_id=template.id,
+            default_use_template=bool(default_template),
+            default_template_id=default_template and default_template.id,
             default_composition_mode='comment',
             custom_layout='mail.mail_notification_light',
             mark_coupon_as_sent=True,
@@ -90,3 +94,24 @@ class Coupon(models.Model):
 
         expired_ids = [res[0] for res in self._cr.fetchall()]
         self.browse(expired_ids).write({'state': 'expired'})
+
+    def _check_coupon_code(self, order_date, partner_id, **kwargs):
+        """ Check the validity of this single coupon.
+            :param order_date Date:
+            :param partner_id int | boolean:
+        """
+        self.ensure_one()
+        message = {}
+        if self.state == 'used':
+            message = {'error': _('This coupon has already been used (%s).') % (self.code)}
+        elif self.state == 'reserved':
+            message = {'error': _('This coupon %s exists but the origin sales order is not validated yet.') % (self.code)}
+        elif self.state == 'cancel':
+            message = {'error': _('This coupon has been cancelled (%s).') % (self.code)}
+        elif self.state == 'expired' or (self.expiration_date and self.expiration_date < order_date):
+            message = {'error': _('This coupon is expired (%s).') % (self.code)}
+        elif not self.program_id.active:
+            message = {'error': _('The coupon program for %s is in draft or closed state') % (self.code)}
+        elif self.partner_id and self.partner_id.id != partner_id:
+            message = {'error': _('Invalid partner.')}
+        return message

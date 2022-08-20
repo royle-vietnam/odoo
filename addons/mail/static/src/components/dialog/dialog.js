@@ -1,12 +1,11 @@
-odoo.define('mail/static/src/components/dialog/dialog.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 const { useRef } = owl.hooks;
 
-class Dialog extends Component {
+export class Dialog extends Component {
 
     /**
      * @param {...any} args
@@ -19,13 +18,13 @@ class Dialog extends Component {
         this._componentRef = useRef('component');
         this._onClickGlobal = this._onClickGlobal.bind(this);
         this._onKeydownDocument = this._onKeydownDocument.bind(this);
-        useStore(props => {
-            const dialog = this.env.models['mail.dialog'].get(props.dialogLocalId);
-            return {
-                dialog: dialog ? dialog.__state : undefined,
-            };
-        });
+        this._constructor();
     }
+
+    /**
+     * Allows patching constructor.
+     */
+    _constructor() {}
 
     mounted() {
         document.addEventListener('click', this._onClickGlobal, true);
@@ -45,7 +44,7 @@ class Dialog extends Component {
      * @returns {mail.dialog}
      */
     get dialog() {
-        return this.env.models['mail.dialog'].get(this.props.dialogLocalId);
+        return this.messaging && this.messaging.models['mail.dialog'].get(this.props.dialogLocalId);
     }
 
     //--------------------------------------------------------------------------
@@ -104,6 +103,4 @@ Object.assign(Dialog, {
     template: 'mail.Dialog',
 });
 
-return Dialog;
-
-});
+registerMessagingComponent(Dialog);

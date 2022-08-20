@@ -6,6 +6,7 @@ import json
 
 from odoo import models, api, fields, _
 from odoo.exceptions import UserError
+from odoo.http import request
 
 
 class WebsiteVisitor(models.Model):
@@ -31,7 +32,7 @@ class WebsiteVisitor(models.Model):
     def _compute_session_count(self):
         sessions = self.env['mail.channel'].search([('livechat_visitor_id', 'in', self.ids)])
         session_count = dict.fromkeys(self.ids, 0)
-        for session in sessions.filtered(lambda c: c.channel_message_ids):
+        for session in sessions.filtered(lambda c: c.message_ids):
             session_count[session.livechat_visitor_id.id] += 1
         for visitor in self:
             visitor.session_count = session_count.get(visitor.id, 0)
@@ -68,7 +69,6 @@ class WebsiteVisitor(models.Model):
                 'livechat_operator_id': self.env.user.partner_id.id,
                 'channel_type': 'livechat',
                 'public': 'private',
-                'email_send': False,
                 'country_id': country.id,
                 'anonymous_name': visitor_name,
                 'name': ', '.join([visitor_name, operator.livechat_username if operator.livechat_username else operator.name]),
@@ -78,19 +78,25 @@ class WebsiteVisitor(models.Model):
         if mail_channel_vals_list:
             mail_channels = self.env['mail.channel'].create(mail_channel_vals_list)
             # Open empty chatter to allow the operator to start chatting with the visitor.
-            values = {
+            channel_members = self.env['mail.channel.partner'].sudo().search([
+                ('partner_id', '=', self.env.user.partner_id.id),
+                ('channel_id', 'in', mail_channels.ids),
+            ])
+            channel_members.write({
                 'fold_state': 'open',
                 'is_minimized': True,
-            }
-            mail_channels_uuid = mail_channels.mapped('uuid')
-            domain = [('partner_id', '=', self.env.user.partner_id.id), ('channel_id.uuid', 'in', mail_channels_uuid)]
-            channel_partners = self.env['mail.channel.partner'].search(domain)
-            channel_partners.write(values)
-            mail_channels_info = mail_channels.channel_info('send_chat_request')
+            })
+            mail_channels_info = mail_channels.channel_info()
             notifications = []
             for mail_channel_info in mail_channels_info:
-                notifications.append([(self._cr.dbname, 'res.partner', operator.partner_id.id), mail_channel_info])
-            self.env['bus.bus'].sendmany(notifications)
+                notifications.append([operator.partner_id, 'website_livechat.send_chat_request', mail_channel_info])
+            self.env['bus.bus']._sendmany(notifications)
+
+    def _link_to_visitor(self, target, keep_unique=True):
+        """ Copy sessions of the secondary visitors to the main partner visitor. """
+        if target.partner_id:
+            target.mail_channel_ids |= self.mail_channel_ids
+        super(WebsiteVisitor, self)._link_to_visitor(target, keep_unique=keep_unique)
 
     def _link_to_partner(self, partner, update_values=None):
         """ Adapt partner in members of related livechats """
@@ -100,3 +106,14 @@ class WebsiteVisitor(models.Model):
                 (4, partner.id),
             ]
         super(WebsiteVisitor, self)._link_to_partner(partner, update_values=update_values)
+
+    def _create_visitor(self):
+        visitor = super(WebsiteVisitor, self)._create_visitor()
+        mail_channel_uuid = json.loads(request.httprequest.cookies.get('im_livechat_session', '{}')).get('uuid')
+        if mail_channel_uuid:
+            mail_channel = request.env["mail.channel"].sudo().search([("uuid", "=", mail_channel_uuid)])
+            mail_channel.write({
+                'livechat_visitor_id': visitor.id,
+                'anonymous_name': visitor.display_name
+            })
+        return visitor

@@ -1,38 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
 
-<template id="assets_wysiwyg" inherit_id="website.assets_wysiwyg" name="Blog posts snippet options">
-    <xpath expr="." position="inside">
-        <script type="text/javascript" src="/website_blog/static/src/snippets/s_latest_posts/options.js"/>
-    </xpath>
-</template>
-
-<template id="assets_editor" inherit_id="website.assets_editor" name="Blog Editor">
-    <xpath expr="." position="inside">
-        <script type="text/javascript" src="/website_blog/static/src/js/website_blog.editor.js"></script>
-        <script type="text/javascript" src="/website_blog/static/src/js/tours/website_blog.js"></script>
-    </xpath>
-</template>
-
-<template id="assets_frontend" inherit_id="website.assets_frontend" name="Blog Front-end assets">
-    <xpath expr="." position="inside">
-        <link rel="stylesheet" type="text/scss" href="/website_blog/static/src/scss/website_blog.scss"/>
-
-        <script type="text/javascript" src="/website_blog/static/src/js/contentshare.js"/>
-        <script type="text/javascript" src="/website_blog/static/src/js/website_blog.js"/>
-    </xpath>
-</template>
-
 <!-- ======   Overall pages layout   ===========================================
 ============================================================================ -->
 <template id="index" name="Blog Navigation">
     <t t-call="website.layout">
         <div id="wrap" class="js_blog website_blog">
-            <t t-raw="0"/>
+            <t t-out="0"/>
 
             <!-- Droppable-area shared across all blog's pages -->
             <t t-set="oe_structure_blog_footer_description">Visible in all blogs' pages</t>
-            <div class="oe_structure oe_empty"
+            <div class="oe_structure oe_empty oe_structure_not_nearest"
                 id="oe_structure_blog_footer"
                 t-att-data-editor-sub-message="oe_structure_blog_footer_description"/>
         </div>
@@ -45,9 +23,9 @@ list of filtered posts (by date or tag).
 ============================================================================ -->
 <template id="blog_post_short" name="Blog Posts">
     <t t-call="website_blog.index">
-        <t t-set="head" t-if="blog">
-            <link t-att-href="'/blog/%s/feed' % (blog.id)" type="application/atom+xml" rel="alternate" title="Atom Feed"/>
-            <meta t-if="len(active_tag_ids) > 0" name="robots" t-attf-content="#{len(active_tag_ids) > 1 and 'noindex,'} nofollow"/>
+        <t t-set="head">
+            <link t-if="blog" t-att-href="'/blog/%s/feed' % (blog.id)" type="application/atom+xml" rel="alternate" title="Atom Feed"/>
+            <meta t-if="active_tag_ids" name="robots" t-attf-content="none"/>
         </t>
 
         <!-- Check for active options: the stored value may be used in sub-templates too  -->
@@ -84,10 +62,15 @@ list of filtered posts (by date or tag).
             </t>
         </div>
 
-        <t t-call="website_blog.blogs_nav"/>
+        <t t-call="website_blog.blogs_nav">
+            <t t-set="search" t-value="original_search or search"/>
+        </t>
 
         <section id="o_wblog_index_content" t-att-class="opt_blog_cards_design and 'o_wblog_page_cards_bg'">
             <div class="container py-4">
+                <div t-if="original_search and posts" class="alert alert-warning mt8">
+                    No results found for '<span t-esc="original_search"/>'. Showing results for '<span t-esc="search"/>'.
+                </div>
                 <div t-attf-class="row #{opt_blog_sidebar_show and 'justify-content-between' or 'justify-content-center'}">
                     <div id="o_wblog_posts_loop_container" t-attf-class="col #{'o_container_small mx-0' if opt_blog_list_view else ''}">
 
@@ -241,7 +224,7 @@ list of filtered posts (by date or tag).
                             <div t-field="blog_post.name" id="o_wblog_post_name" class="o_editable_no_shadow" data-oe-expression="blog_post.name" t-att-data-blog-id="blog_post.id" placeholder="Blog Post Title"/>
                             <div t-field="blog_post.subtitle" id="o_wblog_post_subtitle" class="o_editable_no_shadow" placeholder="Subtitle"/>
                         </div>
-                        <t t-set="resize_classes" t-value="set(json.loads(_record.cover_properties).get('resize_class').split(' '))"/>
+                        <t t-set="resize_classes" t-value="set(json.loads(_record.cover_properties).get('resize_class', '').split(' '))"/>
                         <a t-if="{'o_full_screen_height', 'o_half_screen_height', 'cover_full', 'cover_mid'}.intersection(resize_classes)"
                             id="o_wblog_post_content_jump" href="#o_wblog_post_main"
                             class="css_editable_mode_hidden justify-content-center align-items-center rounded-circle mx-auto mb-5 text-decoration-none">
@@ -494,7 +477,7 @@ list of filtered posts (by date or tag).
         <attribute name="name"/>
         <attribute name="t-att-data-module-id"/>
         <attribute name="t-att-data-module-shortdesc"/>
-        <attribute name="groups">website.group_website_designer</attribute>
+        <attribute name="t-if">is_designer</attribute>
     </xpath>
 </template>
 
@@ -514,17 +497,6 @@ list of filtered posts (by date or tag).
         <updated t-esc="str(post.post_date).replace(' ', 'T') + 'Z'"/>
     </entry>
 </feed>
-</template>
-
-<!-- Chatter templates -->
-<template id="blog_post_template_new_post">
-    <p>A new post <t t-esc="post.name" /> has been published on the <t t-esc="object.name" /> blog. Click here to access the blog :</p>
-    <p style="margin-left: 30px; margin-top: 10 px; margin-bottom: 10px;">
-        <a t-attf-href="/blog/#{slug(object)}/#{slug(post)}"
-            style="padding: 5px 10px; font-size: 12px; line-height: 18px; color: #FFFFFF; border-color:#875A7B; text-decoration: none; display: inline-block; margin-bottom: 0px; font-weight: 400; text-align: center; vertical-align: middle; cursor: pointer;background-color: #875A7B; border: 1px solid #875A7B; border-radius:3px">
-            Access post
-        </a>
-    </p>
 </template>
 
 </odoo>

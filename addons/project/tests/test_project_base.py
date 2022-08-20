@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 
-from odoo.tests.common import SavepointCase
+from odoo.tests.common import TransactionCase
 from odoo.exceptions import UserError
 
-class TestProjectCommon(SavepointCase):
+class TestProjectCommon(TransactionCase):
 
     @classmethod
     def setUpClass(cls):
@@ -41,7 +41,8 @@ class TestProjectCommon(SavepointCase):
             'groups_id': [(6, 0, [cls.env.ref('base.group_portal').id])]})
         cls.user_projectuser = Users.create({
             'name': 'Armande ProjectUser',
-            'login': 'Armande',
+            'login': 'armandel',
+            'password': 'armandel',
             'email': 'armande.projectuser@example.com',
             'groups_id': [(6, 0, [user_group_employee.id, user_group_project_user.id])]
         })
@@ -60,11 +61,11 @@ class TestProjectCommon(SavepointCase):
         # Already-existing tasks in Pigs
         cls.task_1 = cls.env['project.task'].with_context({'mail_create_nolog': True}).create({
             'name': 'Pigs UserTask',
-            'user_id': cls.user_projectuser.id,
+            'user_ids': cls.user_projectuser,
             'project_id': cls.project_pigs.id})
         cls.task_2 = cls.env['project.task'].with_context({'mail_create_nolog': True}).create({
             'name': 'Pigs ManagerTask',
-            'user_id': cls.user_projectmanager.id,
+            'user_ids': cls.user_projectmanager,
             'project_id': cls.project_pigs.id})
 
         # Test 'Goats' project, same as 'Pigs', but with 2 stages
@@ -90,7 +91,7 @@ class TestProjectCommon(SavepointCase):
                            model=None, target_model='project.task', target_field='name'):
         self.assertFalse(self.env[target_model].search([(target_field, '=', subject)]))
         mail = template.format(to=to, subject=subject, cc=cc, extra=extra, email_from=email_from, msg_id=msg_id)
-        self.env['mail.thread'].with_context(mail_channel_noautofollow=True).message_process(model, mail)
+        self.env['mail.thread'].message_process(model, mail)
         return self.env[target_model].search([(target_field, '=', subject)])
 
     def test_delete_project_with_tasks(self):

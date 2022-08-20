@@ -9,7 +9,7 @@ class PosConfig(models.Model):
 
     iface_splitbill = fields.Boolean(string='Bill Splitting', help='Enables Bill Splitting in the Point of Sale.')
     iface_printbill = fields.Boolean(string='Bill Printing', help='Allows to print the Bill before payment.')
-    iface_orderline_notes = fields.Boolean(string='Notes', help='Allow custom notes on Orderlines.')
+    iface_orderline_notes = fields.Boolean(string='Internal Notes', help='Allow custom internal notes on Orderlines.')
     floor_ids = fields.One2many('restaurant.floor', 'pos_config_id', string='Restaurant Floors', help='The restaurant floors served by this point of sale.')
     printer_ids = fields.Many2many('restaurant.printer', 'pos_config_printer_rel', 'config_id', 'printer_id', string='Order Printers')
     is_table_management = fields.Boolean('Floors & Tables')
@@ -30,6 +30,12 @@ class PosConfig(models.Model):
     def _onchange_iface_tipproduct(self):
         if not self.iface_tipproduct:
             self.set_tip_after_payment = False
+
+    def _force_http(self):
+        enforce_https = self.env['ir.config_parameter'].sudo().get_param('point_of_sale.enforce_https')
+        if not enforce_https and self.printer_ids.filtered(lambda pt: pt.printer_type == 'epson_epos'):
+            return True
+        return super(PosConfig, self)._force_http()
 
     def get_tables_order_count(self):
         """         """

@@ -1,12 +1,11 @@
-odoo.define('mail/static/tests/tours/mail_full_composer_test_tour.js', function (require) {
-"use strict";
+/** @odoo-module **/
 
-const {
+import {
     createFile,
     inputFiles,
-} = require('web.test_utils_file');
+} from 'web.test_utils_file';
 
-const tour = require('web_tour.tour');
+import tour from 'web_tour.tour';
 
 /**
  * This tour depends on data created by python test in charge of launching it.
@@ -40,10 +39,10 @@ tour.register('mail/static/tests/tours/mail_full_composer_test_tour.js', {
 }, {
     content: "Open full composer",
     trigger: '.o_Composer_buttonFullComposer',
-    extra_trigger: '.o_Attachment:not(.o-temporary)' // waiting the attachment to be uploaded
+    extra_trigger: '.o_AttachmentCard:not(.o-isUploading)' // waiting the attachment to be uploaded
 }, {
     content: "Check the earlier provided attachment is listed",
-    trigger: '.o_attachment[title="text.txt"]',
+    trigger: '.o_AttachmentCard[title="text.txt"]',
     run() {},
 }, {
     content: "Check subject is autofilled",
@@ -60,7 +59,7 @@ tour.register('mail/static/tests/tours/mail_full_composer_test_tour.js', {
     content: "Check composer content is kept",
     trigger: '.oe_form_field[name="body"]',
     run() {
-        const bodyContent = document.querySelector('.oe_form_field[name="body"] textarea').textContent;
+        const bodyContent = document.querySelector('.oe_form_field[name="body"]').textContent;
         if (!bodyContent.includes("blahblah")) {
             console.error(
                 `Full composer should contain text from small composer ("blahblah") in body input (actual: ${bodyContent})`
@@ -83,7 +82,5 @@ tour.register('mail/static/tests/tours/mail_full_composer_test_tour.js', {
     trigger: '.o_Message:contains("blahblah")',
 }, {
     content: "Check message contains the attachment",
-    trigger: '.o_Message .o_Attachment_filename:contains("text.txt")',
+    trigger: '.o_Message .o_AttachmentCard_filename:contains("text.txt")',
 }]);
-
-});

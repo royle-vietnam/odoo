@@ -3,9 +3,9 @@
 import logging
 import werkzeug
 
-from odoo import http, _
+from odoo import http, tools, _
 from odoo.addons.auth_signup.models.res_users import SignupError
-from odoo.addons.web.controllers.main import ensure_db, Home
+from odoo.addons.web.controllers.main import ensure_db, Home, SIGN_UP_REQUEST_PARAMS
 from odoo.addons.base_setup.controllers.main import BaseSetup
 from odoo.exceptions import UserError
 from odoo.http import request
@@ -22,7 +22,7 @@ class AuthSignupHome(Home):
         response.qcontext.update(self.get_auth_signup_config())
         if request.httprequest.method == 'GET' and request.session.uid and request.params.get('redirect'):
             # Redirect if already logged in and redirect param is present
-            return http.redirect_with_hash(request.params.get('redirect'))
+            return request.redirect(request.params.get('redirect'))
         return response
 
     @http.route('/web/signup', type='http', auth='public', website=True, sitemap=False)
@@ -95,13 +95,14 @@ class AuthSignupHome(Home):
 
         get_param = request.env['ir.config_parameter'].sudo().get_param
         return {
+            'disable_database_manager': not tools.config['list_db'],
             'signup_enabled': request.env['res.users']._get_signup_invitation_scope() == 'b2c',
             'reset_password_enabled': get_param('auth_signup.reset_password') == 'True',
         }
 
     def get_auth_signup_qcontext(self):
         """ Shared helper returning the rendering context for signup and reset password """
-        qcontext = request.params.copy()
+        qcontext = {k: v for (k, v) in request.params.items() if k in SIGN_UP_REQUEST_PARAMS}
         qcontext.update(self.get_auth_signup_config())
         if not qcontext.get('token') and request.session.get('auth_signup_token'):
             qcontext['token'] = request.session.get('auth_signup_token')
@@ -116,17 +117,21 @@ class AuthSignupHome(Home):
                 qcontext['invalid_token'] = True
         return qcontext
 
-    def do_signup(self, qcontext):
-        """ Shared helper that creates a res.partner out of a token """
+    def _prepare_signup_values(self, qcontext):
         values = { key: qcontext.get(key) for key in ('login', 'name', 'password') }
         if not values:
             raise UserError(_("The form was not properly filled in."))
         if values.get('password') != qcontext.get('confirm_password'):
             raise UserError(_("Passwords do not match; please retype them."))
         supported_lang_codes = [code for code, _ in request.env['res.lang'].get_installed()]
-        lang = request.context.get('lang', '').split('_')[0]
+        lang = request.context.get('lang', '')
         if lang in supported_lang_codes:
             values['lang'] = lang
+        return values
+
+    def do_signup(self, qcontext):
+        """ Shared helper that creates a res.partner out of a token """
+        values = self._prepare_signup_values(qcontext)
         self._signup_with_values(qcontext.get('token'), values)
         request.env.cr.commit()
 

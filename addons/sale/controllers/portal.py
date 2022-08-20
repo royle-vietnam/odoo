@@ -3,16 +3,19 @@
 
 import binascii
 
-from odoo import fields, http, _
-from odoo.exceptions import AccessError, MissingError
+from odoo import fields, http, SUPERUSER_ID, _
+from odoo.exceptions import AccessError, MissingError, ValidationError
+from odoo.fields import Command
 from odoo.http import request
-from odoo.addons.payment.controllers.portal import PaymentProcessing
+
+from odoo.addons.payment.controllers import portal as payment_portal
+from odoo.addons.payment import utils as payment_utils
 from odoo.addons.portal.controllers.mail import _message_post_helper
-from odoo.addons.portal.controllers.portal import CustomerPortal, pager as portal_pager, get_records_pager
-from odoo.osv import expression
+from odoo.addons.portal.controllers import portal
+from odoo.addons.portal.controllers.portal import pager as portal_pager, get_records_pager
 
 
-class CustomerPortal(CustomerPortal):
+class CustomerPortal(portal.CustomerPortal):
 
     def _prepare_home_portal_values(self, counters):
         values = super()._prepare_home_portal_values(counters)
@@ -20,21 +23,36 @@ class CustomerPortal(CustomerPortal):
 
         SaleOrder = request.env['sale.order']
         if 'quotation_count' in counters:
-            values['quotation_count'] = SaleOrder.search_count([
-                ('message_partner_ids', 'child_of', [partner.commercial_partner_id.id]),
-                ('state', 'in', ['sent', 'cancel'])
-            ])
+            values['quotation_count'] = SaleOrder.search_count(self._prepare_quotations_domain(partner)) \
+                if SaleOrder.check_access_rights('read', raise_exception=False) else 0
         if 'order_count' in counters:
-            values['order_count'] = SaleOrder.search_count([
-                ('message_partner_ids', 'child_of', [partner.commercial_partner_id.id]),
-                ('state', 'in', ['sale', 'done'])
-            ])
+            values['order_count'] = SaleOrder.search_count(self._prepare_orders_domain(partner)) \
+                if SaleOrder.check_access_rights('read', raise_exception=False) else 0
 
         return values
+
+    def _prepare_quotations_domain(self, partner):
+        return [
+            ('message_partner_ids', 'child_of', [partner.commercial_partner_id.id]),
+            ('state', 'in', ['sent', 'cancel'])
+        ]
+
+    def _prepare_orders_domain(self, partner):
+        return [
+            ('message_partner_ids', 'child_of', [partner.commercial_partner_id.id]),
+            ('state', 'in', ['sale', 'done'])
+        ]
 
     #
     # Quotations and Sales Orders
     #
+
+    def _get_sale_searchbar_sortings(self):
+        return {
+            'date': {'label': _('Order Date'), 'order': 'date_order desc'},
+            'name': {'label': _('Reference'), 'order': 'name'},
+            'stage': {'label': _('Stage'), 'order': 'state'},
+        }
 
     @http.route(['/my/quotes', '/my/quotes/page/<int:page>'], type='http', auth="user", website=True)
     def portal_my_quotes(self, page=1, date_begin=None, date_end=None, sortby=None, **kw):
@@ -42,16 +60,9 @@ class CustomerPortal(CustomerPortal):
         partner = request.env.user.partner_id
         SaleOrder = request.env['sale.order']
 
-        domain = [
-            ('message_partner_ids', 'child_of', [partner.commercial_partner_id.id]),
-            ('state', 'in', ['sent', 'cancel'])
-        ]
+        domain = self._prepare_quotations_domain(partner)
 
-        searchbar_sortings = {
-            'date': {'label': _('Order Date'), 'order': 'date_order desc'},
-            'name': {'label': _('Reference'), 'order': 'name'},
-            'stage': {'label': _('Stage'), 'order': 'state'},
-        }
+        searchbar_sortings = self._get_sale_searchbar_sortings()
 
         # default sortby order
         if not sortby:
@@ -92,16 +103,10 @@ class CustomerPortal(CustomerPortal):
         partner = request.env.user.partner_id
         SaleOrder = request.env['sale.order']
 
-        domain = [
-            ('message_partner_ids', 'child_of', [partner.commercial_partner_id.id]),
-            ('state', 'in', ['sale', 'done'])
-        ]
+        domain = self._prepare_orders_domain(partner)
 
-        searchbar_sortings = {
-            'date': {'label': _('Order Date'), 'order': 'date_order desc'},
-            'name': {'label': _('Reference'), 'order': 'name'},
-            'stage': {'label': _('Stage'), 'order': 'state'},
-        }
+        searchbar_sortings = self._get_sale_searchbar_sortings()
+
         # default sortby order
         if not sortby:
             sortby = 'date'
@@ -169,7 +174,7 @@ class CustomerPortal(CustomerPortal):
             'sale_order': order_sudo,
             'message': message,
             'token': access_token,
-            'return_url': '/shop/payment/validate',
+            'landing_route': '/shop/payment/validate',
             'bootstrap_formatting': True,
             'partner_id': order_sudo.partner_id.id,
             'report_type': 'html',
@@ -178,17 +183,50 @@ class CustomerPortal(CustomerPortal):
         if order_sudo.company_id:
             values['res_company'] = order_sudo.company_id
 
+        # Payment values
         if order_sudo.has_to_be_paid():
-            domain = expression.AND([
-                ['&', ('state', 'in', ['enabled', 'test']), ('company_id', '=', order_sudo.company_id.id)],
-                ['|', ('country_ids', '=', False), ('country_ids', 'in', [order_sudo.partner_id.country_id.id])]
-            ])
-            acquirers = request.env['payment.acquirer'].sudo().search(domain)
+            logged_in = not request.env.user._is_public()
 
-            values['acquirers'] = acquirers.filtered(lambda acq: (acq.payment_flow == 'form' and acq.view_template_id) or
-                                                     (acq.payment_flow == 's2s' and acq.registration_view_template_id))
-            values['pms'] = request.env['payment.token'].search([('partner_id', '=', order_sudo.partner_id.id)])
-            values['acq_extra_fees'] = acquirers.get_acquirer_extra_fees(order_sudo.amount_total, order_sudo.currency_id, order_sudo.partner_id.country_id.id)
+            # Make sure that the partner's company matches the sales order's company.
+            payment_portal.PaymentPortal._ensure_matching_companies(
+                order_sudo.partner_id, order_sudo.company_id
+            )
+
+            acquirers_sudo = request.env['payment.acquirer'].sudo()._get_compatible_acquirers(
+                order_sudo.company_id.id,
+                order_sudo.partner_id.id,
+                currency_id=order_sudo.currency_id.id,
+                sale_order_id=order_sudo.id,
+            )  # In sudo mode to read the fields of acquirers and partner (if not logged in)
+            tokens = request.env['payment.token'].search([
+                ('acquirer_id', 'in', acquirers_sudo.ids),
+                ('partner_id', '=', order_sudo.partner_id.id)
+            ]) if logged_in else request.env['payment.token']
+            fees_by_acquirer = {
+                acquirer: acquirer._compute_fees(
+                    order_sudo.amount_total,
+                    order_sudo.currency_id,
+                    order_sudo.partner_id.country_id,
+                ) for acquirer in acquirers_sudo.filtered('fees_active')
+            }
+            # Prevent public partner from saving payment methods but force it for logged in partners
+            # buying subscription products
+            show_tokenize_input = logged_in \
+                and not request.env['payment.acquirer'].sudo()._is_tokenization_required(
+                    sale_order_id=order_sudo.id
+                )
+            values.update({
+                'acquirers': acquirers_sudo,
+                'tokens': tokens,
+                'fees_by_acquirer': fees_by_acquirer,
+                'show_tokenize_input': show_tokenize_input,
+                'amount': order_sudo.amount_total,
+                'currency': order_sudo.pricelist_id.currency_id,
+                'partner_id': order_sudo.partner_id.id,
+                'access_token': order_sudo.access_token,
+                'transaction_route': order_sudo.get_portal_url(suffix='/transaction'),
+                'landing_route': order_sudo.get_portal_url(),
+            })
 
         if order_sudo.state in ('draft', 'sent', 'cancel'):
             history = request.session.get('my_quotations_history', [])
@@ -226,7 +264,7 @@ class CustomerPortal(CustomerPortal):
             order_sudo.action_confirm()
             order_sudo._send_order_confirmation_mail()
 
-        pdf = request.env.ref('sale.action_report_saleorder').sudo()._render_qweb_pdf([order_sudo.id])[0]
+        pdf = request.env.ref('sale.action_report_saleorder').with_user(SUPERUSER_ID)._render_qweb_pdf([order_sudo.id])[0]
 
         _message_post_helper(
             'sale.order', order_sudo.id, _('Order signed by %s') % (name,),
@@ -259,70 +297,106 @@ class CustomerPortal(CustomerPortal):
 
         return request.redirect(order_sudo.get_portal_url(query_string=query_string))
 
-    # note: website_sale code
-    @http.route(['/my/orders/<int:order_id>/transaction/'], type='json', auth="public", website=True)
-    def payment_transaction_token(self, acquirer_id, order_id, save_token=False, access_token=None, **kwargs):
-        """ Json method that creates a payment.transaction, used to create a
-        transaction when the user clicks on 'pay now' button. After having
-        created the transaction, the event continues and the user is redirected
-        to the acquirer website.
 
-        :param int acquirer_id: id of a payment.acquirer record. If not set the
-                                user is redirected to the checkout page
+class PaymentPortal(payment_portal.PaymentPortal):
+
+    @http.route('/my/orders/<int:order_id>/transaction', type='json', auth='public')
+    def portal_order_transaction(self, order_id, access_token, **kwargs):
+        """ Create a draft transaction and return its processing values.
+
+        :param int order_id: The sales order to pay, as a `sale.order` id
+        :param str access_token: The access token used to authenticate the request
+        :param dict kwargs: Locally unused data passed to `_create_transaction`
+        :return: The mandatory values for the processing of the transaction
+        :rtype: dict
+        :raise: ValidationError if the invoice id or the access token is invalid
         """
-        # Ensure a payment acquirer is selected
-        if not acquirer_id:
-            return False
-
+        # Check the order id and the access token
         try:
-            acquirer_id = int(acquirer_id)
-        except:
-            return False
+            self._document_check_access('sale.order', order_id, access_token)
+        except MissingError as error:
+            raise error
+        except AccessError:
+            raise ValidationError("The access token is invalid.")
 
-        order = request.env['sale.order'].sudo().browse(order_id)
-        if not order or not order.order_line or not order.has_to_be_paid():
-            return False
-
-        # Create transaction
-        vals = {
-            'acquirer_id': acquirer_id,
-            'type': order._get_payment_type(),
-            'return_url': order.get_portal_url(),
-        }
-
-        transaction = order._create_payment_transaction(vals)
-        PaymentProcessing.add_payment_transaction(transaction)
-        return transaction.render_sale_button(
-            order,
-            submit_txt=_('Pay & Confirm'),
-            render_values={
-                'type': order._get_payment_type(),
-                'alias_usage': _('If we store your payment information on our server, subscription payments will be made automatically.'),
-            }
+        kwargs.update({
+            'reference_prefix': None,  # Allow the reference to be computed based on the order
+            'sale_order_id': order_id,  # Include the SO to allow Subscriptions tokenizing the tx
+        })
+        kwargs.pop('custom_create_values', None)  # Don't allow passing arbitrary create values
+        tx_sudo = self._create_transaction(
+            custom_create_values={'sale_order_ids': [Command.set([order_id])]}, **kwargs,
         )
 
-    @http.route('/my/orders/<int:order_id>/transaction/token', type='http', auth='public', website=True)
-    def payment_token(self, order_id, pm_id=None, **kwargs):
+        return tx_sudo._get_processing_values()
 
-        order = request.env['sale.order'].sudo().browse(order_id)
-        if not order:
-            return request.redirect("/my/orders")
-        if not order.order_line or pm_id is None or not order.has_to_be_paid():
-            return request.redirect(order.get_portal_url())
+    # Payment overrides
 
-        # try to convert pm_id into an integer, if it doesn't work redirect the user to the quote
-        try:
-            pm_id = int(pm_id)
-        except ValueError:
-            return request.redirect(order.get_portal_url())
+    @http.route()
+    def payment_pay(self, *args, amount=None, sale_order_id=None, access_token=None, **kwargs):
+        """ Override of payment to replace the missing transaction values by that of the sale order.
 
-        # Create transaction
-        vals = {
-            'payment_token_id': pm_id,
-            'type': 'server2server',
-            'return_url': order.get_portal_url(),
-        }
+        This is necessary for the reconciliation as all transaction values, excepted the amount,
+        need to match exactly that of the sale order.
 
-        tx = order._create_payment_transaction(vals)
-        PaymentProcessing.add_payment_transaction(tx)
-        return request.redirect('/payment/process')
+        :param str amount: The (possibly partial) amount to pay used to check the access token
+        :param str sale_order_id: The sale order for which a payment id made, as a `sale.order` id
+        :param str access_token: The access token used to authenticate the partner
+        :return: The result of the parent method
+        :rtype: str
+        :raise: ValidationError if the order id is invalid
+        """
+        # Cast numeric parameters as int or float and void them if their str value is malformed
+        amount = self._cast_as_float(amount)
+        sale_order_id = self._cast_as_int(sale_order_id)
+        if sale_order_id:
+            order_sudo = request.env['sale.order'].sudo().browse(sale_order_id).exists()
+            if not order_sudo:
+                raise ValidationError(_("The provided parameters are invalid."))
+
+            # Check the access token against the order values. Done after fetching the order as we
+            # need the order fields to check the access token.
+            if not payment_utils.check_access_token(
+                access_token, order_sudo.partner_id.id, amount, order_sudo.currency_id.id
+            ):
+                raise ValidationError(_("The provided parameters are invalid."))
+
+            kwargs.update({
+                'currency_id': order_sudo.currency_id.id,
+                'partner_id': order_sudo.partner_id.id,
+                'company_id': order_sudo.company_id.id,
+                'sale_order_id': sale_order_id,
+            })
+        return super().payment_pay(*args, amount=amount, access_token=access_token, **kwargs)
+
+    def _get_custom_rendering_context_values(self, sale_order_id=None, **kwargs):
+        """ Override of payment to add the sale order id in the custom rendering context values.
+
+        :param int sale_order_id: The sale order for which a payment id made, as a `sale.order` id
+        :return: The extended rendering context values
+        :rtype: dict
+        """
+        rendering_context_values = super()._get_custom_rendering_context_values(**kwargs)
+        if sale_order_id:
+            rendering_context_values['sale_order_id'] = sale_order_id
+        return rendering_context_values
+
+    def _create_transaction(self, *args, sale_order_id=None, custom_create_values=None, **kwargs):
+        """ Override of payment to add the sale order id in the custom create values.
+
+        :param int sale_order_id: The sale order for which a payment id made, as a `sale.order` id
+        :param dict custom_create_values: Additional create values overwriting the default ones
+        :return: The result of the parent method
+        :rtype: recordset of `payment.transaction`
+        """
+        if sale_order_id:
+            if custom_create_values is None:
+                custom_create_values = {}
+            # As this override is also called if the flow is initiated from sale or website_sale, we
+            # need not to override whatever value these modules could have already set
+            if 'sale_order_ids' not in custom_create_values:  # We are in the payment module's flow
+                custom_create_values['sale_order_ids'] = [Command.set([int(sale_order_id)])]
+
+        return super()._create_transaction(
+            *args, sale_order_id=sale_order_id, custom_create_values=custom_create_values, **kwargs
+        )

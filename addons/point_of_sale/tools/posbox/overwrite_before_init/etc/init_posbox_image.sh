@@ -10,7 +10,6 @@ __base="$(basename ${__file} .sh)"
 
 # Recommends: antiword, graphviz, ghostscript, python-gevent, poppler-utils
 export DEBIAN_FRONTEND=noninteractive
-echo "nameserver 8.8.8.8" >> /etc/resolv.conf
 
 # set locale to en_US
 echo "set locale to en_US"
@@ -20,8 +19,8 @@ echo "export LC_ALL=en_US.UTF-8" >> ~/.bashrc
 locale-gen
 source ~/.bashrc
 
-apt-mark hold firmware-brcm80211
 # upgrade firmware-brcm80211 broke access point on rpi4
+apt-mark hold firmware-brcm80211
 apt-get update && apt-get -y upgrade
 # Do not be too fast to upgrade to more recent firmware and kernel than 4.38
 # Firmware 4.44 seems to prevent the LED mechanism from working
@@ -53,8 +52,6 @@ PKGS_TO_INSTALL="
     python3-decorator \
     python3-dev \
     python3-docutils \
-    python3-feedparser \
-    python3-html2text \
     python3-jinja2 \
     python3-ldap \
     python3-libsass \
@@ -68,7 +65,6 @@ PKGS_TO_INSTALL="
     python3-psutil \
     python3-psycopg2 \
     python3-pydot \
-    python3-pyparsing \
     python3-pypdf2 \
     python3-qrcode \
     python3-reportlab \
@@ -98,7 +94,7 @@ rm -rfv /usr/share/doc
 
 # python-usb in wheezy is too old
 # the latest pyusb from pip does not work either, usb.core.find() never returns
-# this may be fixed with libusb>2:1.0.11-1, but that's the most recent one in raspbian
+# this may be fixed with libusb>2:1.0.11-1, but that's the most recent one in raspios
 # so we install the latest pyusb that works with this libusb.
 # Even in stretch, we had an error with langid (but worked otherwise)
 # We fixe the version of evdev to 1.2.0 because in 1.3.0 we have a RuntimeError in 'get_event_loop()'

@@ -8,7 +8,7 @@
             <field name="arch" type="xml">
                 <form string="Channels">
                     <header>
-                        <button name="action_channel_invite" string="Invite" type="object" class="oe_highlight"  attrs="{'invisible': [('enroll', '!=', 'invite')]}"/>
+                        <button name="action_channel_invite" string="Invite" type="object" class="oe_highlight" attrs="{'invisible': [('enroll', '!=', 'invite')]}"/>
                     </header>
                     <sheet>
                         <div class="oe_button_box" name="button_box">
@@ -55,8 +55,8 @@
                         <widget name="web_ribbon" title="Archived" bg_color="bg-danger" attrs="{'invisible': [('active', '=', True)]}"/>
                         <field name="image_1920" widget="image" class="oe_avatar" options="{'preview_image': 'image_128'}"/>
                         <div class="oe_title">
-                            <label for="name" class="oe_edit_only" string="Course Title"/>
-                            <h1><field name="name" default_focus="1" placeholder="Computer Science for kids"/></h1>
+                            <label for="name" string="Course Title"/>
+                            <h1><field name="name" default_focus="1" placeholder="e.g. Computer Science for kids"/></h1>
                         </div>
                         <div>
                             <field name="active" invisible="1"/>
@@ -82,14 +82,11 @@
                                 </field>
                             </page>
                             <page name="description" string="Description">
-                                <group>
-                                    <field name="description" colspan="4" placeholder="Common tasks for a computer scientist is asking the right questions and answering questions. In this course, you'll study those topics with activities about mathematics, science and logic."/>
-                                </group>
+                                <field name="description" colspan="4" placeholder="Common tasks for a computer scientist is asking the right questions and answering questions. In this course, you'll study those topics with activities about mathematics, science and logic."/>
                             </page>
                             <page name="options" string="Options">
                                 <group>
                                     <group name="course" string="Course">
-                                        <field string="Type" name="channel_type" widget="radio"/>
                                         <field name="user_id" domain="[('share', '=', False)]"/>
                                         <field name="website_id" options="{'no_create': True}" groups="website.group_multi_website"/>
                                     </group>
@@ -107,6 +104,7 @@
                                         <field name="completed_template_id"/>
                                     </group>
                                     <group name="display" string="Display">
+                                        <field string="Display" name="channel_type" widget="radio"/>
                                         <field name="visibility" widget="radio"/>
                                         <field name="promote_strategy" widget="radio"
                                         attrs="{'invisible': [('channel_type', '=', 'training')]}"/>
@@ -194,7 +192,7 @@
             <field name="name">slide.channel.view.graph</field>
             <field name="model">slide.channel</field>
             <field name="arch" type="xml">
-                <graph string="Courses" type="bar" sample="1">
+                <graph string="Courses" sample="1">
                     <field name="name"/>
                     <field name="total_views" type="measure"/>
                 </graph>
@@ -207,6 +205,7 @@
             <field name="arch" type="xml">
                 <kanban string="eLearning Overview" class="o_emphasize_colors o_kanban_dashboard o_slide_kanban breadcrumb_item active" edit="false" sample="1">
                     <field name="color"/>
+                    <field name="enroll"/>
                     <field name="website_published"/>
                     <templates>
                         <t t-name="kanban-box">
@@ -222,7 +221,7 @@
                                         <div class="o_kanban_slides_card_manage_pane">
                                             <t t-if="widget.deletable">
                                                 <div role="menuitem">
-                                                    <a class="dropdown-item" type="delete">Delete</a>
+                                                    <a type="delete">Delete</a>
                                                 </div>
                                             </t>
                                             <div role="menuitem">
@@ -231,7 +230,8 @@
                                             <div role="menuitem">
                                                 <a name="action_view_slides" type="object">Lessons</a>
                                             </div>
-                                            <div role="menuitem" name="action_channel_invite">
+                                            <div role="menuitem" name="action_channel_invite"
+                                                attrs="{'invisible': [('enroll', '!=', 'invite')]}">
                                                 <a name="action_channel_invite" type="object">Invite</a>
                                             </div>
                                         </div>
@@ -245,7 +245,7 @@
                                             </a>
                                         </div>
                                         <div t-if="record.tag_ids">
-                                            <field name="tag_ids" widget="many2many_tags"/>
+                                            <field name="tag_ids" widget="many2many_tags"  options="{'color_field': 'color'}"/>
                                         </div>
                                     </div>
                                 </div>

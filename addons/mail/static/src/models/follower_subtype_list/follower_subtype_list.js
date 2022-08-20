@@ -1,22 +1,31 @@
-odoo.define('mail/static/src/models/follower_subtype_list/follower_subtype_list.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { many2one } = require('mail/static/src/model/model_field.js');
+import { registerNewModel } from '@mail/model/model_core';
+import { many2one, one2one } from '@mail/model/model_field';
 
 function factory(dependencies) {
 
     class FollowerSubtypeList extends dependencies['mail.model'] {}
 
     FollowerSubtypeList.fields = {
-        follower: many2one('mail.follower'),
+        /**
+         * States the dialog displaying this follower subtype list.
+         */
+        dialog: one2one('mail.dialog', {
+            inverse: 'followerSubtypeList',
+            isCausal: true,
+            readonly: true,
+        }),
+        follower: many2one('mail.follower', {
+            inverse: 'subtypeList',
+            readonly: true,
+            required: true,
+        }),
     };
-
+    FollowerSubtypeList.identifyingFields = ['follower'];
     FollowerSubtypeList.modelName = 'mail.follower_subtype_list';
 
     return FollowerSubtypeList;
 }
 
 registerNewModel('mail.follower_subtype_list', factory);
-
-});

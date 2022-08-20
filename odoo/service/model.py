@@ -50,7 +50,7 @@ def check(f):
 
         def tr(src, ttype):
             # We try to do the same as the _(), but without the frame
-            # inspection, since we aready are wrapping an osv function
+            # inspection, since we already are wrapping an osv function
             # trans_obj = self.get('ir.translation') cannot work yet :(
             ctx = {}
             if not kwargs:
@@ -152,7 +152,8 @@ def check(f):
     return wrapper
 
 def execute_cr(cr, uid, obj, method, *args, **kw):
-    odoo.api.Environment.reset()  # clean cache etc if we retry the same transaction
+    # clean cache etc if we retry the same transaction
+    cr.reset()
     recs = odoo.api.Environment(cr, uid, {}).get(obj)
     if recs is None:
         raise UserError(_("Object %s doesn't exist", obj))
@@ -169,7 +170,7 @@ def execute_kw(db, uid, obj, method, args, kw=None):
 
 @check
 def execute(db, uid, obj, method, *args, **kw):
-    threading.currentThread().dbname = db
+    threading.current_thread().dbname = db
     with odoo.registry(db).cursor() as cr:
         check_method_name(method)
         res = execute_cr(cr, uid, obj, method, *args, **kw)

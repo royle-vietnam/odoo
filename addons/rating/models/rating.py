@@ -18,7 +18,7 @@ class Rating(models.Model):
     _order = 'write_date desc'
     _rec_name = 'res_name'
     _sql_constraints = [
-        ('rating_range', 'check(rating >= 0 and rating <= 5)', 'Rating should be between 0 to 5'),
+        ('rating_range', 'check(rating >= 0 and rating <= 5)', 'Rating should be between 0 and 5'),
     ]
 
     @api.depends('res_model', 'res_id')
@@ -33,7 +33,7 @@ class Rating(models.Model):
 
     @api.model
     def _selection_target_model(self):
-        return [(model.model, model.name) for model in self.env['ir.model'].search([])]
+        return [(model.model, model.name) for model in self.env['ir.model'].sudo().search([])]
 
     create_date = fields.Datetime(string="Submitted on")
     res_name = fields.Char(string='Resource name', compute='_compute_res_name', store=True, help="The name of the rated resource.")
@@ -50,15 +50,16 @@ class Rating(models.Model):
     parent_ref = fields.Reference(
         string='Parent Ref', selection='_selection_target_model',
         compute='_compute_parent_ref', readonly=True)
-    rated_partner_id = fields.Many2one('res.partner', string="Rated person", help="Owner of the rated resource")
+    rated_partner_id = fields.Many2one('res.partner', string="Rated Operator", help="Owner of the rated resource")
+    rated_partner_name = fields.Char(related="rated_partner_id.name")
     partner_id = fields.Many2one('res.partner', string='Customer', help="Author of the rating")
     rating = fields.Float(string="Rating Value", group_operator="avg", default=0, help="Rating value: 0=Unhappy, 5=Happy")
     rating_image = fields.Binary('Image', compute='_compute_rating_image')
     rating_text = fields.Selection([
-        ('satisfied', 'Satisfied'),
-        ('not_satisfied', 'Not satisfied'),
-        ('highly_dissatisfied', 'Highly dissatisfied'),
-        ('no_rating', 'No Rating yet')], string='Rating', store=True, compute='_compute_rating_text', readonly=True)
+        ('top', 'Satisfied'),
+        ('ok', 'Okay'),
+        ('ko', 'Dissatisfied'),
+        ('none', 'No Rating yet')], string='Rating', store=True, compute='_compute_rating_text', readonly=True)
     feedback = fields.Text('Comment', help="Reason of the rating")
     message_id = fields.Many2one(
         'mail.message', string="Message",
@@ -117,19 +118,20 @@ class Rating(models.Model):
     def _compute_rating_text(self):
         for rating in self:
             if rating.rating >= RATING_LIMIT_SATISFIED:
-                rating.rating_text = 'satisfied'
+                rating.rating_text = 'top'
             elif rating.rating >= RATING_LIMIT_OK:
-                rating.rating_text = 'not_satisfied'
+                rating.rating_text = 'ok'
             elif rating.rating >= RATING_LIMIT_MIN:
-                rating.rating_text = 'highly_dissatisfied'
+                rating.rating_text = 'ko'
             else:
-                rating.rating_text = 'no_rating'
+                rating.rating_text = 'none'
 
-    @api.model
-    def create(self, values):
-        if values.get('res_model_id') and values.get('res_id'):
-            values.update(self._find_parent_data(values))
-        return super(Rating, self).create(values)
+    @api.model_create_multi
+    def create(self, vals_list):
+        for values in vals_list:
+            if values.get('res_model_id') and values.get('res_id'):
+                values.update(self._find_parent_data(values))
+        return super().create(vals_list)
 
     def write(self, values):
         if values.get('res_model_id') and values.get('res_id'):

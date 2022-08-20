@@ -3,6 +3,7 @@
 
 {
     'name': 'Indian - Stock Report(GST)',
+    'icon': '/l10n_in/static/description/icon.png',
     'version': '1.0',
     'description': """GST Stock Report""",
     'category': 'Accounting/Localizations',
@@ -19,4 +20,5 @@
     'installable': True,
     'application': False,
     'auto_install': True,
+    'license': 'LGPL-3',
 }

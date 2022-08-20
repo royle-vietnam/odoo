@@ -1,30 +1,10 @@
-odoo.define('mail/static/src/components/message_seen_indicator/message_seen_indicator.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 
-class MessageSeenIndicator extends Component {
-
-    /**
-     * @override
-     */
-    constructor(...args) {
-        super(...args);
-        useStore(props => {
-            const message = this.env.models['mail.message'].get(props.messageLocalId);
-            const thread = this.env.models['mail.thread'].get(props.threadLocalId);
-            const messageSeenIndicator = this.env.models['mail.message_seen_indicator'].find(
-                messageSeenIndicator =>
-                    messageSeenIndicator.message === message &&
-                    messageSeenIndicator.thread === thread
-            );
-            return {
-                messageSeenIndicator: messageSeenIndicator ? messageSeenIndicator.__state : undefined,
-            };
-        });
-    }
+export class MessageSeenIndicator extends Component {
 
     //--------------------------------------------------------------------------
     // Public
@@ -41,9 +21,12 @@ class MessageSeenIndicator extends Component {
             return this.env._t("Seen by Everyone");
         }
         if (this.messageSeenIndicator.hasSomeoneSeen) {
-            const partnersThatHaveSeen = this.messageSeenIndicator.partnersThatHaveSeen.map(
-                partner => partner.name
-            );
+            const partnersThatHaveSeen = this.messageSeenIndicator.partnersThatHaveSeen.map(partner => {
+                if (this.message.originThread) {
+                    return this.message.originThread.getMemberName(partner);
+                }
+                return partner.nameOrDisplayName;
+            });
             if (partnersThatHaveSeen.length === 1) {
                 return _.str.sprintf(
                     this.env._t("Seen by %s"),
@@ -67,9 +50,12 @@ class MessageSeenIndicator extends Component {
             return this.env._t("Received by Everyone");
         }
         if (this.messageSeenIndicator.hasSomeoneFetched) {
-            const partnersThatHaveFetched = this.messageSeenIndicator.partnersThatHaveFetched.map(
-                partner => partner.name
-            );
+            const partnersThatHaveFetched = this.messageSeenIndicator.partnersThatHaveFetched.map(partner => {
+                if (this.message.originThread) {
+                    return this.message.originThread.getMemberName(partner);
+                }
+                return partner.nameOrDisplayName;
+            });
             if (partnersThatHaveFetched.length === 1) {
                 return _.str.sprintf(
                     this.env._t("Received by %s"),
@@ -96,24 +82,27 @@ class MessageSeenIndicator extends Component {
      * @returns {mail.message}
      */
     get message() {
-        return this.env.models['mail.message'].get(this.props.messageLocalId);
+        return this.messaging && this.messaging.models['mail.message'].get(this.props.messageLocalId);
     }
 
     /**
      * @returns {mail.message_seen_indicator}
      */
     get messageSeenIndicator() {
-        return this.env.models['mail.message_seen_indicator'].find(messageSeenIndicator =>
-            messageSeenIndicator.message === this.message &&
-            messageSeenIndicator.thread === this.thread
-        );
+        if (!this.thread || this.thread.model !== 'mail.channel') {
+            return undefined;
+        }
+        return this.messaging.models['mail.message_seen_indicator'].findFromIdentifyingData({
+            message: this.message,
+            thread: this.thread,
+        });
     }
 
     /**
      * @returns {mail.Thread}
      */
     get thread() {
-        return this.env.models['mail.thread'].get(this.props.threadLocalId);
+        return this.messaging && this.messaging.models['mail.thread'].get(this.props.threadLocalId);
     }
 }
 
@@ -125,6 +114,4 @@ Object.assign(MessageSeenIndicator, {
     template: 'mail.MessageSeenIndicator',
 });
 
-return MessageSeenIndicator;
-
-});
+registerMessagingComponent(MessageSeenIndicator);

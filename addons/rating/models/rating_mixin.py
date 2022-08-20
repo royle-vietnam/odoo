@@ -20,6 +20,7 @@ class RatingParentMixin(models.AbstractModel):
         "Rating Satisfaction",
         compute="_compute_rating_percentage_satisfaction", compute_sudo=True,
         store=False, help="Percentage of happy ratings")
+    rating_count = fields.Integer(string='# Ratings', compute="_compute_rating_percentage_satisfaction", compute_sudo=True)
 
     @api.depends('rating_ids.rating', 'rating_ids.consumed')
     def _compute_rating_percentage_satisfaction(self):
@@ -45,6 +46,7 @@ class RatingParentMixin(models.AbstractModel):
         # compute percentage per parent
         for record in self:
             repartition = grades_per_parent.get(record.id, default_grades)
+            record.rating_count = sum(repartition.values())
             record.rating_percentage_satisfaction = repartition['great'] * 100 / sum(repartition.values()) if sum(repartition.values()) else -1
 
 
@@ -59,10 +61,10 @@ class RatingMixin(models.AbstractModel):
     rating_count = fields.Integer('Rating count', compute="_compute_rating_stats", compute_sudo=True)
     rating_avg = fields.Float("Rating Average", compute='_compute_rating_stats', compute_sudo=True)
 
-    @api.depends('rating_ids.rating')
+    @api.depends('rating_ids.rating', 'rating_ids.consumed')
     def _compute_rating_last_value(self):
         for record in self:
-            ratings = self.env['rating.rating'].search([('res_model', '=', self._name), ('res_id', '=', record.id)], limit=1)
+            ratings = self.env['rating.rating'].search([('res_model', '=', self._name), ('res_id', '=', record.id), ('consumed', '=', True)], limit=1)
             record.rating_last_value = ratings and ratings.rating or 0
 
     @api.depends('rating_ids.res_id', 'rating_ids.rating')
@@ -129,11 +131,10 @@ class RatingMixin(models.AbstractModel):
         rated_partner = self.rating_get_rated_partner_id()
         ratings = self.rating_ids.sudo().filtered(lambda x: x.partner_id.id == partner.id and not x.consumed)
         if not ratings:
-            record_model_id = self.env['ir.model'].sudo().search([('model', '=', self._name)], limit=1).id
             rating = self.env['rating.rating'].sudo().create({
                 'partner_id': partner.id,
                 'rated_partner_id': rated_partner.id,
-                'res_model_id': record_model_id,
+                'res_model_id': self.env['ir.model']._get_id(self._name),
                 'res_id': self.id,
                 'is_internal': False,
             })
@@ -158,7 +159,7 @@ class RatingMixin(models.AbstractModel):
         if lang:
             template = template.with_context(lang=lang)
         if subtype_id is False:
-            subtype_id = self.env['ir.model.data'].xmlid_to_res_id('mail.mt_note')
+            subtype_id = self.env['ir.model.data']._xmlid_to_res_id('mail.mt_note')
         if force_send:
             self = self.with_context(mail_notify_force_send=True)  # default value is True, should be set to false if not?
         for record in self:
@@ -193,7 +194,7 @@ class RatingMixin(models.AbstractModel):
             if hasattr(self, 'message_post'):
                 feedback = tools.plaintext2html(feedback or '')
                 self.message_post(
-                    body="<img src='/rating/static/src/img/rating_%s.png' alt=':%s/10' style='width:18px;height:18px;float:left;margin-right: 5px;'/>%s"
+                    body="<img src='/rating/static/src/img/rating_%s.png' alt=':%s/5' style='width:18px;height:18px;float:left;margin-right: 5px;'/>%s"
                     % (rate, rate, feedback),
                     subtype_xmlid=subtype_xmlid or "mail.mt_comment",
                     author_id=rating.partner_id and rating.partner_id.id or None  # None will set the default author in mail_thread.py
@@ -248,7 +249,7 @@ class RatingMixin(models.AbstractModel):
         for key in data:
             if key >= RATING_LIMIT_SATISFIED:
                 res['great'] += data[key]
-            elif key > RATING_LIMIT_OK:
+            elif key >= RATING_LIMIT_OK:
                 res['okay'] += data[key]
             else:
                 res['bad'] += data[key]
@@ -266,7 +267,7 @@ class RatingMixin(models.AbstractModel):
         result = {
             'avg': data['avg'],
             'total': data['total'],
-            'percent': dict.fromkeys(range(1, 11), 0),
+            'percent': dict.fromkeys(range(1, 6), 0),
         }
         for rate in data['repartition']:
             result['percent'][rate] = (data['repartition'][rate] * 100) / data['total'] if data['total'] > 0 else 0

@@ -1,9 +1,10 @@
-odoo.define('mail/static/src/components/drop_zone/drop_zone.js', function (require) {
-'use strict';
+/** @odoo-module **/
+
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component, useState } = owl;
 
-class DropZone extends Component {
+export class DropZone extends Component {
 
     /**
      * @override
@@ -35,7 +36,7 @@ class DropZone extends Component {
      * @returns {boolean}
      */
     contains(node) {
-        return this.el.contains(node);
+        return Boolean(this.el && this.el.contains(node));
     }
 
     //--------------------------------------------------------------------------
@@ -131,6 +132,4 @@ Object.assign(DropZone, {
     template: 'mail.DropZone',
 });
 
-return DropZone;
-
-});
+registerMessagingComponent(DropZone);

@@ -31,6 +31,9 @@ class MailTracking(models.Model):
     new_value_text = fields.Text('New Value Text', readonly=1)
     new_value_datetime = fields.Datetime('New Value Datetime', readonly=1)
 
+    currency_id = fields.Many2one('res.currency', 'Currency', readonly=True, ondelete='set null',
+        help="Used to display the currency when tracking monetary values")
+
     mail_message_id = fields.Many2one('mail.message', 'Message ID', required=True, index=True, ondelete='cascade')
 
     tracking_sequence = fields.Integer('Tracking field sequence', readonly=1, default=100)
@@ -68,7 +71,7 @@ class MailTracking(models.Model):
             })
         elif col_info['type'] == 'selection':
             values.update({
-                'old_value_char': initial_value and dict(col_info['selection'])[initial_value] or '',
+                'old_value_char': initial_value and dict(col_info['selection']).get(initial_value, initial_value) or '',
                 'new_value_char': new_value and dict(col_info['selection'])[new_value] or ''
             })
         elif col_info['type'] == 'many2one':

@@ -26,10 +26,10 @@
                 </div>
             </nav>
         </xpath>
-        <xpath expr="//div[@id='wrapwrap']/main/t[@t-raw='0']" position="before">
+        <xpath expr="//div[@id='wrapwrap']/main/t[@t-out='0']" position="before">
             <div t-if="o_portal_fullwidth_alert" class="alert alert-info alert-dismissible rounded-0 fade show d-print-none css_editable_mode_hidden">
                 <div class="container">
-                    <t t-raw="o_portal_fullwidth_alert"/>
+                    <t t-out="o_portal_fullwidth_alert"/>
                 </div>
             </div>
         </xpath>
@@ -48,18 +48,17 @@
         <t t-set="active_lang" t-value="list(filter(lambda lg : lg[0] == lang, languages))[0]"/>
         <t t-set="language_selector_visible" t-value="len(languages) &gt; 1"/>
         <div t-attf-class="js_language_selector #{_div_classes}" t-if="language_selector_visible">
-            <button class="btn btn-sm btn-outline-secondary border-0 dropdown-toggle" type="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="true">
+            <button t-attf-class="btn btn-sm btn-outline-secondary border-0 dropdown-toggle #{_btn_class}" type="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="true">
                 <span t-if="not no_text"
                         class="align-middle"
                         t-esc="active_lang[2].split('/').pop()"/>
             </button>
-            <div class="dropdown-menu" role="menu">
+            <div t-attf-class="dropdown-menu #{_dropdown_menu_class}" role="menu">
                 <t t-foreach="languages" t-as="lg">
                     <a t-att-href="url_for(request.httprequest.path + '?' + keep_query(), lang_code=lg[0])"
-                    class="dropdown-item js_change_lang"
-                    t-att-data-url_code="lg[1]">
-                        <span t-if="not no_text"
-                              t-esc="lg[2].split('/').pop()"/>
+                       t-attf-class="dropdown-item js_change_lang #{active_lang == lg and 'active'}"
+                       t-att-data-url_code="lg[1]">
+                        <span t-if="not no_text" t-esc="lg[2].split('/').pop()"/>
                     </a>
                 </t>
             </div>
@@ -68,9 +67,12 @@
 
     <template id="user_dropdown" name="Portal User Dropdown">
         <t t-set="is_connected" t-value="not user_id._is_public()"/>
-        <li t-if="is_connected" t-attf-class="#{_item_class}">
+        <li t-if="is_connected" t-attf-class="#{_item_class} o_no_autohide_item">
             <a href="#" role="button" data-toggle="dropdown" t-attf-class="dropdown-toggle #{_link_class}">
-                <img t-if="_avatar" t-att-src="image_data_uri(user_id.image_256)" t-attf-class="rounded-circle #{_avatar_class}" width="24" height="24" alt="" loading="eager"/>
+                <t t-if="_avatar">
+                    <t t-set="avatar_source" t-value="image_data_uri(user_id.avatar_256)"/>
+                    <img t-att-src="avatar_source" t-attf-class="rounded-circle o_object_fit_cover #{_avatar_class}" width="24" height="24" alt="" loading="eager"/>
+                </t>
                 <i t-if="_icon" t-attf-class="fa fa-1x fa-fw fa-user-circle-o #{_icon_class}"/>
                 <span t-if="_user_name" t-attf-class="#{_user_name_class}" t-esc="user_id.name[:23] + '...' if user_id.name and len(user_id.name) &gt; 25 else user_id.name"/>
             </a>
@@ -90,7 +92,7 @@
 
     <template id="portal_back_in_edit_mode" name="Back to edit mode">
         <div t-ignore="true" class="text-center">
-            <t t-if="custom_html" t-raw="custom_html"/>
+            <t t-if="custom_html" t-out="custom_html"/>
             <t t-else="">This is a preview of the customer portal.</t>
             <a t-att-href="backend_url"><i class="fa fa-arrow-right mr-1"/>Back to edit mode</a>
         </div>
@@ -116,7 +118,7 @@
                     <t t-if="my_details">
                         <div class="row justify-content-between mt-4">
                             <div t-attf-class="col-12 col-md col-lg-6">
-                                <t t-raw="0"/>
+                                <t t-out="0"/>
                             </div>
                             <div id="o_my_sidebar" class="pt-3 pt-lg-0 col-12 col-md col-lg-4 col-xl-3 o_my_sidebar">
                                 <div class="o_my_contact" t-if="sales_user">
@@ -136,7 +138,7 @@
                         </div>
                     </t>
                     <t t-else="">
-                        <t t-raw="0"/>
+                        <t t-out="0"/>
                     </t>
                 </div>
             </div>
@@ -147,8 +149,8 @@
 
     <template id="user_sign_in" name="User Sign In" inherit_id="portal.placeholder_user_sign_in">
         <xpath expr="." position="inside">
-            <li groups="base.group_public" t-attf-class="#{_item_class}">
-                <a t-attf-href="/web/login" t-attf-class="#{_link_class}">Sign in</a>
+            <li groups="base.group_public" t-attf-class="#{_item_class} o_no_autohide_item">
+                <a t-attf-href="/web/login" t-attf-class="#{_link_class}">Sign in<span t-if="request.session.profile_session" class="text-danger fa fa-circle"/></a>
             </li>
         </xpath>
     </template>
@@ -174,7 +176,7 @@
             </t>
             <t t-elif="placeholder_count">
                 <span class="badge badge-secondary badge-pill" t-att-data-placeholder_count="placeholder_count">
-                    <i class="fa fa-spin fa-spinner"></i>
+                    <i class="fa fa-spin fa-circle-o-notch"></i>
                 </span>
             </t>
         </a>
@@ -183,7 +185,7 @@
     <template id="portal_table" name="My Portal Table">
         <div t-attf-class="table-responsive border rounded border-top-0 #{classes if classes else ''}">
             <table class="table rounded mb-0 bg-white o_portal_my_doc_table">
-                <t t-raw="0"/>
+                <t t-out="0"/>
             </table>
         </div>
         <div t-if="pager" class="o_portal_pager text-center">
@@ -195,11 +197,11 @@
         <div t-attf-class="#{classes}">
             <div class="card bg-white mb-4 sticky-top" id="sidebar_content">
                 <div t-if="title" class="card-body text-center pb-2 pt-3">
-                    <t t-raw="title"/>
+                    <t t-out="title"/>
                 </div>
-                <t t-if="entries" t-raw="entries"/>
+                <t t-if="entries" t-out="entries"/>
                 <div class="card-footer small text-center text-muted border-top-0 pt-1 pb-1 d-none d-lg-block">
-                    Powered by <a target="_blank" href="http://www.odoo.com?utm_source=db&amp;utm_medium=portal" title="odoo"><img src="/web/static/src/img/logo.png" alt="Odoo Logo" height="15"/></a>
+                    Powered by <a target="_blank" href="http://www.odoo.com?utm_source=db&amp;utm_medium=portal" title="odoo"><img src="/web/static/img/logo.png" alt="Odoo Logo" height="15"/></a>
                 </div>
             </div>
         </div>
@@ -290,24 +292,24 @@
                             </div>
                         </div>
                     </div>
-                    <t t-raw="0"/>
+                    <t t-out="0"/>
                 </div>
-                <form t-if="searchbar_inputs" class="form-inline o_portal_search_panel ml-lg-4">
+                <form t-if="searchbar_inputs" class="form-inline o_portal_search_panel ml-lg-4 col-xl-4 col-md-5">
                     <div class="input-group input-group-sm w-100">
                         <div class="input-group-prepend">
                             <button type="button" class="btn btn-secondary dropdown-toggle" data-toggle="dropdown"/>
                             <div class="dropdown-menu" role="menu">
                                 <t t-foreach='searchbar_inputs' t-as='input'>
-                                    <a t-att-href="'#' + searchbar_inputs[input]['input']"
-                                        t-attf-class="dropdown-item#{search_in == searchbar_inputs[input]['input'] and ' active' or ''}">
-                                        <span t-raw="searchbar_inputs[input]['label']"/>
+                                    <a t-att-href="'#' + input_value['input']"
+                                        t-attf-class="dropdown-item#{search_in == input_value['input'] and ' active' or ''}">
+                                        <span t-out="input_value['label']"/>
                                     </a>
                                 </t>
                             </div>
                         </div>
                         <input type="text" class="form-control form-control-sm" placeholder="Search" t-att-value='search' name="search"/>
                         <span class="input-group-append">
-                            <button class="btn btn-secondary search-submit" type="button">
+                            <button class="btn btn-secondary o_wait_lazy_js" type="submit">
                                 <span class="fa fa-search"/>
                             </button>
                         </span>
@@ -320,10 +322,10 @@
     <template id="portal_record_layout" name="Portal single record layout">
         <div t-attf-class="card mt-0 border-top-0 rounded-0 rounded-bottom #{classes if classes else ''}">
             <div t-if="card_header" t-attf-class="card-header #{header_classes if header_classes else ''}">
-                <t t-raw="card_header"/>
+                <t t-out="card_header"/>
             </div>
             <div t-if="card_body" t-attf-class="card-body #{body_classes if body_classes else ''}">
-                <t t-raw="card_body"/>
+                <t t-out="card_body"/>
             </div>
         </div>
     </template>
@@ -372,17 +374,26 @@
                             </div>
 
                             <div class="clearfix" />
-                            <div t-attf-class="form-group #{error.get('company_name') and 'o_has_error' or ''} col-xl-6">
+                            <div t-attf-class="form-group mb-1 #{error.get('company_name') and 'o_has_error' or ''} col-xl-6">
                                 <label class="col-form-label label-optional" for="company_name">Company Name</label>
-                                <!-- The <input> is replace by a <p> to avoid sending an unauthorized value on form submit.
+                                <!-- The <input> use "disabled" attribute to avoid sending an unauthorized value on form submit.
                                      The user might not have rights to change company_name but should still be able to see it.
                                 -->
-                                <p t-if="not partner_can_edit_vat" t-attf-class="form-control" readonly="1" t-esc="partner.commercial_company_name" title="Changing company name is not allowed once document(s) have been issued for your account. Please contact us directly for this operation."/>
-                                <input t-else="" type="text" name="company_name" t-attf-class="form-control #{error.get('company_name') and 'is-invalid' or ''}" t-att-value="company_name or partner.commercial_company_name"/>
+                                <input type="text" name="company_name" t-attf-class="form-control #{error.get('company_name') and 'is-invalid' or ''}" t-att-value="company_name or partner.commercial_company_name" t-att-disabled="None if partner_can_edit_vat else '1'" />
+                                <small t-if="not partner_can_edit_vat" class="form-text text-muted d-block d-xl-none">
+                                    Changing company name is not allowed once document(s) have been issued for your account. Please contact us directly for this operation.
+                                </small>
                             </div>
-                            <div t-attf-class="form-group #{error.get('vat') and 'o_has_error' or ''} col-xl-6">
+                            <div t-attf-class="form-group mb-1 #{error.get('vat') and 'o_has_error' or ''} col-xl-6">
                                 <label class="col-form-label label-optional" for="vat">VAT Number</label>
-                                <input type="text" name="vat" t-attf-class="form-control #{error.get('vat') and 'is-invalid' or ''}" t-att-value="vat or partner.vat" t-att-readonly="None if partner_can_edit_vat else '1'" t-att-title="None if partner_can_edit_vat else 'Changing VAT number is not allowed once document(s) have been issued for your account. Please contact us directly for this operation.'" />
+                                <!-- The <input> use "disabled" attribute to avoid sending an unauthorized value on form submit.
+                                     The user might not have rights to change company_name but should still be able to see it.
+                                -->
+                                <input type="text" name="vat" t-attf-class="form-control #{error.get('vat') and 'is-invalid' or ''}" t-att-value="vat or partner.vat" t-att-disabled="None if partner_can_edit_vat else '1'" />
+                                <small t-if="not partner_can_edit_vat" class="form-text text-muted d-block d-xl-none">Changing VAT number is not allowed once document(s) have been issued for your account. Please contact us directly for this operation.</small>
+                            </div>
+                            <div t-if="not partner_can_edit_vat" class="col-12 d-none d-xl-block">
+                                <small class="form-text text-muted">Changing company name or VAT number is not allowed once document(s) have been issued for your account. <br/>Please contact us directly for this operation.</small>
                             </div>
                             <div t-attf-class="form-group #{error.get('phone') and 'o_has_error' or ''} col-xl-6">
                                 <label class="col-form-label" for="phone">Phone</label>
@@ -487,6 +498,41 @@
                     <button type="submit" class="btn btn-danger">Change Password</button>
                 </form>
             </section>
+            <section t-if="debug and allow_api_keys">
+                <h3>
+                Developer API Keys
+                    <a href="https://www.odoo.com/documentation/15.0/developer/misc/api/external_api.html#api-keys" target="_blank">
+                        <i title="Documentation" class="fa fa-fw o_button_icon fa-info-circle"></i>
+                    </a>
+                </h3>
+                <div>
+                    <table class="table o_main_table">
+                        <thead>
+                            <tr>
+                                <th>Description</th>
+                                <th>Scope</th>
+                                <th>Added On</th>
+                                <th/>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <t t-foreach="request.env.user.api_key_ids" t-as="key">
+                                <tr>
+                                    <td><span t-field="key.name"/></td>
+                                    <td><span t-field="key.scope"/></td>
+                                    <td><span t-field="key.create_date"/></td>
+                                    <td>
+                                        <i class="fa fa-trash text-danger o_portal_remove_api_key" type="button" t-att-id="key.id"/>
+                                    </td>
+                                </tr>
+                            </t>
+                        </tbody>
+                    </table>
+                </div>
+                <div>
+                    <button type="submit" class="btn btn-primary o_portal_new_api_key">New API Key</button>
+                </div>
+            </section>
         </div></t>
     </template>
 
@@ -505,7 +551,7 @@
                 <a t-att-href=" pager['page_previous']['url'] if pager['page']['num'] != 1 else None" t-attf-class="page-link #{extraLinkClass}">Prev</a>
             </li>
             <t t-foreach="pager['pages']" t-as="page">
-                <li t-attf-class="page-item #{'active' if page['num'] == pager['page']['num'] else ''}"> <a t-att-href="page['url']" t-attf-class="page-link #{extraLinkClass}" t-raw="page['num']"></a></li>
+                <li t-attf-class="page-item #{'active' if page['num'] == pager['page']['num'] else ''}"> <a t-att-href="page['url']" t-attf-class="page-link #{extraLinkClass}" t-out="page['num']"/></li>
             </t>
             <li t-attf-class="page-item #{'disabled' if pager['page']['num'] == pager['page_count'] else ''}">
                 <a t-att-href="pager['page_next']['url'] if pager['page']['num'] != pager['page_count'] else None" t-attf-class="page-link #{extraLinkClass}">Next</a>
@@ -532,8 +578,8 @@
             :pid : identifier of the partner signing the token
     -->
     <template id="message_thread">
-        <div id="discussion" class="d-print-none o_portal_chatter o_not_editable p-0"
-            t-att-data-token="token" t-att-data-res_model="object._name" t-att-data-pid="pid" t-att-data-hash="hash" t-att-data-res_id="object.id" t-att-data-pager_step="message_per_page or 10" t-att-data-allow_composer="'0' if disable_composer else '1'">
+        <div id="discussion" data-anchor="true" class="d-print-none o_portal_chatter o_not_editable p-0"
+            t-att-data-token="token" t-att-data-res_model="object._name" t-att-data-pid="pid" t-att-data-hash="hash" t-att-data-res_id="object.id" t-att-data-pager_step="message_per_page or 10" t-att-data-allow_composer="'0' if disable_composer else '1'" t-att-data-two_columns="'true' if two_columns else 'false'">
         </div>
     </template>
 

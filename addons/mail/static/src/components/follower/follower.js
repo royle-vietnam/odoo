@@ -1,25 +1,11 @@
-odoo.define('mail/static/src/components/follower/follower.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    FollowerSubtypeList: require('mail/static/src/components/follower_subtype_list/follower_subtype_list.js'),
-};
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
+import { markEventHandled } from '@mail/utils/utils';
 const { Component } = owl;
 
-class Follower extends Component {
-
-    /**
-     * @override
-     */
-    constructor(...args) {
-        super(...args);
-        useStore(props => {
-            const follower = this.env.models['mail.follower'].get(props.followerLocalId);
-            return [follower ? follower.__state : undefined];
-        });
-    }
+export class Follower extends Component {
 
     //--------------------------------------------------------------------------
     // Public
@@ -29,7 +15,7 @@ class Follower extends Component {
      * @returns {mail.follower}
      */
     get follower() {
-        return this.env.models['mail.follower'].get(this.props.followerLocalId);
+        return this.messaging && this.messaging.models['mail.follower'].get(this.props.followerLocalId);
     }
 
     //--------------------------------------------------------------------------
@@ -59,20 +45,20 @@ class Follower extends Component {
      * @private
      * @param {MouseEvent} ev
      */
-    _onClickRemove(ev) {
-        this.follower.remove();
+    async _onClickRemove(ev) {
+        markEventHandled(ev, 'Follower.clickRemove');
+        await this.follower.remove();
+        this.trigger('reload', { fieldNames:['message_follower_ids'], keepChanges: true });
+        this.trigger('o-hide-follower-list-menu');
     }
 
 }
 
 Object.assign(Follower, {
-    components,
     props: {
         followerLocalId: String,
     },
     template: 'mail.Follower',
 });
 
-return Follower;
-
-});
+registerMessagingComponent(Follower);

@@ -1,8 +1,8 @@
-odoo.define('mail/static/src/models/notification_group/notification_group.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { attr, many2one, one2many } = require('mail/static/src/model/model_field.js');
+import { registerNewModel } from '@mail/model/model_core';
+import { attr, many2one, one2many } from '@mail/model/model_field';
+import { clear, insert, unlink } from '@mail/model/model_field_command';
 
 function factory(dependencies) {
 
@@ -51,20 +51,43 @@ function factory(dependencies) {
          * @returns {mail.thread|undefined}
          */
         _computeThread() {
-            if (this.res_id) {
-                return [['insert', {
-                    id: this.res_id,
-                    model: this.res_model,
-                }]];
+            const notificationsThreadIds = this.notifications
+                  .filter(notification => notification.message && notification.message.originThread)
+                  .map(notification => notification.message.originThread.id);
+            const threadIds = new Set(notificationsThreadIds);
+            if (threadIds.size !== 1) {
+                return unlink();
             }
-            return [['unlink']];
+            return insert({
+                id: notificationsThreadIds[0],
+                model: this.res_model,
+            });
         }
 
         /**
-         * @override
+         * Compute the most recent date inside the notification messages.
+         *
+         * @private
+         * @returns {moment|undefined}
          */
-        static _createRecordLocalId(data) {
-            return `${this.modelName}_${data.id}`;
+        _computeDate() {
+            const dates = this.notifications
+                  .filter(notification => notification.message && notification.message.date)
+                  .map(notification => notification.message.date);
+            if (dates.length === 0) {
+                return clear();
+            }
+            return moment.max(dates);
+        }
+
+        /**
+         * Compute the position of the group inside the notification list.
+         *
+         * @private
+         * @returns {number}
+         */
+        _computeSequence() {
+            return -Math.max(...this.notifications.map(notification => notification.message.id));
         }
 
         /**
@@ -87,40 +110,48 @@ function factory(dependencies) {
                     domain: [['message_has_error', '=', true]],
                 },
             });
-            if (this.env.messaging.device.isMobile) {
+            if (this.messaging.device.isMobile) {
                 // messaging menu has a higher z-index than views so it must
                 // be closed to ensure the visibility of the view
-                this.env.messaging.messagingMenu.close();
+                this.messaging.messagingMenu.close();
             }
         }
 
     }
 
     NotificationGroup.fields = {
-        date: attr(),
-        id: attr(),
+        /**
+         * States the most recent date of all the notification message.
+         */
+        date: attr({
+            compute: '_computeDate',
+        }),
+        id: attr({
+            readonly: true,
+            required: true,
+        }),
         notification_type: attr(),
         notifications: one2many('mail.notification'),
-        res_id: attr(),
         res_model: attr(),
         res_model_name: attr(),
+        /**
+         * States the position of the group inside the notification list.
+         */
+        sequence: attr({
+            compute: '_computeSequence',
+            default: 0,
+        }),
         /**
          * Related thread when the notification group concerns a single thread.
          */
         thread: many2one('mail.thread', {
             compute: '_computeThread',
-            dependencies: [
-                'res_id',
-                'res_model',
-            ],
         })
     };
-
+    NotificationGroup.identifyingFields = ['id'];
     NotificationGroup.modelName = 'mail.notification_group';
 
     return NotificationGroup;
 }
 
 registerNewModel('mail.notification_group', factory);
-
-});

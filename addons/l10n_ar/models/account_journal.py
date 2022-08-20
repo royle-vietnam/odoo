@@ -48,16 +48,18 @@ class AccountJournal(models.Model):
                 '9': ['I'],
                 '10': [],
                 '13': ['C', 'E'],
+                '99': []
             },
             'received': {
-                '1': ['A', 'B', 'C', 'M', 'I'],
+                '1': ['A', 'B', 'C', 'E', 'M', 'I'],
                 '3': ['B', 'C', 'I'],
                 '4': ['B', 'C', 'I'],
                 '5': ['B', 'C', 'I'],
-                '6': ['B', 'C', 'I'],
+                '6': ['A', 'B', 'C', 'I'],
                 '9': ['E'],
                 '10': ['E'],
-                '13': ['B', 'C', 'I'],
+                '13': ['A', 'B', 'C', 'I'],
+                '99': ['B', 'C', 'I']
             },
         }
         if not self.company_id.l10n_ar_afip_responsibility_type_id:
@@ -67,59 +69,57 @@ class AccountJournal(models.Model):
 
         letters = letters_data['issued' if self.type == 'sale' else 'received'][
             self.company_id.l10n_ar_afip_responsibility_type_id.code]
-        if not counterpart_partner:
-            return letters
-
-        if not counterpart_partner.l10n_ar_afip_responsibility_type_id:
-            letters = []
-        else:
-            counterpart_letters = letters_data['issued' if self.type == 'purchase' else 'received'][
-                counterpart_partner.l10n_ar_afip_responsibility_type_id.code]
+        if counterpart_partner:
+            counterpart_letters = letters_data['issued' if self.type == 'purchase' else 'received'].get(
+                counterpart_partner.l10n_ar_afip_responsibility_type_id.code, [])
             letters = list(set(letters) & set(counterpart_letters))
         return letters
 
     def _get_journal_codes(self):
         self.ensure_one()
+        if self.type != 'sale':
+            return []
+        return self._get_codes_per_journal_type(self.l10n_ar_afip_pos_system)
+
+    @api.model
+    def _get_codes_per_journal_type(self, afip_pos_system):
         usual_codes = ['1', '2', '3', '6', '7', '8', '11', '12', '13']
         mipyme_codes = ['201', '202', '203', '206', '207', '208', '211', '212', '213']
         invoice_m_code = ['51', '52', '53']
         receipt_m_code = ['54']
         receipt_codes = ['4', '9', '15']
         expo_codes = ['19', '20', '21']
-        if self.type != 'sale':
-            return []
-        elif self.l10n_ar_afip_pos_system == 'II_IM':
+        if afip_pos_system == 'II_IM':
             # pre-printed invoice
             return usual_codes + receipt_codes + expo_codes + invoice_m_code + receipt_m_code
-        elif self.l10n_ar_afip_pos_system in ['RAW_MAW', 'RLI_RLM']:
+        elif afip_pos_system in ['RAW_MAW', 'RLI_RLM']:
             # electronic/online invoice
             return usual_codes + receipt_codes + invoice_m_code + receipt_m_code + mipyme_codes
-        elif self.l10n_ar_afip_pos_system in ['CPERCEL', 'CPEWS']:
+        elif afip_pos_system in ['CPERCEL', 'CPEWS']:
             # invoice with detail
             return usual_codes + invoice_m_code
-        elif self.l10n_ar_afip_pos_system in ['BFERCEL', 'BFEWS']:
+        elif afip_pos_system in ['BFERCEL', 'BFEWS']:
             # Bonds invoice
             return usual_codes + mipyme_codes
-        elif self.l10n_ar_afip_pos_system in ['FEERCEL', 'FEEWS', 'FEERCELP']:
+        elif afip_pos_system in ['FEERCEL', 'FEEWS', 'FEERCELP']:
             return expo_codes
 
     @api.constrains('type', 'l10n_ar_afip_pos_system', 'l10n_ar_afip_pos_number', 'l10n_ar_share_sequences',
                     'l10n_latam_use_documents')
     def _check_afip_configurations(self):
-        """ Do not let to update journal if already have confirmed invoices """
-        arg_sale_journals = self.filtered(lambda x: x.company_id.country_id == self.env.ref('base.ar') and
-                                          x.type == 'sale' and x._origin.type == 'sale')
-        invoices = self.env['account.move'].search([('journal_id', 'in', arg_sale_journals.ids), ('state', '!=', 'draft')])
+        """ Do not let the user update the journal if it already contains confirmed invoices """
+        journals = self.filtered(lambda x: x.company_id.account_fiscal_country_id.code == "AR" and x.type in ['sale', 'purchase'])
+        invoices = self.env['account.move'].search([('journal_id', 'in', journals.ids), ('posted_before', '=', True)], limit=1)
         if invoices:
             raise ValidationError(
-                _("You can not change the journal's configuration if journal already have validated invoices") + ' ('
+                _("You can not change the journal's configuration if it already has validated invoices") + ' ('
                 + ', '.join(invoices.mapped('journal_id').mapped('name')) + ')')
 
     @api.constrains('l10n_ar_afip_pos_number')
     def _check_afip_pos_number(self):
         to_review = self.filtered(
             lambda x: x.type == 'sale' and x.l10n_latam_use_documents and
-            x.company_id.country_id == self.env.ref('base.ar'))
+            x.company_id.account_fiscal_country_id.code == "AR")
 
         if to_review.filtered(lambda x: x.l10n_ar_afip_pos_number == 0):
             raise ValidationError(_('Please define an AFIP POS number'))

@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <odoo>
 
-    <!-- Add action entry in the Action Menu for Events -->
-    <record id="calendar_event_act_window_sms_composer_single" model="ir.actions.act_window">
-        <field name="name">Send SMS to attendees</field>
-        <field name="res_model">sms.composer</field>
-        <field name="view_mode">form</field>
-        <field name="target">new</field>
-        <field name="context">{
-            'default_composition_mode': 'comment',
-            'default_res_id': active_id,
-        }</field>
+    <record id="calendar_alarm_view_form" model="ir.ui.view">
+        <field name="name">calendar.alarm.view.form.inherit.calendar.sms</field>
+        <field name="model">calendar.alarm</field>
+        <field name="inherit_id" ref="calendar.calendar_alarm_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='mail_template_id']" position="after">
+                <field name="sms_template_id" attrs="{'invisible': [('alarm_type','!=','sms')], 'required': [('alarm_type', '=', 'sms')]}"
+                    context="{'default_model': 'calendar.event'}"/>
+            </xpath>
+        </field>
     </record>
 
     <record id="view_calendar_event_tree_inherited" model="ir.ui.view">
@@ -18,11 +18,23 @@
         <field name="model">calendar.event</field>
         <field name="inherit_id" ref="calendar.view_calendar_event_tree"/>
         <field name="arch" type="xml">
-            <xpath expr="//tree" position="inside">
-                <header>
-                    <button name="%(calendar_event_act_window_sms_composer_single)d" type="action"
-                            string="Send SMS to attendees"/>
-                </header>
+            <xpath expr="//header" position="inside">
+                <button name="action_send_sms" type="object"
+                        string="Send SMS"/>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_calendar_event_form_inherited" model="ir.ui.view">
+        <field name="name">calendar.event.form.calendar_sms</field>
+        <field name="model">calendar.event</field>
+        <field name="inherit_id" ref="calendar.view_calendar_event_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//div[@name='send_buttons']" position="inside">
+                <button name="action_send_sms" help="Send SMS to attendees" type="object" string="SMS" icon="fa-mobile"/>
+            </xpath>
+            <xpath expr="//field[@name='phone']" position="attributes">
+                <attribute name="options">{'enable_sms': false}</attribute>
             </xpath>
         </field>
     </record>

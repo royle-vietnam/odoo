@@ -21,6 +21,7 @@ class IrModuleModule(models.Model):
     # The order is important because of dependencies (page need view, menu need page)
     _theme_model_names = OrderedDict([
         ('ir.ui.view', 'theme.ir.ui.view'),
+        ('ir.asset', 'theme.ir.asset'),
         ('website.page', 'theme.website.page'),
         ('website.menu', 'theme.website.menu'),
         ('ir.attachment', 'theme.ir.attachment'),
@@ -74,6 +75,9 @@ class IrModuleModule(models.Model):
 
                     -> We want to upgrade every website using this theme.
         """
+        if request and request.context.get('apply_new_theme'):
+            self = self.with_context(apply_new_theme=True)
+
         for module in self:
             if module.name.startswith('theme_') and vals.get('state') == 'installed':
                 _logger.info('Module %s has been loaded as theme template (%s)' % (module.name, module.state))
@@ -152,7 +156,9 @@ class IrModuleModule(models.Model):
                 # special case for attachment
                 # if module B override attachment from dependence A, we update it
                 if not find and model_name == 'ir.attachment':
-                    find = rec.copy_ids.search([('key', '=', rec.key), ('website_id', '=', website.id)])
+                    # In master, a unique constraint over (theme_template_id, website_id)
+                    # will be introduced, thus ensuring unicity of 'find'
+                    find = rec.copy_ids.search([('key', '=', rec.key), ('website_id', '=', website.id), ("original_id", "=", False)])
 
                 if find:
                     imd = self.env['ir.model.data'].search([('model', '=', find._name), ('res_id', '=', find.id)])
@@ -204,7 +210,15 @@ class IrModuleModule(models.Model):
             for model_name in self._theme_model_names:
                 module._update_records(model_name, website)
 
-            self.env['theme.utils'].with_context(website_id=website.id)._post_copy(module)
+            if self._context.get('apply_new_theme'):
+                # Both the theme install and upgrade flow ends up here.
+                # The _post_copy() is supposed to be called only when the theme
+                # is installed for the first time on a website.
+                # It will basically select some header and footer template.
+                # We don't want the system to select again the theme footer or
+                # header template when that theme is updated later. It could
+                # erase the change the user made after the theme install.
+                self.env['theme.utils'].with_context(website_id=website.id)._post_copy(module)
 
     def _theme_unload(self, website):
         """
@@ -358,9 +372,21 @@ class IrModuleModule(models.Model):
         website.theme_id = self
 
         # this will install 'self' if it is not installed yet
+        if request:
+            context = dict(request.context)
+            context['apply_new_theme'] = True
+            request.context = context
         self._theme_upgrade_upstream()
 
-        return website.button_go_website(mode_edit=True)
+        active_todo = self.env['ir.actions.todo'].search([('state', '=', 'open')], limit=1)
+        result = None
+        if active_todo:
+            result = active_todo.action_launch()
+        else:
+            result = website.button_go_website(mode_edit=True)
+        if result.get('url') and 'enable_editor' in result['url']:
+            result['url'] = result['url'].replace('enable_editor', 'with_loader=1&enable_editor')
+        return result
 
     def button_remove_theme(self):
         """Remove the current theme of the current website."""
@@ -407,3 +433,27 @@ class IrModuleModule(models.Model):
                         'res_model': self._name,
                         'res_id': theme.id,
                     })
+
+    def get_themes_domain(self):
+        """Returns the 'ir.module.module' search domain matching all available themes."""
+        def get_id(model_id):
+            return self.env['ir.model.data']._xmlid_to_res_id(model_id)
+        return [
+            ('category_id', 'not in', [
+                get_id('base.module_category_hidden'),
+                get_id('base.module_category_theme_hidden'),
+            ]),
+            '|',
+            ('category_id', '=', get_id('base.module_category_theme')),
+            ('category_id.parent_id', '=', get_id('base.module_category_theme'))
+        ]
+
+    def _check(self):
+        super()._check()
+        View = self.env['ir.ui.view']
+        website_views_to_adapt = getattr(self.pool, 'website_views_to_adapt', [])
+        if website_views_to_adapt:
+            for view_replay in website_views_to_adapt:
+                cow_view = View.browse(view_replay[0])
+                View._load_records_write_on_cow(cow_view, view_replay[1], view_replay[2])
+            self.pool.website_views_to_adapt.clear()

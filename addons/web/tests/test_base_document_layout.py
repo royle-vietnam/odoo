@@ -54,8 +54,7 @@ class TestBaseDocumentLayoutHelpers(TransactionCase):
             if not fname_split[0] in _file_cache:
                 with Image.open(os.path.join(dir_path, fname), 'r') as img:
                     base64_img = image_to_base64(img, 'PNG')
-                    primary, secondary = self.env['base.document.layout'].create(
-                        {})._parse_logo_colors(base64_img)
+                    primary, secondary = self.env['base.document.layout'].extract_image_primary_secondary_colors(base64_img)
                     _img = frozendict({
                         'img': base64_img,
                         'colors': {
@@ -193,6 +192,20 @@ class TestBaseDocumentLayout(TestBaseDocumentLayoutHelpers):
             doc_layout.primary_color = doc_layout.logo_primary_color
             doc_layout.secondary_color = doc_layout.logo_secondary_color
             self.assertColors(doc_layout, self.company_imgs['sweden']['colors'])
+
+    def test_parse_company_colors_grayscale(self):
+        """Grayscale images with transparency - make sure the color extraction does not crash"""
+        self.company.write({
+            'primary_color': '#ff0080',
+            'secondary_color': '#00ff00',
+            'paperformat_id': self.env.ref('base.paperformat_us').id,
+        })
+        with Form(self.env['base.document.layout']) as doc_layout:
+            with Image.open(os.path.join(dir_path, 'logo_ci.png'), 'r') as img:
+                base64_img = image_to_base64(img, 'PNG')
+                doc_layout.logo = base64_img
+            self.assertNotEqual(None, doc_layout.primary_color)
+
 
     # /!\ This case is NOT supported, and probably not supportable
     # res.partner resizes manu-militari the image it is given

@@ -16,6 +16,7 @@ odoo.define('pos_discount.DiscountButton', function(require) {
             const { confirmed, payload } = await this.showPopup('NumberPopup',{
                 title: this.env._t('Discount Percentage'),
                 startingValue: this.env.pos.config.discount_pc,
+                isInputSelected: true
             });
             if (confirmed) {
                 const val = Math.round(Math.max(0,Math.min(100,parseFloat(payload))));
@@ -36,12 +37,9 @@ odoo.define('pos_discount.DiscountButton', function(require) {
             }
 
             // Remove existing discounts
-            var i = 0;
-            while ( i < lines.length ) {
-                if (lines[i].get_product() === product) {
-                    order.remove_orderline(lines[i]);
-                } else {
-                    i++;
+            for (const line of lines) {
+                if (line.get_product() === product) {
+                    order.remove_orderline(line);
                 }
             }
 
@@ -49,7 +47,7 @@ odoo.define('pos_discount.DiscountButton', function(require) {
             // We add the price as manually set to avoid recomputation when changing customer.
             var base_to_discount = order.get_total_without_tax();
             if (product.taxes_id.length){
-                var first_tax = this.pos.taxes_by_id[product.taxes_id[0]];
+                var first_tax = this.env.pos.taxes_by_id[product.taxes_id[0]];
                 if (first_tax.price_include) {
                     base_to_discount = order.get_total_with_tax();
                 }

@@ -75,11 +75,7 @@ var LongpollingBus = Bus.extend(ServicesMixin, {
     addChannel: function (channel) {
         if (this._channels.indexOf(channel) === -1) {
             this._channels.push(channel);
-            if (this._pollRpc) {
-                this._pollRpc.abort();
-            } else {
-                this.startPolling();
-            }
+            this._restartPolling();
         }
     },
     /**
@@ -241,7 +237,7 @@ var LongpollingBus = Bus.extend(ServicesMixin, {
             if (notif.id > self._lastNotificationID) {
                 self._lastNotificationID = notif.id;
             }
-            return [notif.channel, notif.message];
+            return notif.message;
         });
         this.trigger("notification", notifs);
         return notifs;
@@ -254,6 +250,18 @@ var LongpollingBus = Bus.extend(ServicesMixin, {
      */
     _onPresence: function () {
         this._lastPresenceTime = new Date().getTime();
+    },
+    /**
+     * Restart polling.
+     *
+     * @private
+     */
+    _restartPolling() {
+        if (this._pollRpc) {
+            this._pollRpc.abort();
+        } else {
+            this.startPolling();
+        }
     },
 });
 

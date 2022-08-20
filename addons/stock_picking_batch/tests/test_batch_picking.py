@@ -3,6 +3,7 @@
 
 from datetime import datetime, timedelta
 
+from odoo.exceptions import UserError
 from odoo.tests import Form
 from odoo.tests.common import TransactionCase
 
@@ -14,7 +15,8 @@ class TestBatchPicking(TransactionCase):
         super(TestBatchPicking, self).setUp()
         self.stock_location = self.env.ref('stock.stock_location_stock')
         self.customer_location = self.env.ref('stock.stock_location_customers')
-        self.picking_type_out = self.env['ir.model.data'].xmlid_to_res_id('stock.picking_type_out')
+        self.picking_type_out = self.env['ir.model.data']._xmlid_to_res_id('stock.picking_type_out')
+        self.env['stock.picking.type'].browse(self.picking_type_out).reservation_method = 'manual'
         self.productA = self.env['product.product'].create({
             'name': 'Product A',
             'type': 'product',
@@ -136,10 +138,9 @@ class TestBatchPicking(TransactionCase):
         # self.assertEqual(self.batch.scheduled_date, self.picking_client_3.scheduled_date)
         # self.batch.write({'picking_ids': [(3, self.picking_client_3.id)]})
 
-
-        # remove all pickings and batch scheduled date should default to none
-        self.batch.write({'picking_ids': [(3, self.picking_client_1.id)]})
-        self.batch.write({'picking_ids': [(3, self.picking_client_2.id)]})
+        # cancelling batch should auto-remove all pickings => scheduled_date should default to none
+        self.batch.action_cancel()
+        self.assertEqual(len(self.batch.picking_ids), 0)
         self.assertEqual(self.batch.scheduled_date, False)
 
     def test_simple_batch_with_manual_qty_done(self):
@@ -171,6 +172,10 @@ class TestBatchPicking(TransactionCase):
         # ensure that quantity for picking has been moved
         self.assertFalse(sum(quant_A.mapped('quantity')))
         self.assertFalse(sum(quant_B.mapped('quantity')))
+
+        # ensure that batch cannot be deleted now that it is done
+        with self.assertRaises(UserError):
+            self.batch.unlink()
 
     def test_simple_batch_with_wizard(self):
         """ Test a simple batch picking with all quantity for picking available.
@@ -304,28 +309,17 @@ class TestBatchPicking(TransactionCase):
         self.assertEqual(self.picking_client_2.state, 'assigned', 'Picking 2 should be ready')
 
         self.picking_client_1.move_lines.quantity_done = 5
-        # There should be a wizard asking to process picking without quantity done
-        immediate_transfer_wizard_dict = self.batch.action_done()
-        self.assertTrue(immediate_transfer_wizard_dict)
-        immediate_transfer_wizard = Form(self.env[(immediate_transfer_wizard_dict.get('res_model'))].with_context(immediate_transfer_wizard_dict['context'])).save()
-        self.assertEqual(len(immediate_transfer_wizard.pick_ids), 1)
-        back_order_wizard_dict = immediate_transfer_wizard.process()
+        # There should be a wizard asking to make a backorder
+        back_order_wizard_dict = self.batch.action_done()
         self.assertTrue(back_order_wizard_dict)
+        self.assertEqual(back_order_wizard_dict.get('res_model'), 'stock.backorder.confirmation')
         back_order_wizard = Form(self.env[(back_order_wizard_dict.get('res_model'))].with_context(back_order_wizard_dict['context'])).save()
-        self.assertEqual(len(back_order_wizard.pick_ids), 1)
+        self.assertEqual(len(back_order_wizard.pick_ids), 2)
         back_order_wizard.process()
 
         self.assertEqual(self.picking_client_1.state, 'done', 'Picking 1 should be done')
         self.assertEqual(self.picking_client_1.move_lines.product_uom_qty, 5, 'initial demand should be 5 after picking split')
-        self.assertTrue(self.env['stock.picking'].search([('backorder_id', '=', self.picking_client_1.id)]), 'no back order created')
-
-        quant_A = self.env['stock.quant']._gather(self.productA, self.stock_location)
-        quant_B = self.env['stock.quant']._gather(self.productB, self.stock_location)
-
-        # ensure that quantity for picking has been moved
-        self.assertFalse(sum(quant_A.mapped('quantity')))
-        self.assertFalse(sum(quant_B.mapped('quantity')))
-
+        self.assertFalse(self.picking_client_2.batch_id)
     def test_put_in_pack(self):
         self.env['stock.quant']._update_available_quantity(self.productA, self.stock_location, 10.0)
         self.env['stock.quant']._update_available_quantity(self.productB, self.stock_location, 10.0)
@@ -365,3 +359,12 @@ class TestBatchPicking(TransactionCase):
 
         # final package location should be correctly set based on wizard
         self.assertEqual(package.location_id.id, self.customer_location.id)
+
+    def test_remove_all_transfers_from_confirmed_batch(self):
+        """
+            Check that the batch is canceled when all transfers are deleted
+        """
+        self.batch.action_confirm()
+        self.assertEqual(self.batch.state, 'in_progress', 'Batch Transfers should be in progress.')
+        self.batch.write({'picking_ids': [[5, 0, 0]]})
+        self.assertEqual(self.batch.state, 'cancel', 'Batch Transfers should be cancelled when there are no transfers.')

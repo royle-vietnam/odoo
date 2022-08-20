@@ -6,13 +6,72 @@ import logging
 import json
 import requests
 import uuid
+from unittest.mock import patch
 
 from odoo import exceptions, _
+from odoo.tests.common import BaseCase
 from odoo.tools import pycompat
 
 _logger = logging.getLogger(__name__)
 
 DEFAULT_ENDPOINT = 'https://iap.odoo.com'
+
+
+# We need to mock iap_jsonrpc during tests as we don't want to perform real calls to RPC endpoints
+def iap_jsonrpc_mocked(*args, **kwargs):
+    raise exceptions.AccessError("Unavailable during tests.")
+
+
+iap_patch = patch('odoo.addons.iap.tools.iap_tools.iap_jsonrpc', iap_jsonrpc_mocked)
+
+
+def setUp(self):
+    old_setup_func(self)
+    iap_patch.start()
+    self.addCleanup(iap_patch.stop)
+
+
+old_setup_func = BaseCase.setUp
+BaseCase.setUp = setUp
+
+#----------------------------------------------------------
+# Tools globals
+#----------------------------------------------------------
+
+_MAIL_DOMAIN_BLACKLIST = set([
+    # Top 100 email providers on SaaS at 2020-10
+    'gmail.com', 'hotmail.com', 'yahoo.com', 'qq.com', 'outlook.com', '163.com', 'yahoo.fr', 'live.com', 'hotmail.fr', 'icloud.com', '126.com',
+    'me.com', 'free.fr', 'ymail.com', 'msn.com', 'mail.com', 'orange.fr', 'aol.com', 'wanadoo.fr', 'live.fr', 'mail.ru', 'yahoo.co.in',
+    'rediffmail.com', 'hku.hk', 'googlemail.com', 'gmx.de', 'sina.com', 'skynet.be', 'laposte.net', 'yahoo.co.uk', 'yahoo.co.id', 'web.de',
+    'gmail.com ', 'outlook.fr', 'telenet.be', 'yahoo.es', 'naver.com', 'hotmail.co.uk', 'gmai.com', 'foxmail.com', 'hku.hku', 'bluewin.ch',
+    'sfr.fr', 'libero.it', 'mac.com', 'rocketmail.com', 'protonmail.com', 'gmx.com', 'gamil.com', 'hotmail.es', 'gmx.net', 'comcast.net',
+    'yahoo.com.mx', 'linkedin.com', 'yahoo.com.br', 'yahoo.in', 'yahoo.ca', 't-online.de', '139.com', 'yandex.ru', 'yahoo.com.hk','yahoo.de',
+    'yeah.net', 'yandex.com', 'nwytg.net', 'neuf.fr', 'yahoo.com.ar', 'outlook.es', 'abv.bg', 'aliyun.com', 'yahoo.com.tw', 'ukr.net', 'live.nl',
+    'wp.pl', 'hotmail.it', 'live.com.mx', 'zoho.com', 'live.co.uk', 'sohu.com', 'twoomail.com', 'yahoo.com.sg', 'odoo.com', 'yahoo.com.vn',
+    'windowslive.com', 'gmail', 'vols.utk.edu', 'email.com', 'tiscali.it', 'yahoo.it', 'gmx.ch', 'trbvm.com', 'nwytg.com', 'mvrht.com', 'nyit.edu',
+    'o2.pl', 'live.cn', 'gmial.com', 'seznam.cz', 'live.be', 'videotron.ca', 'gmil.com', 'live.ca', 'hotmail.de', 'sbcglobal.net', 'connect.hku.hk',
+    'yahoo.com.au', 'att.net', 'live.in', 'btinternet.com', 'gmx.fr', 'voila.fr', 'shaw.ca', 'prodigy.net.mx', 'vip.qq.com', 'yahoo.com.ph',
+    'bigpond.com', '7thcomputing.com', 'freenet.de', 'alice.it', 'esi.dz',
+    'bk.ru', 'mail.odoo.com', 'gmail.con', 'fiu.edu', 'gmal.com', 'useemlikefun.com', 'google.com', 'trbvn.com', 'yopmail.com', 'ya.ru',
+    'hotmail.co.th', 'arcor.de', 'hotmail.ca', '21cn.com', 'live.de', 'outlook.de', 'gmailcom', 'unal.edu.co', 'tom.com', 'yahoo.gr',
+    'gmx.at', 'inbox.lv', 'ziggo.nl', 'xs4all.nl', 'sapo.pt', 'live.com.au', 'nate.com', 'online.de', 'sina.cn', 'gmail.co', 'rogers.com',
+    'mailinator.com', 'cox.net', 'hotmail.be', 'verizon.net', 'yahoo.co.jp', 'usa.com', 'consultant.com', 'hotmai.com', '189.cn',
+    'sky.com', 'eezee-it.com', 'opayq.com', 'maildrop.cc', 'home.nl', 'virgilio.it', 'outlook.be', 'hanmail.net', 'uol.com.br', 'hec.ca',
+    'terra.com.br', 'inbox.ru', 'tin.it', 'list.ru', 'hotmail.com ', 'safecoms.com', 'smile.fr', 'sprintit.fi', 'uniminuto.edu.co',
+    'bol.com.br', 'bellsouth.net', 'nirmauni.ac.in', 'ldc.edu.in', 'ig.com.br', 'engineer.com', 'scarlet.be', 'inbox.com', 'gmaill.com',
+    'freemail.hu', 'live.it', 'blackwaretech.com', 'byom.de', 'dispostable.com', 'dayrep.com', 'aim.com', 'prixgen.com', 'gmail.om',
+    'asterisk-tech.mn', 'in.com', 'aliceadsl.fr', 'lycos.com', 'topnet.tn', 'teleworm.us', 'kedgebs.com', 'supinfo.com', 'posteo.de',
+    'yahoo.com ', 'op.pl', 'gmail.fr', 'grr.la', 'oci.fr', 'aselcis.com', 'optusnet.com.au', 'mailcatch.com', 'rambler.ru', 'protonmail.ch',
+    'prisme.ch', 'bbox.fr', 'orbitalu.com', 'netcourrier.com', 'iinet.net.au',
+    # Dummy entries
+    'example.com',
+])
+
+# List of country codes for which we should offer state filtering when mining new leads.
+# See crm.iap.lead.mining.request#_compute_available_state_ids() or task-2471703 for more details.
+_STATES_FILTER_COUNTRIES_WHITELIST = set([
+    'AR', 'AU', 'BR', 'CA', 'IN', 'MY', 'MX', 'NZ', 'AE', 'US'
+])
 
 #----------------------------------------------------------
 # Helpers for both clients and proxy
@@ -77,13 +136,14 @@ class IapTransaction(object):
         self.credit = None
 
 
-def iap_authorize(env, key, account_token, credit, dbuuid=False, description=None, credit_template=None):
+def iap_authorize(env, key, account_token, credit, dbuuid=False, description=None, credit_template=None, ttl=4320):
     endpoint = iap_get_endpoint(env)
     params = {
         'account_token': account_token,
         'credit': credit,
         'key': key,
         'description': description,
+        'ttl': ttl,
     }
     if dbuuid:
         params.update({'dbuuid': dbuuid})
@@ -120,7 +180,7 @@ def iap_capture(env, transaction_token, key, credit):
 
 
 @contextlib.contextmanager
-def iap_charge(env, key, account_token, credit, dbuuid=False, description=None, credit_template=None):
+def iap_charge(env, key, account_token, credit, dbuuid=False, description=None, credit_template=None, ttl=4320):
     """
     Account charge context manager: takes a hold for ``credit``
     amount before executing the body, then captures it if there
@@ -136,9 +196,12 @@ def iap_charge(env, key, account_token, credit, dbuuid=False, description=None, 
     :param credit_template: a QWeb template to render and show to the
                             user if their account does not have enough
                             credits for the requested operation
+    :param int ttl: transaction time to live in hours.
+                    If the credit are not captured when the transaction
+                    expires, the transaction is canceled
     :type credit_template: str
     """
-    transaction_token = iap_authorize(env, key, account_token, credit, dbuuid, description, credit_template)
+    transaction_token = iap_authorize(env, key, account_token, credit, dbuuid, description, credit_template, ttl)
     try:
         transaction = IapTransaction()
         transaction.credit = credit

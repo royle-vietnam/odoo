@@ -11,6 +11,7 @@ import datetime
 import hmac as hmac_lib
 import hashlib
 import io
+import itertools
 import os
 import pickle as pickle_
 import re
@@ -33,6 +34,7 @@ from operator import itemgetter
 
 import babel
 import babel.dates
+import markupsafe
 import passlib.utils
 import pytz
 import werkzeug.utils
@@ -57,6 +59,8 @@ SKIPPED_ELEMENT_TYPES = (etree._Comment, etree._ProcessingInstruction, etree.Com
 
 # Configure default global parser
 etree.set_default_parser(etree.XMLParser(resolve_entities=False))
+
+NON_BREAKING_SPACE = u'\N{NO-BREAK SPACE}'
 
 #----------------------------------------------------------
 # Subprocesses
@@ -135,124 +139,74 @@ def exec_pg_command_pipe(name, *args):
 #----------------------------------------------------------
 # File paths
 #----------------------------------------------------------
-#file_path_root = os.getcwd()
-#file_path_addons = os.path.join(file_path_root, 'addons')
 
-def file_open(name, mode="r", subdir='addons', pathinfo=False):
-    """Open a file from the OpenERP root, using a subdir folder.
+def file_path(file_path, filter_ext=('',)):
+    """Verify that a file exists under a known `addons_path` directory and return its full path.
 
-    Example::
+    Examples::
 
-    >>> file_open('hr/report/timesheer.xsl')
-    >>> file_open('addons/hr/report/timesheet.xsl')
+    >>> file_path('hr')
+    >>> file_path('hr/static/description/icon.png')
+    >>> file_path('hr/static/description/icon.png', filter_ext=('.png', '.jpg'))
 
-    @param name name of the file
-    @param mode file open mode
-    @param subdir subdirectory
-    @param pathinfo if True returns tuple (fileobject, filepath)
-
-    @return fileobject if pathinfo is False else (fileobject, filepath)
+    :param str file_path: absolute file path, or relative path within any `addons_path` directory
+    :param list[str] filter_ext: optional list of supported extensions (lowercase, with leading dot)
+    :return: the absolute path to the file
+    :raise FileNotFoundError: if the file is not found under the known `addons_path` directories
+    :raise ValueError: if the file doesn't have one of the supported extensions (`filter_ext`)
     """
-    adps = odoo.addons.__path__
-    rtp = os.path.normcase(os.path.abspath(config['root_path']))
+    root_path = os.path.abspath(config['root_path'])
+    addons_paths = odoo.addons.__path__ + [root_path]
+    is_abs = os.path.isabs(file_path)
+    normalized_path = os.path.normpath(os.path.normcase(file_path))
 
-    basename = name
+    if filter_ext and not normalized_path.lower().endswith(filter_ext):
+        raise ValueError("Unsupported file: " + file_path)
 
-    if os.path.isabs(name):
-        # It is an absolute path
-        # Is it below 'addons_path' or 'root_path'?
-        name = os.path.normcase(os.path.normpath(name))
-        for root in adps + [rtp]:
-            root = os.path.normcase(os.path.normpath(root)) + os.sep
-            if name.startswith(root):
-                base = root.rstrip(os.sep)
-                name = name[len(base) + 1:]
-                break
-        else:
-            # It is outside the OpenERP root: skip zipfile lookup.
-            base, name = os.path.split(name)
-        return _fileopen(name, mode=mode, basedir=base, pathinfo=pathinfo, basename=basename)
+    # ignore leading 'addons/' if present, it's the final component of root_path, but
+    # may sometimes be included in relative paths
+    if normalized_path.startswith('addons' + os.sep):
+        normalized_path = normalized_path[7:]
 
-    if name.replace(os.sep, '/').startswith('addons/'):
-        subdir = 'addons'
-        name2 = name[7:]
-    elif subdir:
-        name = os.path.join(subdir, name)
-        if name.replace(os.sep, '/').startswith('addons/'):
-            subdir = 'addons'
-            name2 = name[7:]
-        else:
-            name2 = name
+    for addons_dir in addons_paths:
+        # final path sep required to avoid partial match
+        parent_path = os.path.normpath(os.path.normcase(addons_dir)) + os.sep
+        fpath = (normalized_path if is_abs else
+                 os.path.normpath(os.path.normcase(os.path.join(parent_path, normalized_path))))
+        if fpath.startswith(parent_path) and os.path.exists(fpath):
+            return fpath
 
-    # First, try to locate in addons_path
-    if subdir:
-        for adp in adps:
-            try:
-                return _fileopen(name2, mode=mode, basedir=adp,
-                                 pathinfo=pathinfo, basename=basename)
-            except IOError:
-                pass
+    raise FileNotFoundError("File not found: " + file_path)
 
-    # Second, try to locate in root_path
-    return _fileopen(name, mode=mode, basedir=rtp, pathinfo=pathinfo, basename=basename)
+def file_open(name, mode="r", filter_ext=None):
+    """Open a file from within the addons_path directories, as an absolute or relative path.
 
+    Examples::
 
-def _fileopen(path, mode, basedir, pathinfo, basename=None):
-    name = os.path.normpath(os.path.normcase(os.path.join(basedir, path)))
+    >>> file_open('hr/static/description/icon.png')
+    >>> file_open('hr/static/description/icon.png', filter_ext=('.png', '.jpg'))
+    >>> with file_open('/opt/odoo/addons/hr/static/description/icon.png', 'rb') as f:
+    ...     contents = f.read()
 
-    paths = odoo.addons.__path__ + [config['root_path']]
-    for addons_path in paths:
-        addons_path = os.path.normpath(os.path.normcase(addons_path)) + os.sep
-        if name.startswith(addons_path):
-            break
-    else:
-        raise ValueError("Unknown path: %s" % name)
-
-    if basename is None:
-        basename = name
-    # Give higher priority to module directories, which is
-    # a more common case than zipped modules.
-    if os.path.isfile(name):
-        if 'b' in mode:
-            fo = open(name, mode)
-        else:
-            fo = io.open(name, mode, encoding='utf-8')
-        if pathinfo:
-            return fo, name
-        return fo
-
-    # Support for loading modules in zipped form.
-    # This will not work for zipped modules that are sitting
-    # outside of known addons paths.
-    head = os.path.normpath(path)
-    zipname = False
-    while os.sep in head:
-        head, tail = os.path.split(head)
-        if not tail:
-            break
-        if zipname:
-            zipname = os.path.join(tail, zipname)
-        else:
-            zipname = tail
-        zpath = os.path.join(basedir, head + '.zip')
-        if zipfile.is_zipfile(zpath):
-            zfile = zipfile.ZipFile(zpath)
-            try:
-                fo = io.BytesIO()
-                fo.write(zfile.read(os.path.join(
-                    os.path.basename(head), zipname).replace(
-                        os.sep, '/')))
-                fo.seek(0)
-                if pathinfo:
-                    return fo, name
-                return fo
-            except Exception:
-                pass
-    # Not found
-    if name.endswith('.rml'):
-        raise IOError('Report %r does not exist or has been deleted' % basename)
-    raise IOError('File not found: %s' % basename)
-
+    :param name: absolute or relative path to a file located inside an addon
+    :param mode: file open mode, as for `open()`
+    :param list[str] filter_ext: optional list of supported extensions (lowercase, with leading dot)
+    :return: file object, as returned by `open()`
+    :raise FileNotFoundError: if the file is not found under the known `addons_path` directories
+    :raise ValueError: if the file doesn't have one of the supported extensions (`filter_ext`)
+    """
+    path = file_path(name, filter_ext=filter_ext)
+    if os.path.isfile(path):
+        if 'b' not in mode:
+            # Force encoding for text mode, as system locale could affect default encoding,
+            # even with the latest Python 3 versions.
+            # Note: This is not covered by a unit test, due to the platform dependency.
+            #       For testing purposes you should be able to force a non-UTF8 encoding with:
+            #         `sudo locale-gen fr_FR; LC_ALL=fr_FR.iso8859-1 python3 ...'
+            # See also PEP-540, although we can't rely on that at the moment.
+            return open(path, mode, encoding="utf-8")
+        return open(path, mode)
+    raise FileNotFoundError("Not a file: " + name)
 
 #----------------------------------------------------------
 # iterables
@@ -278,7 +232,7 @@ def flatten(list):
     """
     r = []
     for e in list:
-        if isinstance(e, (bytes, str)) or not isinstance(e, collections.Iterable):
+        if isinstance(e, (bytes, str)) or not isinstance(e, collections.abc.Iterable):
             r.append(e)
         else:
             r.extend(flatten(e))
@@ -745,6 +699,13 @@ def attrgetter(*items):
             return tuple(resolve_attr(obj, attr) for attr in items)
     return g
 
+def discardattr(obj, key):
+    """ Perform a ``delattr(obj, key)`` but without crashing if ``key`` is not present. """
+    try:
+        delattr(obj, key)
+    except AttributeError:
+        pass
+
 # ---------------------------------------------
 # String management
 # ---------------------------------------------
@@ -981,42 +942,56 @@ def clean_context(context):
     """ This function take a dictionary and remove each entry with its key starting with 'default_' """
     return {k: v for k, v in context.items() if not k.startswith('default_')}
 
+
 class frozendict(dict):
     """ An implementation of an immutable dictionary. """
+    __slots__ = ()
+
     def __delitem__(self, key):
         raise NotImplementedError("'__delitem__' not supported on frozendict")
+
     def __setitem__(self, key, val):
         raise NotImplementedError("'__setitem__' not supported on frozendict")
+
     def clear(self):
         raise NotImplementedError("'clear' not supported on frozendict")
+
     def pop(self, key, default=None):
         raise NotImplementedError("'pop' not supported on frozendict")
+
     def popitem(self):
         raise NotImplementedError("'popitem' not supported on frozendict")
+
     def setdefault(self, key, default=None):
         raise NotImplementedError("'setdefault' not supported on frozendict")
+
     def update(self, *args, **kwargs):
         raise NotImplementedError("'update' not supported on frozendict")
+
     def __hash__(self):
         return hash(frozenset((key, freehash(val)) for key, val in self.items()))
 
-class Collector(Mapping):
-    """ A mapping from keys to lists. This is essentially a space optimization
-        for ``defaultdict(list)``.
+
+class Collector(dict):
+    """ A mapping from keys to tuples.  This implements a relation, and can be
+        seen as a space optimization for ``defaultdict(tuple)``.
     """
-    __slots__ = ['_map']
-    def __init__(self):
-        self._map = {}
-    def add(self, key, val):
-        vals = self._map.setdefault(key, [])
-        if val not in vals:
-            vals.append(val)
+    __slots__ = ()
+
     def __getitem__(self, key):
-        return self._map.get(key, ())
-    def __iter__(self):
-        return iter(self._map)
-    def __len__(self):
-        return len(self._map)
+        return self.get(key, ())
+
+    def __setitem__(self, key, val):
+        val = tuple(val)
+        if val:
+            super().__setitem__(key, val)
+        else:
+            super().pop(key, None)
+
+    def add(self, key, val):
+        vals = self[key]
+        if val not in vals:
+            self[key] = vals + (val,)
 
 
 class StackMap(MutableMapping):
@@ -1063,18 +1038,34 @@ class StackMap(MutableMapping):
 class OrderedSet(MutableSet):
     """ A set collection that remembers the elements first insertion order. """
     __slots__ = ['_map']
+
     def __init__(self, elems=()):
-        self._map = OrderedDict((elem, None) for elem in elems)
+        self._map = dict.fromkeys(elems)
+
     def __contains__(self, elem):
         return elem in self._map
+
     def __iter__(self):
         return iter(self._map)
+
     def __len__(self):
         return len(self._map)
+
     def add(self, elem):
         self._map[elem] = None
+
     def discard(self, elem):
         self._map.pop(elem, None)
+
+    def update(self, elems):
+        self._map.update(zip(elems, itertools.repeat(None)))
+
+    def difference_update(self, elems):
+        for elem in elems:
+            self.discard(elem)
+
+    def __repr__(self):
+        return f'{type(self).__name__}({list(self)!r})'
 
 
 class LastOrderedSet(OrderedSet):
@@ -1221,14 +1212,7 @@ def ignore(*exc):
     except exc:
         pass
 
-# Avoid DeprecationWarning while still remaining compatible with werkzeug pre-0.9
-if parse_version(getattr(werkzeug, '__version__', '0.0')) < parse_version('0.9.0'):
-    def html_escape(text):
-        return werkzeug.utils.escape(text, quote=True)
-else:
-    def html_escape(text):
-        return werkzeug.utils.escape(text)
-
+html_escape = markupsafe.escape
 
 def get_lang(env, lang_code=False):
     """
@@ -1248,6 +1232,14 @@ def get_lang(env, lang_code=False):
         lang = env.user.company_id.partner_id.lang
     return env['res.lang']._lang_get(lang)
 
+def babel_locale_parse(lang_code):
+    try:
+        return babel.Locale.parse(lang_code)
+    except:
+        try:
+            return babel.Locale.default()
+        except:
+            return babel.Locale.parse("en_US")
 
 def formatLang(env, value, digits=None, grouping=True, monetary=False, dp=False, currency_obj=False):
     """
@@ -1275,9 +1267,9 @@ def formatLang(env, value, digits=None, grouping=True, monetary=False, dp=False,
 
     if currency_obj and currency_obj.symbol:
         if currency_obj.position == 'after':
-            res = '%s %s' % (res, currency_obj.symbol)
+            res = '%s%s%s' % (res, NON_BREAKING_SPACE, currency_obj.symbol)
         elif currency_obj and currency_obj.position == 'before':
-            res = '%s %s' % (currency_obj.symbol, res)
+            res = '%s%s%s' % (currency_obj.symbol, NON_BREAKING_SPACE, res)
     return res
 
 
@@ -1307,7 +1299,7 @@ def format_date(env, value, lang_code=False, date_format=False):
             value = odoo.fields.Datetime.from_string(value)
 
     lang = get_lang(env, lang_code)
-    locale = babel.Locale.parse(lang.code)
+    locale = babel_locale_parse(lang.code)
     if not date_format:
         date_format = posix_to_ldml(lang.date_format, locale=locale)
 
@@ -1326,7 +1318,7 @@ def parse_date(env, value, lang_code=False):
         :rtype: datetime.date
     '''
     lang = get_lang(env, lang_code)
-    locale = babel.Locale.parse(lang.code)
+    locale = babel_locale_parse(lang.code)
     try:
         return babel.dates.parse_date(value, locale=locale)
     except:
@@ -1358,7 +1350,7 @@ def format_datetime(env, value, tz=False, dt_format='medium', lang_code=False):
 
     lang = get_lang(env, lang_code)
 
-    locale = babel.Locale.parse(lang.code or lang_code)  # lang can be inactive, so `lang`is empty
+    locale = babel_locale_parse(lang.code or lang_code)  # lang can be inactive, so `lang`is empty
     if not dt_format:
         date_format = posix_to_ldml(lang.date_format, locale=locale)
         time_format = posix_to_ldml(lang.time_format, locale=locale)
@@ -1378,7 +1370,8 @@ def format_time(env, value, tz=False, time_format='medium', lang_code=False):
 
         :param value: the time to format
         :type value: `datetime.time` instance. Could be timezoned to display tzinfo according to format (e.i.: 'full' format)
-        :param format: one of “full”, “long”, “medium”, or “short”, or a custom date/time pattern
+        :param tz: name of the timezone  in which the given datetime should be localized
+        :param time_format: one of “full”, “long”, “medium”, or “short”, or a custom time pattern
         :param lang_code: ISO
 
         :rtype str
@@ -1386,19 +1379,32 @@ def format_time(env, value, tz=False, time_format='medium', lang_code=False):
     if not value:
         return ''
 
+    if isinstance(value, datetime.time):
+        localized_datetime = value
+    else:
+        if isinstance(value, str):
+            value = odoo.fields.Datetime.from_string(value)
+        tz_name = tz or env.user.tz or 'UTC'
+        utc_datetime = pytz.utc.localize(value, is_dst=False)
+        try:
+            context_tz = pytz.timezone(tz_name)
+            localized_datetime = utc_datetime.astimezone(context_tz)
+        except Exception:
+            localized_datetime = utc_datetime
+
     lang = get_lang(env, lang_code)
-    locale = babel.Locale.parse(lang.code)
+    locale = babel_locale_parse(lang.code)
     if not time_format:
         time_format = posix_to_ldml(lang.time_format, locale=locale)
 
-    return babel.dates.format_time(value, format=time_format, locale=locale)
+    return babel.dates.format_time(localized_datetime, format=time_format, locale=locale)
 
 
 def _format_time_ago(env, time_delta, lang_code=False, add_direction=True):
     if not lang_code:
         langs = [code for code, _ in env['res.lang'].get_installed()]
         lang_code = env.context['lang'] if env.context.get('lang') in langs else (env.user.company_id.partner_id.lang or langs[0])
-    locale = babel.Locale.parse(lang_code)
+    locale = babel_locale_parse(lang_code)
     return babel.dates.format_timedelta(-time_delta, add_direction=add_direction, locale=locale)
 
 
@@ -1523,7 +1529,7 @@ def get_diff(data_from, data_to, custom_style=False):
     :return: a string containing the diff in an HTML table format.
     """
     def handle_style(html_diff, custom_style):
-        """ The HtmlDiff lib will add some usefull classes on the DOM to
+        """ The HtmlDiff lib will add some useful classes on the DOM to
         identify elements. Simply append to those classes some BS4 ones.
         For the table to fit the modal width, some custom style is needed.
         """

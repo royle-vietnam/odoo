@@ -88,6 +88,32 @@ class OdooHook(object):
         return sys.modules[name]
 
 
+class UpgradeHook(object):
+    """Makes the legacy `migrations` package being `odoo.upgrade`"""
+
+    def find_module(self, name, path=None):
+        if re.match(r"^odoo.addons.base.maintenance.migrations\b", name):
+            # We can't trigger a DeprecationWarning in this case.
+            # In order to be cross-versions, the multi-versions upgrade scripts (0.0.0 scripts),
+            # the tests, and the common files (utility functions) still needs to import from the
+            # legacy name.
+            return self
+
+    def load_module(self, name):
+        assert name not in sys.modules
+
+        canonical_upgrade = name.replace("odoo.addons.base.maintenance.migrations", "odoo.upgrade")
+
+        if canonical_upgrade in sys.modules:
+            mod = sys.modules[canonical_upgrade]
+        else:
+            mod = importlib.import_module(canonical_upgrade)
+
+        sys.modules[name] = mod
+
+        return sys.modules[name]
+
+
 def initialize_sys_path():
     """
     Setup the addons path ``odoo.addons.__path__`` with various defaults
@@ -126,6 +152,7 @@ def initialize_sys_path():
 
     # hook deprecated module alias from openerp to odoo and "crm"-like to odoo.addons
     if not getattr(initialize_sys_path, 'called', False): # only initialize once
+        sys.meta_path.insert(0, UpgradeHook())
         sys.meta_path.insert(0, OdooHook())
         sys.meta_path.insert(0, AddonsHook())
         initialize_sys_path.called = True
@@ -208,7 +235,7 @@ def get_resource_from_path(path):
     """Tries to extract the module name and the resource's relative path
     out of an absolute resource path.
 
-    If operation is successfull, returns a tuple containing the module name, the relative path
+    If operation is successful, returns a tuple containing the module name, the relative path
     to the resource using '/' as filesystem seperator[1] and the same relative path using
     os.path.sep seperators.
 
@@ -248,6 +275,14 @@ def module_manifest(path):
     for manifest_name in MANIFEST_NAMES:
         if os.path.isfile(opj(path, manifest_name)):
             return opj(path, manifest_name)
+
+def read_manifest(addons_path, module):
+    mod_path = opj(addons_path, module)
+    manifest_path = module_manifest(mod_path)
+    if manifest_path:
+        with tools.file_open(manifest_path, 'r') as fd:
+            manifest_data = fd.read()
+        return ast.literal_eval(manifest_data)
 
 def get_module_root(path):
     """
@@ -295,7 +330,6 @@ def load_information_from_description_file(module, mod_path=None):
             'description': '',
             'icon': get_module_icon(module),
             'installable': True,
-            'license': 'LGPL-3',
             'post_load': None,
             'version': '1.0',
             'web': False,
@@ -320,23 +354,25 @@ def load_information_from_description_file(module, mod_path=None):
                 with tools.file_open(readme_path[0]) as fd:
                     info['description'] = fd.read()
 
-        # auto_install is set to `False` if disabled, and a set of
-        # auto_install dependencies otherwise. That way, we can set
-        # auto_install: [] to always auto_install a module regardless of its
-        # dependencies
-        auto_install = info.get('auto_install', info.get('active', False))
-        if isinstance(auto_install, collections.abc.Iterable):
-            info['auto_install'] = set(auto_install)
+        if not info.get('license'):
+            info['license'] = 'LGPL-3'
+            _logger.warning("Missing `license` key in manifest for '%s', defaulting to LGPL-3", module)
+
+        # auto_install is either `False` (by default) in which case the module
+        # is opt-in, either a list of dependencies in which case the module is
+        # automatically installed if all dependencies are (special case: [] to
+        # always install the module), either `True` to auto-install the module
+        # in case all dependencies declared in `depends` are installed.
+        if isinstance(info['auto_install'], collections.abc.Iterable):
+            info['auto_install'] = set(info['auto_install'])
             non_dependencies = info['auto_install'].difference(info['depends'])
             assert not non_dependencies,\
                 "auto_install triggers must be dependencies, found " \
                 "non-dependencies [%s] for module %s" % (
                     ', '.join(non_dependencies), module
                 )
-        elif auto_install:
+        elif info['auto_install']:
             info['auto_install'] = set(info['depends'])
-        else:
-            info['auto_install'] = False
 
         info['version'] = adapt_version(info['version'])
         return info

@@ -1,8 +1,9 @@
 "id","name","model_id:id","group_id:id","perm_read","perm_write","perm_create","perm_unlink"
-"access_decimal_precision_config","decimal.precision configuration","model_decimal_precision","group_system",1,1,1,1
+"access_decimal_precision_config","decimal.precision configuration","model_decimal_precision","group_system",1,1,0,0
 "access_ir_attachment_group_user","ir_attachment group_user","model_ir_attachment","group_user",1,1,1,1
 "access_ir_attachment_group_portal_public","ir_attachment group_portal_public","model_ir_attachment",,0,0,0,0
 "access_ir_cron_group_cron","ir_cron group_cron","model_ir_cron","group_system",1,1,1,1
+"access_ir_cron_trigger_group_cron","ir_cron_trigger group_cron","model_ir_cron_trigger","group_system",1,1,1,1
 "access_ir_exports_group_system","ir_exports group_system","model_ir_exports","base.group_allow_export",1,1,1,1
 "access_ir_exports_line_group_system","ir_exports_line group_system","model_ir_exports_line","base.group_user",1,1,1,1
 "access_ir_model_group_erp_manager","ir_model group_erp_manager","model_ir_model","group_erp_manager",1,1,1,1
@@ -12,10 +13,10 @@
 "access_ir_model_data_group_erp_manager","ir_model_data group_erp_manager","model_ir_model_data","group_erp_manager",1,1,1,1
 "access_ir_model_fields_group_erp_manager","ir_model_fields group_erp_manager","model_ir_model_fields","group_erp_manager",1,1,1,1
 "access_ir_model_fields_selection_group_erp_manager","ir_model_fields_selection group_erp_manager","model_ir_model_fields_selection","group_erp_manager",1,1,1,1
-"access_ir_model_user","ir_model_all","model_ir_model",base.group_user,1,0,0,0
-"access_ir_model_data_user","ir_model_data user","model_ir_model_data",base.group_user,1,0,1,0
-"access_ir_model_fields_user","ir_model_fields all","model_ir_model_fields",base.group_user,1,0,0,0
-"access_ir_model_fields_selection_user","ir_model_fields_selection all","model_ir_model_fields_selection",base.group_user,1,0,0,0
+"access_ir_model_user","ir_model_all","model_ir_model",base.group_user,0,0,0,0
+"access_ir_model_data_user","ir_model_data user","model_ir_model_data",base.group_user,0,0,0,0
+"access_ir_model_fields_user","ir_model_fields all","model_ir_model_fields",base.group_user,0,0,0,0
+"access_ir_model_fields_selection_user","ir_model_fields_selection all","model_ir_model_fields_selection",base.group_user,0,0,0,0
 "access_ir_module_category_group_user","ir_module_category group_user","model_ir_module_category","group_erp_manager",1,0,0,0
 "access_ir_module_module_group_user","ir_module_module group_user","model_ir_module_module","group_system",1,1,1,1
 "access_ir_module_module_dependency_group_system","ir_module_module_dependency group_system","model_ir_module_module_dependency","group_system",1,1,1,1
@@ -77,6 +78,7 @@
 "access_res_users_apikeys_description_employee","API key wizard employees","model_res_users_apikeys_description","group_user",1,0,1,0
 "access_res_users_apikeys_description_portal","API key wizard","model_res_users_apikeys_description","group_portal",1,0,1,0
 "access_res_users_apikeys_show_employee","API key result employees","model_res_users_apikeys_show","group_user",1,0,1,0
+"access_ir_asset_group_system","ir_asset_group_system","model_ir_asset","group_system",1,1,1,1
 "access_ir_actions_group_system","ir_actions_group_system","model_ir_actions_actions","group_system",1,1,1,1
 "access_ir_actions_act_window_system","ir_actions_act_window_system","model_ir_actions_act_window","group_system",1,1,1,1
 "access_ir_actions_act_window_close_group_system","ir_actions_act_window_close_group_system","model_ir_actions_act_window_close","group_system",1,1,1,1
@@ -117,5 +119,7 @@
 "access_base_module_uninstall","access.base.module.uninstall","model_base_module_uninstall","base.group_system",1,1,1,0
 "access_base_language_export","access.base.language.export","model_base_language_export","base.group_user",1,1,1,0
 "access_base_update_translations","access.base.update.translations","model_base_update_translations","base.group_system",1,1,1,0
-"access_base_partner_merge_line","access.base.partner.merge.line","model_base_partner_merge_line","base.group_partner_manager",1,1,1,0
+"access_base_partner_merge_line","access.base.partner.merge.line","model_base_partner_merge_line","base.group_partner_manager",1,1,1,1
 "access_base_partner_merge_automatic_wizard","access.base.partner.merge.automatic.wizard","model_base_partner_merge_automatic_wizard","base.group_partner_manager",1,1,1,0
+"access_ir_profile","ir_profile","model_ir_profile","group_system",1,1,1,1
+"access_base_enable_profiling_wizard","access.base.enable.profiling.wizard","model_base_enable_profiling_wizard","group_system",1,1,1,0

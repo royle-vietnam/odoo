@@ -3,14 +3,12 @@ odoo.define('hr_expense.expenses.tree', function (require) {
     var DocumentUploadMixin = require('hr_expense.documents.upload.mixin');
     var KanbanController = require('web.KanbanController');
     var KanbanView = require('web.KanbanView');
-    var PivotView = require('web.PivotView');
     var ListController = require('web.ListController');
     var ListView = require('web.ListView');
     var viewRegistry = require('web.view_registry');
     var core = require('web.core');
     var ListRenderer = require('web.ListRenderer');
     var KanbanRenderer = require('web.KanbanRenderer');
-    var PivotRenderer = require('web.PivotRenderer');
     var session = require('web.session');
     const config = require('web.config');
 
@@ -22,6 +20,13 @@ odoo.define('hr_expense.expenses.tree', function (require) {
             'click .o_button_upload_expense': '_onUpload',
             'change .o_expense_documents_upload .o_form_binary_form': '_onAddAttachment',
         }),
+        /**
+         * @override
+         */
+         init: function () {
+            this._super.apply(this, arguments);
+            this.isMobile = config.device.isMobileDevice;
+        },
     });
 
     const ExpenseQRCodeMixin = {
@@ -39,7 +44,7 @@ odoo.define('hr_expense.expenses.tree', function (require) {
             };
             this.$el.find('img.o_expense_apple_store').on('click', function(event) {
                 event.preventDefault();
-                if (!config.device.isMobile) {
+                if (!config.device.isMobileDevice) {
                     self.do_action(_.extend(action_desktop, {params: {'url': apple_url}}));
                 } else {
                     self.do_action({type: 'ir.actions.act_url', url: apple_url});
@@ -47,7 +52,7 @@ odoo.define('hr_expense.expenses.tree', function (require) {
             });
             this.$el.find('img.o_expense_google_store').on('click', function(event) {
                 event.preventDefault();
-                if (!config.device.isMobile) {
+                if (!config.device.isMobileDevice) {
                     self.do_action(_.extend(action_desktop, {params: {'url': google_url}}));
                 } else {
                     self.do_action({type: 'ir.actions.act_url', url: google_url});

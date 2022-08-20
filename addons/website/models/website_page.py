@@ -1,15 +1,24 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+from psycopg2 import sql
+import re
+
 from odoo.addons.http_routing.models.ir_http import slugify
+from odoo.addons.website.tools import text_from_html
 from odoo import api, fields, models
+from odoo.osv import expression
+from odoo.tools import escape_psql
 from odoo.tools.safe_eval import safe_eval
 
 
 class Page(models.Model):
     _name = 'website.page'
     _inherits = {'ir.ui.view': 'view_id'}
-    _inherit = 'website.published.multi.mixin'
+    _inherit = [
+        'website.published.multi.mixin',
+        'website.searchable.mixin',
+    ]
     _description = 'Page'
     _order = 'website_id'
 
@@ -55,14 +64,16 @@ class Page(models.Model):
                 not page.date_publish or page.date_publish < fields.Datetime.now()
             )
 
-    def _is_most_specific_page(self, page_to_test):
-        '''This will test if page_to_test is the most specific page in self.'''
-        pages_for_url = self.sorted(key=lambda p: not p.website_id).filtered(lambda page: page.url == page_to_test.url)
-
-        # this works because pages are _order'ed by website_id
-        most_specific_page = pages_for_url[0]
-
-        return most_specific_page == page_to_test
+    def _get_most_specific_pages(self):
+        ''' Returns the most specific pages in self. '''
+        ids = []
+        previous_page = None
+        # Iterate a single time on the whole list sorted on specific-website first.
+        for page in self.sorted(key=lambda p: (p.url, not p.website_id)):
+            if not previous_page or page.url != previous_page.url:
+                ids.append(page.id)
+            previous_page = page
+        return self.filtered(lambda page: page.id in ids)
 
     def get_page_properties(self):
         self.ensure_one()
@@ -196,6 +207,8 @@ class Page(models.Model):
             if not pages_linked_to_iruiview and not page.view_id.inherit_children_ids:
                 # If there is no other pages linked to that ir_ui_view, we can delete the ir_ui_view
                 page.view_id.unlink()
+        # Make sure website._get_menu_ids() will be recomputed
+        self.clear_caches()
         return super(Page, self).unlink()
 
     def write(self, vals):
@@ -207,6 +220,15 @@ class Page(models.Model):
     def get_website_meta(self):
         self.ensure_one()
         return self.view_id.get_website_meta()
+
+    @classmethod
+    def _get_cached_blacklist(cls):
+        return ('data-snippet="s_website_form"', 'data-no-page-cache=', )
+
+    def _can_be_cached(self, response):
+        """ return False if at least one blacklisted's word is present in content """
+        blacklist = self._get_cached_blacklist()
+        return not any(black in str(response) for black in blacklist)
 
     def _get_cache_key(self, req):
         # Always call me with super() AT THE END to have cache_key_expr appended as last element
@@ -228,6 +250,94 @@ class Page(models.Model):
     def _set_cache_response(self, cache_key, response):
         """ Put in cache the given response. """
         self.pool._Registry__cache[('website.page', _cached_response, self.id, cache_key)] = response
+
+    @api.model
+    def _search_get_detail(self, website, order, options):
+        with_description = options['displayDescription']
+        # Read access on website.page requires sudo.
+        requires_sudo = True
+        domain = [website.website_domain()]
+        if not self.env.user.has_group('website.group_website_designer'):
+            # Rule must be reinforced because of sudo.
+            domain.append([('website_published', '=', True)])
+
+        search_fields = ['name', 'url']
+        fetch_fields = ['id', 'name', 'url']
+        mapping = {
+            'name': {'name': 'name', 'type': 'text', 'match': True},
+            'website_url': {'name': 'url', 'type': 'text', 'truncate': False},
+        }
+        if with_description:
+            search_fields.append('arch_db')
+            fetch_fields.append('arch')
+            mapping['description'] = {'name': 'arch', 'type': 'text', 'html': True, 'match': True}
+        return {
+            'model': 'website.page',
+            'base_domain': domain,
+            'requires_sudo': requires_sudo,
+            'search_fields': search_fields,
+            'fetch_fields': fetch_fields,
+            'mapping': mapping,
+            'icon': 'fa-file-o',
+        }
+
+    @api.model
+    def _search_fetch(self, search_detail, search, limit, order):
+        with_description = 'description' in search_detail['mapping']
+        results, count = super()._search_fetch(search_detail, search, limit, order)
+        if with_description and search:
+            # Perform search in translations
+            # TODO Remove when domains will support xml_translate fields
+            query = sql.SQL("""
+                SELECT {table}.{id}
+                FROM {table}
+                LEFT JOIN ir_ui_view v ON {table}.{view_id} = v.{id}
+                LEFT JOIN ir_translation t ON v.{id} = t.{res_id}
+                WHERE t.lang = {lang}
+                AND t.name = ANY({names})
+                AND t.type = 'model_terms'
+                AND t.value ilike {search}
+                LIMIT {limit}
+            """).format(
+                table=sql.Identifier(self._table),
+                id=sql.Identifier('id'),
+                view_id=sql.Identifier('view_id'),
+                res_id=sql.Identifier('res_id'),
+                lang=sql.Placeholder('lang'),
+                names=sql.Placeholder('names'),
+                search=sql.Placeholder('search'),
+                limit=sql.Placeholder('limit'),
+            )
+            self.env.cr.execute(query, {
+                'lang': self.env.lang,
+                'names': ['ir.ui.view,arch_db', 'ir.ui.view,name'],
+                'search': '%%%s%%' % escape_psql(search),
+                'limit': limit,
+            })
+            ids = {row[0] for row in self.env.cr.fetchall()}
+            ids.update(results.ids)
+            domains = search_detail['base_domain'].copy()
+            domains.append([('id', 'in', list(ids))])
+            domain = expression.AND(domains)
+            model = self.sudo() if search_detail.get('requires_sudo') else self
+            results = model.search(
+                domain,
+                limit=limit,
+                order=search_detail.get('order', order)
+            )
+            count = max(count, len(results))
+
+        def filter_page(search, page, all_pages):
+            # Search might have matched words in the xml tags and parameters therefore we make
+            # sure the terms actually appear inside the text.
+            text = '%s %s %s' % (page.name, page.url, text_from_html(page.arch))
+            pattern = '|'.join([re.escape(search_term) for search_term in search.split()])
+            return re.findall('(%s)' % pattern, text, flags=re.I) if pattern else False
+        if 'url' not in order:
+            results = results._get_most_specific_pages()
+        if search and with_description:
+            results = results.filtered(lambda result: filter_page(search, result, results))
+        return results, count
 
 
 # this is just a dummy function to be used as ormcache key

@@ -4,10 +4,10 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: Odoo Server saas~13.5\n"
+"Project-Id-Version: Odoo Server 15.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2020-09-01 07:28+0000\n"
-"PO-Revision-Date: 2020-09-01 07:28+0000\n"
+"POT-Creation-Date: 2022-01-24 08:19+0000\n"
+"PO-Revision-Date: 2022-01-24 08:19+0000\n"
 "Last-Translator: \n"
 "Language-Team: \n"
 "MIME-Version: 1.0\n"
@@ -80,11 +80,6 @@ msgstr ""
 #. module: stock_landed_costs
 #: model:ir.model.fields,field_description:stock_landed_costs.field_stock_valuation_adjustment_lines__additional_landed_cost
 msgid "Additional Landed Cost"
-msgstr ""
-
-#. module: stock_landed_costs
-#: model:ir.model.fields,field_description:stock_landed_costs.field_stock_landed_cost__allowed_picking_ids
-msgid "Allowed Picking"
 msgstr ""
 
 #. module: stock_landed_costs
@@ -242,15 +237,9 @@ msgid "Description"
 msgstr ""
 
 #. module: stock_landed_costs
-#: model:ir.model.fields,field_description:stock_landed_costs.field_account_move__display_name
-#: model:ir.model.fields,field_description:stock_landed_costs.field_account_move_line__display_name
-#: model:ir.model.fields,field_description:stock_landed_costs.field_product_template__display_name
-#: model:ir.model.fields,field_description:stock_landed_costs.field_res_company__display_name
-#: model:ir.model.fields,field_description:stock_landed_costs.field_res_config_settings__display_name
 #: model:ir.model.fields,field_description:stock_landed_costs.field_stock_landed_cost__display_name
 #: model:ir.model.fields,field_description:stock_landed_costs.field_stock_landed_cost_lines__display_name
 #: model:ir.model.fields,field_description:stock_landed_costs.field_stock_valuation_adjustment_lines__display_name
-#: model:ir.model.fields,field_description:stock_landed_costs.field_stock_valuation_layer__display_name
 msgid "Display Name"
 msgstr ""
 
@@ -288,11 +277,6 @@ msgid "Followers"
 msgstr ""
 
 #. module: stock_landed_costs
-#: model:ir.model.fields,field_description:stock_landed_costs.field_stock_landed_cost__message_channel_ids
-msgid "Followers (Channels)"
-msgstr ""
-
-#. module: stock_landed_costs
 #: model:ir.model.fields,field_description:stock_landed_costs.field_stock_landed_cost__message_partner_ids
 msgid "Followers (Partners)"
 msgstr ""
@@ -313,15 +297,14 @@ msgid "Group By"
 msgstr ""
 
 #. module: stock_landed_costs
-#: model:ir.model.fields,field_description:stock_landed_costs.field_account_move__id
-#: model:ir.model.fields,field_description:stock_landed_costs.field_account_move_line__id
-#: model:ir.model.fields,field_description:stock_landed_costs.field_product_template__id
-#: model:ir.model.fields,field_description:stock_landed_costs.field_res_company__id
-#: model:ir.model.fields,field_description:stock_landed_costs.field_res_config_settings__id
+#: model:ir.model.fields,field_description:stock_landed_costs.field_stock_landed_cost__has_message
+msgid "Has Message"
+msgstr ""
+
+#. module: stock_landed_costs
 #: model:ir.model.fields,field_description:stock_landed_costs.field_stock_landed_cost__id
 #: model:ir.model.fields,field_description:stock_landed_costs.field_stock_landed_cost_lines__id
 #: model:ir.model.fields,field_description:stock_landed_costs.field_stock_valuation_adjustment_lines__id
-#: model:ir.model.fields,field_description:stock_landed_costs.field_stock_valuation_layer__id
 msgid "ID"
 msgstr ""
 
@@ -399,18 +382,12 @@ msgid "Landed Cost"
 msgstr ""
 
 #. module: stock_landed_costs
-#: model_terms:ir.ui.view,arch_db:stock_landed_costs.view_stock_landed_cost_form
-msgid "Landed Cost Name"
-msgstr ""
-
-#. module: stock_landed_costs
 #: model:ir.actions.act_window,name:stock_landed_costs.action_stock_landed_cost
 #: model:ir.model.fields,field_description:stock_landed_costs.field_account_bank_statement_line__landed_costs_ids
 #: model:ir.model.fields,field_description:stock_landed_costs.field_account_move__landed_costs_ids
 #: model:ir.model.fields,field_description:stock_landed_costs.field_account_payment__landed_costs_ids
 #: model:ir.ui.menu,name:stock_landed_costs.menu_stock_landed_cost
 #: model_terms:ir.ui.view,arch_db:stock_landed_costs.account_view_move_form_inherited
-#: model_terms:ir.ui.view,arch_db:stock_landed_costs.view_product_landed_cost_form
 #: model_terms:ir.ui.view,arch_db:stock_landed_costs.view_stock_landed_cost_form
 #: model_terms:ir.ui.view,arch_db:stock_landed_costs.view_stock_landed_cost_search
 #: model_terms:ir.ui.view,arch_db:stock_landed_costs.view_stock_landed_cost_tree
@@ -431,15 +408,9 @@ msgid "Landed cost validated"
 msgstr ""
 
 #. module: stock_landed_costs
-#: model:ir.model.fields,field_description:stock_landed_costs.field_account_move____last_update
-#: model:ir.model.fields,field_description:stock_landed_costs.field_account_move_line____last_update
-#: model:ir.model.fields,field_description:stock_landed_costs.field_product_template____last_update
-#: model:ir.model.fields,field_description:stock_landed_costs.field_res_company____last_update
-#: model:ir.model.fields,field_description:stock_landed_costs.field_res_config_settings____last_update
 #: model:ir.model.fields,field_description:stock_landed_costs.field_stock_landed_cost____last_update
 #: model:ir.model.fields,field_description:stock_landed_costs.field_stock_landed_cost_lines____last_update
 #: model:ir.model.fields,field_description:stock_landed_costs.field_stock_valuation_adjustment_lines____last_update
-#: model:ir.model.fields,field_description:stock_landed_costs.field_stock_valuation_layer____last_update
 msgid "Last Modified on"
 msgstr ""
 
@@ -483,6 +454,11 @@ msgid "Messages"
 msgstr ""
 
 #. module: stock_landed_costs
+#: model:ir.model.fields,field_description:stock_landed_costs.field_stock_landed_cost__my_activity_date_deadline
+msgid "My Activity Deadline"
+msgstr ""
+
+#. module: stock_landed_costs
 #: model:ir.model.fields,field_description:stock_landed_costs.field_stock_landed_cost__name
 #: model_terms:ir.ui.view,arch_db:stock_landed_costs.view_stock_landed_cost_search
 msgid "Name"
@@ -499,6 +475,11 @@ msgstr ""
 #. module: stock_landed_costs
 #: model:ir.model.fields,field_description:stock_landed_costs.field_stock_valuation_adjustment_lines__final_cost
 msgid "New Value"
+msgstr ""
+
+#. module: stock_landed_costs
+#: model:ir.model.fields,field_description:stock_landed_costs.field_stock_landed_cost__activity_calendar_event_id
+msgid "Next Activity Calendar Event"
 msgstr ""
 
 #. module: stock_landed_costs
@@ -588,6 +569,11 @@ msgstr ""
 #. module: stock_landed_costs
 #: model:ir.model.fields,field_description:stock_landed_costs.field_account_move_line__product_type
 msgid "Product Type"
+msgstr ""
+
+#. module: stock_landed_costs
+#: model:ir.model,name:stock_landed_costs.model_purchase_order_line
+msgid "Purchase Order Line"
 msgstr ""
 
 #. module: stock_landed_costs
@@ -745,6 +731,13 @@ msgstr ""
 #, python-format
 msgid ""
 "You cannot apply landed costs on the chosen %s(s). Landed costs can only be "
-"applied for products with automated inventory valuation and FIFO or average "
-"costing method."
+"applied for products with FIFO or average costing method."
+msgstr ""
+
+#. module: stock_landed_costs
+#: code:addons/stock_landed_costs/models/product.py:0
+#, python-format
+msgid ""
+"You cannot change the product type or disable landed cost option because the"
+" product is used in an account move line."
 msgstr ""

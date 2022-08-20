@@ -6,8 +6,9 @@ import logging
 import uuid
 from lxml import etree, html
 
-from odoo.exceptions import AccessError
-from odoo import api, models
+from odoo import api, models, _
+from odoo.osv import expression
+from odoo.exceptions import AccessError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -50,7 +51,11 @@ class IrUiView(models.Model):
 
         model = 'ir.qweb.field.' + el.get('data-oe-type')
         converter = self.env[model] if model in self.env else self.env['ir.qweb.field']
-        value = converter.from_html(Model, Model._fields[field], el)
+
+        try:
+            value = converter.from_html(Model, Model._fields[field], el)
+        except ValueError:
+            raise ValidationError(_("Invalid field value for %s: %s", Model._fields[field].string, el.text_content().strip()))
 
         if value is not None:
             # TODO: batch writes?
@@ -82,9 +87,10 @@ class IrUiView(models.Model):
             'arch': self._pretty_arch(arch),
             'key': '%s_%s' % (self.key, el.get('id')),
             'type': 'qweb',
+            'mode': 'extension',
         }
         vals.update(self._save_oe_structure_hook())
-        self.create(vals)
+        self.env['ir.ui.view'].create(vals)
 
         return True
 
@@ -297,6 +303,14 @@ class IrUiView(models.Model):
     def _snippet_save_view_values_hook(self):
         return {}
 
+    def _find_available_name(self, name, used_names):
+        attempt = 1
+        candidate_name = name
+        while candidate_name in used_names:
+            attempt += 1
+            candidate_name = f"{name} ({attempt})"
+        return candidate_name
+
     @api.model
     def save_snippet(self, name, arch, template_key, snippet_key, thumbnail_url):
         """
@@ -316,8 +330,16 @@ class IrUiView(models.Model):
         snippet_key = '%s_%s' % (snippet_key, uuid.uuid4().hex)
         full_snippet_key = '%s.%s' % (app_name, snippet_key)
 
+        # find available name
+        current_website = self.env['website'].browse(self._context.get('website_id'))
+        website_domain = current_website.website_domain()
+        used_names = self.search(expression.AND([
+            [('name', '=like', '%s%%' % name)], website_domain
+        ])).mapped('name')
+        name = self._find_available_name(name, used_names)
+
         # html to xml to add '/' at the end of self closing tags like br, ...
-        xml_arch = etree.tostring(html.fromstring(arch))
+        xml_arch = etree.tostring(html.fromstring(arch), encoding='utf-8')
         new_snippet_view_values = {
             'name': name,
             'key': full_snippet_key,
@@ -346,6 +368,16 @@ class IrUiView(models.Model):
         }
         snippet_addition_view_values.update(self._snippet_save_view_values_hook())
         self.create(snippet_addition_view_values)
+
+    @api.model
+    def rename_snippet(self, name, view_id, template_key):
+        snippet_view = self.browse(view_id)
+        key = snippet_view.key.split('.')[1]
+        custom_key = self._get_snippet_addition_view_key(template_key, key)
+        snippet_addition_view = self.search([('key', '=', custom_key)])
+        if snippet_addition_view:
+            snippet_addition_view.name = name + ' Block'
+        snippet_view.name = name
 
     @api.model
     def delete_snippet(self, view_id, template_key):

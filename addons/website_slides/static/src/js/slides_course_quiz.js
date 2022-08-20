@@ -1,19 +1,18 @@
-odoo.define('website_slides.quiz', function (require) {
-    'use strict';
+/** @odoo-module **/
 
-    var publicWidget = require('web.public.widget');
-    var Dialog = require('web.Dialog');
-    var core = require('web.core');
-    var session = require('web.session');
+    import publicWidget from 'web.public.widget';
+    import Dialog from 'web.Dialog';
+    import  { qweb as QWeb, _t } from 'web.core';
+    import session from 'web.session';
+    import { Markup } from 'web.utils';
+    import CourseJoin from '@website_slides/js/slides_course_join';
+    import QuestionFormWidget from '@website_slides/js/slides_course_quiz_question_form';
+    import SlideQuizFinishModal from '@website_slides/js/slides_course_quiz_finish';
 
-    var CourseJoinWidget = require('website_slides.course.join.widget').courseJoinWidget;
-    var QuestionFormWidget = require('website_slides.quiz.question.form');
-    var SlideQuizFinishModal = require('website_slides.quiz.finish');
+    import SlideEnroll from '@website_slides/js/slides_course_enroll_email';
 
-    var SlideEnrollDialog = require('website_slides.course.enroll').slideEnrollDialog;
-
-    var QWeb = core.qweb;
-    var _t = core._t;
+    const CourseJoinWidget = CourseJoin.courseJoinWidget;
+    const SlideEnrollDialog = SlideEnroll.slideEnrollDialog;
 
     /**
      * This widget is responsible of displaying quiz questions and propositions. Submitting the quiz will fetch the
@@ -342,35 +341,39 @@ odoo.define('website_slides.quiz', function (require) {
          *
          * @private
          */
-        _submitQuiz: function () {
-            var self = this;
-
-            return this._rpc({
+         async _submitQuiz() {
+            const data = await this._rpc({
                 route: '/slides/slide/quiz/submit',
                 params: {
-                    slide_id: self.slide.id,
+                    slide_id: this.slide.id,
                     answer_ids: this._getQuizAnswers(),
                 }
-            }).then(function (data) {
-                if (data.error) {
-                    self._alertShow(data.error);
-                } else {
-                    self.quiz = _.extend(self.quiz, data);
-                    if (data.completed) {
-                        self._disableAnswers();
-                        new SlideQuizFinishModal(self, {
-                            quiz: self.quiz,
-                            hasNext: self.slide.hasNext,
-                            userId: self.userId
-                        }).open();
-                        self.slide.completed = true;
-                        self.trigger_up('slide_completed', {slide: self.slide, completion: data.channel_completion});
-                    }
-                    self._hideEditOptions();
-                    self._renderAnswersHighlightingAndComments();
-                    self._renderValidationInfo();
-                }
             });
+            if (data.error) {
+                this._alertShow(data.error);
+                return;
+            }
+            Object.assign(this.quiz, data);
+            const {rankProgress, completed, channel_completion: completion} = this.quiz;
+            // two of the rankProgress properties are HTML messages, mark if set
+            if ('description' in rankProgress) {
+                rankProgress['description'] = Markup(rankProgress['description'] || '');
+                rankProgress['previous_rank']['motivational'] =
+                    Markup(rankProgress['previous_rank']['motivational'] || '');
+            }
+            if (completed) {
+                this._disableAnswers();
+                new SlideQuizFinishModal(this, {
+                    quiz: this.quiz,
+                    hasNext: this.slide.hasNext,
+                    userId: this.userId
+                }).open();
+                this.slide.completed = true;
+                this.trigger_up('slide_completed', {slide: this.slide, completion});
+            }
+            this._hideEditOptions();
+            this._renderAnswersHighlightingAndComments();
+            this._renderValidationInfo();
         },
 
         /**
@@ -700,7 +703,7 @@ odoo.define('website_slides.quiz', function (require) {
                     questions: self._extractQuestionsAndAnswers(),
                     sessionAnswers: slideData.sessionAnswers || [],
                     quizKarmaMax: slideData.quizKarmaMax,
-                    quizKarmaWon: slideData.quizKarmaWon,
+                    quizKarmaWon: slideData.quizKarmaWon || 0,
                     quizKarmaGain: slideData.quizKarmaGain,
                     quizAttemptsCount: slideData.quizAttemptsCount,
                 };
@@ -767,9 +770,6 @@ odoo.define('website_slides.quiz', function (require) {
         },
     });
 
-    return {
-        Quiz: Quiz,
-        ConfirmationDialog: ConfirmationDialog,
-        websiteSlidesQuizNoFullscreen: publicWidget.registry.websiteSlidesQuizNoFullscreen
-    };
-});
+    export var Quiz = Quiz;
+    export var ConfirmationDialog = ConfirmationDialog;
+    export const websiteSlidesQuizNoFullscree = publicWidget.registry.websiteSlidesQuizNoFullscreen;

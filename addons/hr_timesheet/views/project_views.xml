@@ -24,7 +24,7 @@
             <field name="inherit_id" ref="project.project_project_view_form_simplified"/>
             <field name="priority">24</field>
             <field name="arch" type="xml">
-                <field name="user_id" position="after">
+                <field name="user_id" position="before">
                     <field name="allow_timesheets"/>
                 </field>
             </field>
@@ -36,8 +36,8 @@
             <field name="inherit_id" ref="project.edit_project"/>
             <field name="priority">24</field>
             <field name="arch" type="xml">
-                <div name="button_box" position="inside">
-                    <button class="oe_stat_button" name="%(act_hr_timesheet_line_by_project)d" type="action" icon="fa-calendar" attrs="{'invisible': [('allow_timesheets', '=', False)]}" groups="hr_timesheet.group_hr_timesheet_user">
+                <xpath expr="//button[@name='%(project.project_milestone_all)d']" position="after">
+                    <button class="oe_stat_button" name="action_show_timesheets_by_employee_invoice_type" type="object" icon="fa-clock-o" attrs="{'invisible': [('allow_timesheets', '=', False)]}" groups="hr_timesheet.group_hr_timesheet_user">
                         <div class="o_field_widget o_stat_info">
                             <div class="oe_inline">
                                 <span class="o_stat_value mr-1">
@@ -50,18 +50,16 @@
                             <span class="o_stat_text">Recorded</span>
                         </div>
                     </button>
-                </div>
-                <xpath expr="//div[@id='rating_settings']/.." position="before">
-                    <div class="row mt16 o_settings_container">
-                        <div class="col-lg-6 o_setting_box"  id="timesheet_settings">
-                            <div class="o_setting_left_pane">
-                                <field name="allow_timesheets"/>
-                            </div>
-                            <div class="o_setting_right_pane">
-                                <label for="allow_timesheets" string="Timesheets"/>
-                                <div class="text-muted">
-                                    Log time on tasks
-                                </div>
+                </xpath>
+                <xpath expr="//div[@id='rating_settings']" position="before">
+                    <div class="col-lg-6 o_setting_box"  id="timesheet_settings">
+                        <div class="o_setting_left_pane">
+                            <field name="allow_timesheets"/>
+                        </div>
+                        <div class="o_setting_right_pane">
+                            <label for="allow_timesheets" string="Timesheets"/>
+                            <div class="text-muted">
+                                Log time on tasks
                             </div>
                         </div>
                     </div>
@@ -75,11 +73,18 @@
             <field name="inherit_id" ref="project.view_task_form2" />
             <field name="groups_id" eval="[(6,0, (ref('hr_timesheet.group_hr_timesheet_user'),))]"/>
             <field name="arch" type="xml">
+                <xpath expr="//field[@name='child_ids']/tree/field[@name='kanban_state']" position="after">
+                    <field name="planned_hours" widget="timesheet_uom_no_toggle" sum="Initially Planned Hours" optional="hide"/>
+                    <field name="effective_hours" widget="timesheet_uom" sum="Effective Hours" optional="hide"/>
+                    <field name="remaining_hours" widget="timesheet_uom" sum="Remaining Hours" optional="hide" decoration-danger="progress &gt;= 100" decoration-warning="progress &gt;= 80 and progress &lt; 100"/>
+                    <field name="progress" widget="progressbar" optional="hide"/>
+                </xpath>
                 <xpath expr="//notebook/page[@name='description_page']" position="after">
                     <field name="analytic_account_active" invisible="1"/>
                     <field name="allow_timesheets" invisible="1"/>
                     <field name="allow_subtasks" invisible="1"/>
                     <field name="encode_uom_in_days" invisible="1"/>
+                    <field name="subtask_count" invisible="1"/>
                     <page string="Timesheets" id="timesheets_tab" attrs="{'invisible': [('allow_timesheets', '=', False)]}">
                         <group>
                             <group>
@@ -107,7 +112,7 @@
                         <tree editable="bottom" string="Timesheet Activities" default_order="date">
                             <field name="date"/>
                             <field name="user_id" invisible="1"/>
-                            <field name="employee_id" required="1" widget="many2one_avatar_employee"/>
+                            <field name="employee_id" required="1" widget="many2one_avatar_employee" context="{'active_test': True}"/>
                             <field name="name" required="0"/>
                             <field name="unit_amount" widget="timesheet_uom" decoration-danger="unit_amount &gt; 24"/>
                             <field name="project_id" invisible="1"/>
@@ -117,7 +122,7 @@
                         <kanban class="o_kanban_mobile">
                             <field name="date"/>
                             <field name="user_id"/>
-                            <field name="employee_id" widget="many2one_avatar_employee"/>
+                            <field name="employee_id" widget="many2one_avatar_employee" context="{'active_test': True}"/>
                             <field name="name"/>
                             <field name="unit_amount" decoration-danger="unit_amount &gt; 24"/>
                             <field name="project_id"/>
@@ -152,8 +157,8 @@
                                  <group>
                                     <field name="date"/>
                                     <field name="user_id" invisible="1"/>
-                                    <field name="employee_id" required="1" widget="many2one_avatar_employee"/>
-                                    <field name="name"/>
+                                    <field name="employee_id" required="1" widget="many2one_avatar_employee" context="{'active_test': True}"/>
+                                    <field name="name" required="0"/>
                                     <field name="unit_amount" string="Duration" widget="float_time" decoration-danger="unit_amount &gt; 24"/>
                                     <field name="project_id" invisible="1"/>
                                     <field name="task_id" invisible="1"/>
@@ -170,9 +175,9 @@
                             </span>
                             <field name="effective_hours" widget="timesheet_uom" nolabel="1"/>
 
-                            <button name="action_view_subtask_timesheet" type="object" class="o_td_label o_form_label o_form_subtask_button oe_inline oe_link mr-0" attrs="{'invisible' : ['|', ('allow_subtasks', '=', False), ('subtask_effective_hours', '=', 0.0)]}">
-                                <span class="text-nowrap" attrs="{'invisible' : [('encode_uom_in_days', '=', True)]}">Sub-tasks Hours Spent</span>
-                                <span class="text-nowrap" attrs="{'invisible' : [('encode_uom_in_days', '=', False)]}">Sub-tasks Days Spent</span>
+                            <button name="action_view_subtask_timesheet" type="object" class="o_form_subtask_button oe_inline oe_link" attrs="{'invisible' : ['|', ('allow_subtasks', '=', False), ('subtask_effective_hours', '=', 0.0)]}">
+                                <span class="text-nowrap" attrs="{'invisible' : [('encode_uom_in_days', '=', True)]}">Hours Spent on Sub-tasks:</span>
+                                <span class="text-nowrap" attrs="{'invisible' : [('encode_uom_in_days', '=', False)]}">Days Spent on Sub-tasks:</span>
                             </button>
                             <field name="subtask_effective_hours" class="mt-2" widget="timesheet_uom"
                                    attrs="{'invisible' : ['|', ('allow_subtasks', '=', False), ('subtask_effective_hours', '=', 0.0)]}" nolabel="1"/>
@@ -196,6 +201,15 @@
                     </group>
                 </page>
                 </xpath>
+                <xpath expr="//field[@name='depend_on_ids']/tree//field[@name='company_id']" position="after">
+                    <field name="allow_subtasks" invisible="1" />
+                    <field name="planned_hours" widget="timesheet_uom_no_toggle" sum="Initially Planned Hours" optional="hide"/>
+                    <field name="effective_hours" widget="timesheet_uom" sum="Effective Hours" optional="hide"/>
+                    <field name="remaining_hours" widget="timesheet_uom" sum="Remaining Hours" optional="hide" decoration-danger="progress &gt;= 100" decoration-warning="progress &gt;= 80 and progress &lt; 100"/>
+                    <field name="subtask_effective_hours" widget="timesheet_uom" attrs="{'invisible' : [('allow_subtasks', '=', False)]}" optional="hide"/>
+                    <field name="total_hours_spent" widget="timesheet_uom" attrs="{'invisible' : [('allow_subtasks', '=', False)]}" optional="hide"/>
+                    <field name="progress" widget="progressbar" optional="hide" groups="hr_timesheet.group_hr_timesheet_user"/>
+                </xpath>
             </field>
         </record>
 
@@ -209,9 +223,9 @@
                     <field name="allow_subtasks" invisible="1"/>
                     <field name="planned_hours" widget="timesheet_uom_no_toggle" sum="Initially Planned Hours" optional="hide"/>
                     <field name="effective_hours" widget="timesheet_uom" sum="Effective Hours" optional="show"/>
-                    <field name="remaining_hours" widget="timesheet_uom" sum="Remaining Hours" optional="hide" decoration-danger="progress &gt;= 100" decoration-warning="progress &gt;= 80 and progress &lt; 100"/>
                     <field name="subtask_effective_hours" widget="timesheet_uom" attrs="{'invisible' : [('allow_subtasks', '=', False)]}" optional="hide"/>
                     <field name="total_hours_spent" widget="timesheet_uom" attrs="{'invisible' : [('allow_subtasks', '=', False)]}" optional="hide"/>
+                    <field name="remaining_hours" widget="timesheet_uom" sum="Remaining Hours" optional="hide" decoration-danger="progress &gt;= 100" decoration-warning="progress &gt;= 80 and progress &lt; 100"/>
                     <field name="progress" widget="progressbar" optional="show" groups="hr_timesheet.group_hr_timesheet_user"/>
                 </field>
             </field>
@@ -225,16 +239,25 @@
             <field name="arch" type="xml">
                 <field name="partner_id" position="after">
                     <field name="allow_timesheets" invisible="1"/>
+                    <field name="timesheet_count" invisible="1"/>
+                    <field name="remaining_hours" invisible="1"/>
+                    <field name="has_planned_hours_tasks" invisible="1"/>
+                    <field name="encode_uom_in_days" invisible="1"/>
                 </field>
-                <xpath expr="//div[hasclass('o_project_kanban_boxes')]" position="inside">
-                    <a t-if="record.allow_timesheets.raw_value" class="o_project_kanban_box o_project_timesheet_box" name="%(act_hr_timesheet_line_by_project)d" type="action" groups="hr_timesheet.group_hr_timesheet_user">
-                        <div>
-                            <span class="o_label">Timesheets</span>
-                        </div>
-                    </a>
+                <xpath expr="//div[hasclass('o_kanban_manage_view')]" position="inside">
+                    <div role="menuitem" t-if="record.allow_timesheets.raw_value and record.timesheet_count.raw_value" groups="hr_timesheet.group_hr_timesheet_user">
+                        <a name="%(act_hr_timesheet_line_by_project)d" type="action">Timesheets</a>
+                    </div>
                 </xpath>
-                <xpath expr="//a[@name='action_view_account_analytic_line']" position="attributes">
-                    <attribute name="t-if">record.analytic_account_id.raw_value and !record.allow_timesheets.raw_value</attribute>
+                <xpath expr="//div[hasclass('o_project_kanban_boxes')]" position="after">
+                    <t t-set="badge" t-value=""/>
+                    <t t-set="badge" t-value="'badge-danger'" t-if="record.remaining_hours.raw_value &lt; 0"/>
+                    <t t-set="title" t-value="'Remaining days'" t-if="record.encode_uom_in_days.raw_value"/>
+                    <t t-set="title" t-value="'Remaining hours'" t-else=""/>
+                    <div t-if="record.has_planned_hours_tasks.raw_value"
+                        t-attf-class="oe_kanban_align badge {{ badge }}" t-att-title="title">
+                        <field name="remaining_hours" widget="timesheet_uom"/>
+                    </div>
                 </xpath>
             </field>
         </record>
@@ -271,10 +294,56 @@
             <field name="model">project.task</field>
             <field name="inherit_id" ref="project.view_task_search_form"/>
             <field name="arch" type="xml">
+                <xpath expr="//filter[@name='my_tasks']" position='after'>
+                    <filter string="My Team's Tasks" name="my_team_tasks" domain="[('user_ids.employee_parent_id.user_id', '=', uid)]"/>
+                </xpath>
                 <xpath expr="//filter[@name='late']" position='after'>
                     <filter string="Tasks in Overtime" name="overtime" domain="[('overtime', '&gt;', 0)]"/>
                 </xpath>
             </field>
+        </record>
+
+        <record id="project_task_view_graph" model="ir.ui.view">
+            <field name="name">project.task.view.graph.inherited</field>
+            <field name="model">project.task</field>
+            <field name="inherit_id" ref="project.view_project_task_graph"/>
+            <field name="arch" type="xml">
+                <xpath expr="//graph" position="attributes">
+                    <attribute name="js_class">hr_timesheet_graphview</attribute>
+                </xpath>
+                <xpath expr="//field[@name='stage_id']" position='after'>
+                    <field name="planned_hours" widget="timesheet_uom" type="measure"/>
+                    <field name="remaining_hours" widget="timesheet_uom" type="measure"/>
+                    <field name="effective_hours" widget="timesheet_uom" type="measure"/>
+                    <field name="total_hours_spent" widget="timesheet_uom" type="measure"/>
+                    <field name="overtime" widget="timesheet_uom" type="measure"/>
+                    <field name="subtask_effective_hours" widget="timesheet_uom" type="measure"/>
+                </xpath>
+            </field>
+        </record>
+
+        <record id="project_task_view_pivot" model="ir.ui.view">
+            <field name="name">project.task.view.pivot.inherited</field>
+            <field name="model">project.task</field>
+            <field name="inherit_id" ref="project.view_project_task_pivot"/>
+            <field name="arch" type="xml">
+                <xpath expr="//field[@name='stage_id']" position='after'>
+                    <field name="planned_hours" widget="timesheet_uom" type="measure"/>
+                    <field name="remaining_hours" widget="timesheet_uom" type="measure"/>
+                    <field name="effective_hours" widget="timesheet_uom" type="measure"/>
+                    <field name="total_hours_spent" widget="timesheet_uom" type="measure"/>
+                    <field name="overtime" widget="timesheet_uom" type="measure"/>
+                    <field name="subtask_effective_hours" widget="timesheet_uom" type="measure"/>
+                </xpath>
+            </field>
+        </record>
+
+        <record id="project.open_view_project_all" model="ir.actions.act_window">
+            <field name="domain">[('is_internal_project', '=', False)]</field>
+        </record>
+
+        <record id="project.open_view_project_all_group_stage" model="ir.actions.act_window">
+            <field name="domain">[('is_internal_project', '=', False)]</field>
         </record>
 
     </data>

@@ -1,46 +1,19 @@
-odoo.define('mail/static/src/components/thread_preview/thread_preview.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    MessageAuthorPrefix: require('mail/static/src/components/message_author_prefix/message_author_prefix.js'),
-    PartnerImStatusIcon: require('mail/static/src/components/partner_im_status_icon/partner_im_status_icon.js'),
-};
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
-const mailUtils = require('mail.utils');
+import * as mailUtils from '@mail/js/utils';
+
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 const { useRef } = owl.hooks;
 
-class ThreadPreview extends Component {
+export class ThreadPreview extends Component {
 
     /**
      * @override
      */
     constructor(...args) {
         super(...args);
-        useStore(props => {
-            const thread = this.env.models['mail.thread'].get(props.threadLocalId);
-            let lastMessageAuthor;
-            let lastMessage;
-            if (thread) {
-                const orderedMessages = thread.orderedMessages;
-                lastMessage = orderedMessages[orderedMessages.length - 1];
-            }
-            if (lastMessage) {
-                lastMessageAuthor = lastMessage.author;
-            }
-            return {
-                isDeviceMobile: this.env.messaging.device.isMobile,
-                lastMessage: lastMessage ? lastMessage.__state : undefined,
-                lastMessageAuthor: lastMessageAuthor
-                    ? lastMessageAuthor.__state
-                    : undefined,
-                thread: thread ? thread.__state : undefined,
-                threadCorrespondent: thread && thread.correspondent
-                    ? thread.correspondent.__state
-                    : undefined,
-            };
-        });
         /**
          * Reference of the "mark as read" button. Useful to disable the
          * top-level click handler when clicking on this specific button.
@@ -59,9 +32,9 @@ class ThreadPreview extends Component {
      */
     image() {
         if (this.thread.correspondent) {
-            return `/web/image/res.partner/${this.thread.correspondent.id}/image_128`;
+            return this.thread.correspondent.avatarUrl;
         }
-        return `/web/image/mail.channel/${this.thread.id}/image_128`;
+        return `/web/image/mail.channel/${this.thread.id}/avatar_128?unique=${this.thread.avatarCacheKey}`;
     }
 
     /**
@@ -80,7 +53,7 @@ class ThreadPreview extends Component {
      * @returns {mail.thread}
      */
     get thread() {
-        return this.env.models['mail.thread'].get(this.props.threadLocalId);
+        return this.messaging && this.messaging.models['mail.thread'].get(this.props.threadLocalId);
     }
 
     //--------------------------------------------------------------------------
@@ -98,8 +71,8 @@ class ThreadPreview extends Component {
             return;
         }
         this.thread.open();
-        if (!this.env.messaging.device.isMobile) {
-            this.env.messaging.messagingMenu.close();
+        if (!this.messaging.device.isMobile) {
+            this.messaging.messagingMenu.close();
         }
     }
 
@@ -108,21 +81,18 @@ class ThreadPreview extends Component {
      * @param {MouseEvent} ev
      */
     _onClickMarkAsRead(ev) {
-        if (this.thread.lastMessage) {
-            this.thread.markAsSeen(this.thread.lastMessage.id);
+        if (this.thread.lastNonTransientMessage) {
+            this.thread.markAsSeen(this.thread.lastNonTransientMessage);
         }
     }
 
 }
 
 Object.assign(ThreadPreview, {
-    components,
     props: {
         threadLocalId: String,
     },
     template: 'mail.ThreadPreview',
 });
 
-return ThreadPreview;
-
-});
+registerMessagingComponent(ThreadPreview);

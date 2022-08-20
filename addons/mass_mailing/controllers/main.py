@@ -98,7 +98,7 @@ class MassMailController(http.Controller):
         if not consteq(token, tools.hmac(request.env(su=True), 'mass_mailing-mail_mail-open', mail_id)):
             raise BadRequest()
 
-        request.env['mailing.trace'].sudo().set_opened(mail_mail_ids=[mail_id])
+        request.env['mailing.trace'].sudo().set_opened(domain=[('mail_mail_id_int', 'in', [mail_id])])
         response = werkzeug.wrappers.Response()
         response.mimetype = 'image/gif'
         response.data = base64.b64decode(b'R0lGODlhAQABAIAAANvf7wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==')
@@ -114,10 +114,10 @@ class MassMailController(http.Controller):
                 raise exceptions.AccessDenied()
 
             res = mailing.convert_links()
-            base_url = request.env['ir.config_parameter'].sudo().get_param('web.base.url').rstrip('/')
+            base_url = mailing.get_base_url().rstrip('/')
             urls_to_replace = [
-               (base_url + '/unsubscribe_from_list', mailing._get_unsubscribe_url(email, res_id)),
-               (base_url + '/view', mailing._get_view_url(email, res_id))
+                (base_url + '/unsubscribe_from_list', mailing._get_unsubscribe_url(email, res_id)),
+                (base_url + '/view', mailing._get_view_url(email, res_id))
             ]
             for url_to_replace, new_url in urls_to_replace:
                 if url_to_replace in res[mailing_id]:
@@ -146,7 +146,7 @@ class MassMailController(http.Controller):
             country_code=country_code,
             mailing_trace_id=mailing_trace_id
         )
-        return werkzeug.utils.redirect(request.env['link.tracker'].get_url_from_code(code), 301)
+        return request.redirect(request.env['link.tracker'].get_url_from_code(code), code=301, local=False)
 
     @http.route('/mailing/blacklist/check', type='json', auth='public')
     def blacklist_check(self, mailing_id, res_id, email, token):

@@ -1,14 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
 
-<template id="assets_frontend" inherit_id="website.assets_frontend" name="Website Hr Recruitment Assets Frontend">
-    <xpath expr="//link[last()]" position="after">
-        <link rel="stylesheet" type="text/scss" href="/website_hr_recruitment/static/src/scss/website_hr_recruitment.scss"/>
-    </xpath>
-</template>
-
 <template id="job_edit_options" inherit_id="website.user_navbar" name="Edit Job Options">
-    <xpath expr="//li[@id='edit-page-menu']" position="after">
+    <xpath expr="//div[@id='edit-page-menu']" position="after">
         <t t-if="main_object._name == 'hr.job'" t-set="action" t-value="'hr_recruitment.action_hr_job'"/>
     </xpath>
 </template>
@@ -55,14 +49,14 @@
                                     <h3 class="text-secondary mt0 mb4">
                                         <span t-field="job.name"/>
                                     </h3>
-                                    <h5 t-if="job.no_of_recruitment &gt; 1">
+                                    <h5 t-if="job.no_of_recruitment &gt;= 1">
                                         <t t-esc="job.no_of_recruitment"/> open positions
                                     </h5>
-                                    <p t-if="editable"
+                                    <div t-if="editable"
                                        t-field="job.description"
                                        class="mt16 mb0 css_non_editable_mode_hidden"/>
-                                    <p t-esc="len((job.description or '').split(' ')) > 35 and '%s ...' % ' '.join(job.description.split(' ')[:35]) or job.description"
-                                        class="mt16 mb0 css_editable_mode_hidden"
+                                    <div t-esc="job.description or ''"
+                                        class="mt16 mb0 css_editable_mode_hidden o_website_hr_recruitment_job_description"
                                     />
                                     <div class="o_job_infos mt16">
                                         <span t-field="job.address_id" t-options='{
@@ -144,7 +138,7 @@
             <div id="jobs_section">
                 <section id="forms" class="s_website_form" data-vcss="001" data-snippet="s_website_form">
                     <div class="container">
-                        <form id="hr_recruitment_form" action="/website_form/" method="post" enctype="multipart/form-data" class="o_mark_required" data-mark="*" data-model_name="hr.applicant" data-success-mode="redirect" data-success-page="/job-thank-you" hide-change-model="true">
+                        <form id="hr_recruitment_form" action="/website/form/" method="post" enctype="multipart/form-data" class="o_mark_required" data-mark="*" data-model_name="hr.applicant" data-success-mode="redirect" data-success-page="/job-thank-you" hide-change-model="true">
                             <div class="s_website_form_rows row s_col_no_bgcolor">
                                 <div class="form-group col-12 s_website_form_field s_website_form_required s_website_form_model_required" data-type="char" data-name="Field">
                                     <div class="row s_col_no_resize s_col_no_bgcolor">
@@ -153,7 +147,7 @@
                                             <span class="s_website_form_mark"> *</span>
                                         </label>
                                         <div class="col-sm">
-                                            <input id="recruitment1" type="text" class="form-control s_website_form_input" name="partner_name" required=""/>
+                                            <input id="recruitment1" type="text" class="form-control s_website_form_input" name="partner_name" required="" data-fill-with="name"/>
                                         </div>
                                     </div>
                                 </div>
@@ -164,7 +158,7 @@
                                             <span class="s_website_form_mark"> *</span>
                                         </label>
                                         <div class="col-sm">
-                                            <input id="recruitment2" type="email" class="form-control s_website_form_input" name="email_from" required=""/>
+                                            <input id="recruitment2" type="email" class="form-control s_website_form_input" name="email_from" required="" data-fill-with="email"/>
                                         </div>
                                     </div>
                                 </div>
@@ -175,7 +169,7 @@
                                             <span class="s_website_form_mark"> *</span>
                                         </label>
                                         <div class="col-sm">
-                                            <input id="recruitment3" type="tel" class="form-control s_website_form_input" name="partner_phone" required=""/>
+                                            <input id="recruitment3" type="tel" class="form-control s_website_form_input" name="partner_phone" required="" data-fill-with="phone"/>
                                         </div>
                                     </div>
                                 </div>
@@ -257,11 +251,11 @@
                         <h6 class="s_rating_title">Customer Relationship</h6>
                         <div class="s_rating_icons o_not_editable">
                             <span class="s_rating_active_icons text-primary">
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
                             </span>
                             <span class="s_rating_inactive_icons text-primary">
                             </span>
@@ -271,11 +265,11 @@
                         <h6 class="s_rating_title">Personal Evolution</h6>
                         <div class="s_rating_icons o_not_editable">
                             <span class="s_rating_active_icons text-primary">
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
                             </span>
                             <span class="s_rating_inactive_icons text-primary">
                             </span>
@@ -285,13 +279,13 @@
                         <h6 class="s_rating_title">Autonomy</h6>
                         <div class="s_rating_icons o_not_editable">
                             <span class="s_rating_active_icons text-primary">
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
                             </span>
                             <span class="s_rating_inactive_icons text-primary">
-                                <i class="fa fa-fw fa-star-o"/>
+                                <i class="fa fa-star-o"/>
                             </span>
                         </div>
                     </div>
@@ -299,13 +293,13 @@
                         <h6 class="s_rating_title">Administrative Work</h6>
                         <div class="s_rating_icons o_not_editable">
                             <span class="s_rating_active_icons text-primary">
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
                             </span>
                             <span class="s_rating_inactive_icons text-primary">
-                                <i class="fa fa-fw fa-star-o"/>
-                                <i class="fa fa-fw fa-star-o"/>
-                                <i class="fa fa-fw fa-star-o"/>
+                                <i class="fa fa-star-o"/>
+                                <i class="fa fa-star-o"/>
+                                <i class="fa fa-star-o"/>
                             </span>
                         </div>
                     </div>
@@ -313,11 +307,11 @@
                         <h6 class="s_rating_title">Technical Expertise</h6>
                         <div class="s_rating_icons o_not_editable">
                             <span class="s_rating_active_icons text-primary">
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
-                                <i class="fa fa-fw fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
+                                <i class="fa fa-star"/>
                             </span>
                             <span class="s_rating_inactive_icons text-primary">
                             </span>
@@ -467,6 +461,7 @@
     <field name="name">Thank you (Recruitment)</field>
     <field name="type">qweb</field>
     <field name="key">website_hr_recruitment.thankyou</field>
+    <field name="cache_time">0</field>
     <field name="arch" type="xml">
         <t name="Thank you (Recruitment)" t-name="website_hr_recruitment.thankyou">
             <t t-call="website.layout">
@@ -489,7 +484,7 @@
                                         <h3 class="mb32 text-center">Your application has been sent to:</h3>
                                     </div>
                                     <div class="col-lg-1 offset-lg-4">
-                                        <p t-field="responsible.image_128" t-options="{'widget': 'image', 'qweb_img_responsive': False, 'class': 'rounded-circle d-block mx-auto o_image_64_cover'}"/>
+                                        <p t-field="responsible.avatar_128" t-options="{'widget': 'image', 'qweb_img_responsive': False, 'class': 'rounded-circle d-block mx-auto o_image_64_cover'}"/>
                                     </div>
                                     <div class="col-lg-5 o_responsible_data">
                                         <h4 class="mt0" t-field="responsible.name"/>
@@ -608,19 +603,7 @@
         <attribute name="name"/>
         <attribute name="t-att-data-module-id"/>
         <attribute name="t-att-data-module-shortdesc"/>
-        <attribute name="groups">hr_recruitment.group_hr_recruitment_manager</attribute>
-    </xpath>
-</template>
-
-<template id="website_hr_recuitment_assets_editor" name="Website HR Recruitment Assets Editor" inherit_id="website.assets_editor">
-    <xpath expr="." position="inside">
-        <script type="text/javascript" src="/website_hr_recruitment/static/src/js/website_hr_recruitment_editor.js"></script>
-    </xpath>
-</template>
-
-<template id="assets_tests" name="Website HR Recruitment Assets Tests" inherit_id="web.assets_tests">
-    <xpath expr="." position="inside">
-        <script type="text/javascript" src="/website_hr_recruitment/static/tests/tours/website_hr_recruitment.js"></script>
+        <attribute name="t-if">is_designer</attribute>
     </xpath>
 </template>
 

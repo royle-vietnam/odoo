@@ -1,3 +1,4 @@
+/* global timapi */
 odoo.define('pos_six.payment', function (require) {
 "use strict";
 
@@ -7,8 +8,8 @@ var PaymentInterface = require('point_of_sale.PaymentInterface');
 
 var _t = core._t;
 
-onTimApiReady = function () {};
-onTimApiPublishLogRecord = function (record) {
+window.onTimApiReady = function () {};
+window.onTimApiPublishLogRecord = function (record) {
     // Log only warning or errors
     if (record.matchesLevel(timapi.LogRecord.LogLevel.warning)) {
         timapi.log(String(record));
@@ -27,6 +28,19 @@ var PaymentSix = PaymentInterface.extend({
     init: function () {
         this._super.apply(this, arguments);
         this.enable_reversals();
+
+        var terminal_ip = this.payment_method.six_terminal_ip;
+        var instanced_payment_method = _.find(this.pos.payment_methods, function(payment_method) {
+            return payment_method.use_payment_terminal === "six"
+                && payment_method.six_terminal_ip === terminal_ip
+                && payment_method.payment_terminal
+        })
+        if (instanced_payment_method !== undefined) {
+            var payment_terminal = instanced_payment_method.payment_terminal;
+            this.terminal = payment_terminal.terminal;
+            this.terminalListener = payment_terminal.terminalListener;
+            return;
+        }
 
         var settings = new timapi.TerminalSettings();
         settings.connectionMode = timapi.constants.ConnectionMode.onFixIp;

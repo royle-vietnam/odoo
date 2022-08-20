@@ -1,9 +1,8 @@
-odoo.define('snailmail/static/src/components/snailmail_error_dialog/snailmail_error_dialog.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
-const Dialog = require('web.OwlDialog');
+import Dialog from 'web.OwlDialog';
 
 const { Component } = owl;
 const { useRef } = owl.hooks;
@@ -15,22 +14,6 @@ class SnailmailErrorDialog extends Component {
      */
     constructor(...args) {
         super(...args);
-        useStore(props => {
-            const message = this.env.models['mail.message'].get(props.messageLocalId);
-            const notifications = message ? message.notifications : [];
-            return {
-                message: message ? message.__state : undefined,
-                notifications: notifications.map(notification =>
-                    notification ? notification.__state : undefined
-                ),
-                snailmail_credits_url: this.env.messaging.snailmail_credits_url,
-                snailmail_credits_url_trial: this.env.messaging.snailmail_credits_url_trial,
-            };
-        }, {
-            compareDepth: {
-                notifications: 1,
-            },
-        });
         // to manually trigger the dialog close event
         this._dialogRef = useRef('dialog');
     }
@@ -53,7 +36,7 @@ class SnailmailErrorDialog extends Component {
      * @returns {mail.message}
      */
     get message() {
-        return this.env.models['mail.message'].get(this.props.messageLocalId);
+        return this.messaging && this.messaging.models['mail.message'].get(this.props.messageLocalId);
     }
 
     /**
@@ -108,6 +91,6 @@ Object.assign(SnailmailErrorDialog, {
     template: 'snailmail.SnailmailErrorDialog',
 });
 
-return SnailmailErrorDialog;
+registerMessagingComponent(SnailmailErrorDialog);
 
-});
+export default SnailmailErrorDialog;

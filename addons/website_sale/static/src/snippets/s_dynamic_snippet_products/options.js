@@ -4,6 +4,8 @@ odoo.define('website_sale.s_dynamic_snippet_products_options', function (require
 const options = require('web_editor.snippets.options');
 const s_dynamic_snippet_carousel_options = require('website.s_dynamic_snippet_carousel_options');
 
+var wUtils = require('website.utils');
+
 const dynamicSnippetProductsOptions = s_dynamic_snippet_carousel_options.extend({
 
     /**
@@ -12,42 +14,18 @@ const dynamicSnippetProductsOptions = s_dynamic_snippet_carousel_options.extend(
      */
     init: function () {
         this._super.apply(this, arguments);
+        this.modelNameFilter = 'product.product';
+        const productTemplateId = $("input.product_template_id");
+        this.hasProductTemplateId = productTemplateId.val();
+        if (!this.hasProductTemplateId) {
+            this.contextualFilterDomain.push(['product_cross_selling', '=', false]);
+        }
         this.productCategories = {};
     },
-    /**
-     *
-     * @override
-     */
-    onBuilt: function () {
-        this._super.apply(this, arguments);
-        this._rpc({
-            model: 'ir.model.data',
-            method: 'search_read',
-            kwargs: {
-                domain: [['module', '=', 'website_sale'], ['model', '=', 'website.snippet.filter']],
-                fields: ['id', 'res_id'],
-            }
-        }).then((data) => {
-            this.$target.get(0).dataset.filterId = data[0].res_id;
-            this.$target.get(0).dataset.numberOfRecords = this.dynamicFilters[data[0].res_id].limit;
-        });
-    },
-
     //--------------------------------------------------------------------------
     // Private
     //--------------------------------------------------------------------------
 
-    /**
-     *
-     * @override
-     * @private
-     */
-    _computeWidgetVisibility: function (widgetName, params) {
-        if (widgetName === 'filter_opt') {
-            return false;
-        }
-        return this._super.apply(this, arguments);
-    },
     /**
      * Fetches product categories.
      * @private
@@ -58,7 +36,7 @@ const dynamicSnippetProductsOptions = s_dynamic_snippet_carousel_options.extend(
             model: 'product.public.category',
             method: 'search_read',
             kwargs: {
-                domain: [],
+                domain: wUtils.websiteDomain(this),
                 fields: ['id', 'name'],
             }
         });
@@ -68,8 +46,9 @@ const dynamicSnippetProductsOptions = s_dynamic_snippet_carousel_options.extend(
      * @override
      * @private
      */
-    _renderCustomXML: function (uiFragment) {
-        return Promise.all([this._super.apply(this, arguments), this._renderProductCategorySelector(uiFragment)]);
+    _renderCustomXML: async function (uiFragment) {
+        await this._super.apply(this, arguments);
+        await this._renderProductCategorySelector(uiFragment);
     },
     /**
      * Renders the product categories option selector content into the provided uiFragment.
@@ -84,7 +63,14 @@ const dynamicSnippetProductsOptions = s_dynamic_snippet_carousel_options.extend(
         const productCategoriesSelectorEl = uiFragment.querySelector('[data-name="product_category_opt"]');
         return this._renderSelectUserValueWidgetButtons(productCategoriesSelectorEl, this.productCategories);
     },
-
+    /**
+     * @override
+     * @private
+     */
+    _setOptionsDefaultValues: function () {
+        this._setOptionValue('productCategoryId', 'all');
+        this._super.apply(this, arguments);
+    },
 });
 
 options.registry.dynamic_snippet_products = dynamicSnippetProductsOptions;

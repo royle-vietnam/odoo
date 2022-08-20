@@ -34,6 +34,13 @@ class StockRule(models.Model):
     _order = "sequence, id"
     _check_company_auto = True
 
+    @api.model
+    def default_get(self, fields_list):
+        res = super().default_get(fields_list)
+        if 'company_id' in fields_list and not res['company_id']:
+            res['company_id'] = self.env.company.id
+        return res
+
     name = fields.Char(
         'Name', required=True, translate=True,
         help="This field will fill the packing origin and the name of its moves")
@@ -64,7 +71,7 @@ class StockRule(models.Model):
              "Trigger Another Rule: the system will try to find a stock rule to bring the products in the source location. The available stock will be ignored.\n"
              "Take From Stock, if Unavailable, Trigger Another Rule: the products will be taken from the available stock of the source location."
              "If there is no stock available, the system will try to find a  rule to bring the products in the source location.")
-    route_sequence = fields.Integer('Route Sequence', related='route_id.sequence', store=True, readonly=False, compute_sudo=True)
+    route_sequence = fields.Integer('Route Sequence', related='route_id.sequence', store=True, compute_sudo=True)
     picking_type_id = fields.Many2one(
         'stock.picking.type', 'Operation Type',
         required=True, check_company=True,
@@ -78,6 +85,9 @@ class StockRule(models.Model):
     propagate_cancel = fields.Boolean(
         'Cancel Next Move', default=False,
         help="When ticked, if the move created by this rule is cancelled, the next move will be cancelled too.")
+    propagate_carrier = fields.Boolean(
+        'Propagation of carrier', default=False,
+        help="When ticked, carrier of shipment will be propgated.")
     warehouse_id = fields.Many2one('stock.warehouse', 'Warehouse', check_company=True)
     propagate_warehouse_id = fields.Many2one(
         'stock.warehouse', 'Warehouse to Propagate',
@@ -85,7 +95,7 @@ class StockRule(models.Model):
     auto = fields.Selection([
         ('manual', 'Manual Operation'),
         ('transparent', 'Automatic No Step Added')], string='Automatic Move',
-        default='manual', index=True, required=True,
+        default='manual', required=True,
         help="The 'Manual Operation' value will create a stock move after the current one. "
              "With 'Automatic No Step Added', the location is replaced in the original move.")
     rule_message = fields.Html(compute='_compute_action_message')
@@ -164,13 +174,19 @@ class StockRule(models.Model):
         Care this function is not call by method run. It is called explicitely
         in stock_move.py inside the method _push_apply
         """
+        self.ensure_one()
         new_date = fields.Datetime.to_string(move.date + relativedelta(days=self.delay))
         if self.auto == 'transparent':
+            old_dest_location = move.location_dest_id
             move.write({'date': new_date, 'location_dest_id': self.location_id.id})
+            # make sure the location_dest_id is consistent with the move line location dest
+            if move.move_line_ids:
+                move.move_line_ids.location_dest_id = move.location_dest_id._get_putaway_strategy(move.product_id) or move.location_dest_id
+
             # avoid looping if a push rule is not well configured; otherwise call again push_apply to see if a next step is defined
-            if self.location_id != move.location_dest_id:
+            if self.location_id != old_dest_location:
                 # TDE FIXME: should probably be done in the move model IMO
-                move._push_apply()
+                return move._push_apply()[:1]
         else:
             new_move_vals = self._push_prepare_move_copy_values(move, new_date)
             new_move = move.sudo().copy(new_move_vals)
@@ -178,7 +194,7 @@ class StockRule(models.Model):
                 new_move.write({'procure_method': 'make_to_stock'})
             if not new_move.location_id.should_bypass_reservation():
                 move.write({'move_dest_ids': [(4, new_move.id)]})
-            new_move._action_confirm()
+            return new_move
 
     def _push_prepare_move_copy_values(self, move_to_copy, new_date):
         company_id = self.company_id.id
@@ -222,16 +238,24 @@ class StockRule(models.Model):
             forecasted_qties_by_loc[location] = {product.id: product.free_qty for product in products}
 
         # Prepare the move values, adapt the `procure_method` if needed.
+        procurements = sorted(procurements, key=lambda proc: float_compare(proc[0].product_qty, 0.0, precision_rounding=proc[0].product_uom.rounding) > 0)
         for procurement, rule in procurements:
             procure_method = rule.procure_method
             if rule.procure_method == 'mts_else_mto':
                 qty_needed = procurement.product_uom._compute_quantity(procurement.product_qty, procurement.product_id.uom_id)
-                qty_available = forecasted_qties_by_loc[rule.location_src_id][procurement.product_id.id]
-                if float_compare(qty_needed, qty_available, precision_rounding=procurement.product_id.uom_id.rounding) <= 0:
-                    procure_method = 'make_to_stock'
-                    forecasted_qties_by_loc[rule.location_src_id][procurement.product_id.id] -= qty_needed
-                else:
+                if float_compare(qty_needed, 0, precision_rounding=procurement.product_id.uom_id.rounding) <= 0:
                     procure_method = 'make_to_order'
+                    for move in procurement.values.get('group_id', self.env['procurement.group']).stock_move_ids:
+                        if move.rule_id == rule and float_compare(move.product_uom_qty, 0, precision_rounding=move.product_uom.rounding) > 0:
+                            procure_method = move.procure_method
+                            break
+                    forecasted_qties_by_loc[rule.location_src_id][procurement.product_id.id] -= qty_needed
+                elif float_compare(qty_needed, forecasted_qties_by_loc[rule.location_src_id][procurement.product_id.id],
+                                   precision_rounding=procurement.product_id.uom_id.rounding) > 0:
+                    procure_method = 'make_to_order'
+                else:
+                    forecasted_qties_by_loc[rule.location_src_id][procurement.product_id.id] -= qty_needed
+                    procure_method = 'make_to_stock'
 
             move_values = rule._get_stock_move_values(*procurement)
             move_values['procure_method'] = procure_method
@@ -281,6 +305,15 @@ class StockRule(models.Model):
         if not self.location_id.should_bypass_reservation():
             move_dest_ids = values.get('move_dest_ids', False) and [(4, x.id) for x in values['move_dest_ids']] or []
 
+        # when create chained moves for inter-warehouse transfers, set the warehouses as partners
+        if not partner and move_dest_ids:
+            move_dest = values['move_dest_ids']
+            if location_id == company_id.internal_transit_location_id:
+                partners = move_dest.location_dest_id.warehouse_id.partner_id
+                if len(partners) == 1:
+                    partner = partners
+                move_dest.partner_id = self.location_src_id.warehouse_id.partner_id or self.company_id.partner_id
+
         move_values = {
             'name': name[:2000],
             'company_id': self.company_id.id or self.location_src_id.company_id.id or self.location_id.company_id.id or company_id.id,
@@ -299,28 +332,36 @@ class StockRule(models.Model):
             'route_ids': [(4, route.id) for route in values.get('route_ids', [])],
             'warehouse_id': self.propagate_warehouse_id.id or self.warehouse_id.id,
             'date': date_scheduled,
-            'date_deadline': date_deadline,
+            'date_deadline': False if self.group_propagation_option == 'fixed' else date_deadline,
             'propagate_cancel': self.propagate_cancel,
             'description_picking': picking_description,
             'priority': values.get('priority', "0"),
             'orderpoint_id': values.get('orderpoint_id') and values['orderpoint_id'].id,
+            'product_packaging_id': values.get('product_packaging_id') and values['product_packaging_id'].id,
         }
         for field in self._get_custom_move_fields():
             if field in values:
                 move_values[field] = values.get(field)
         return move_values
 
-    def _get_lead_days(self, product):
+    def _get_lead_days(self, product, **values):
         """Returns the cumulative delay and its description encountered by a
         procurement going through the rules in `self`.
 
         :param product: the product of the procurement
         :type product: :class:`~odoo.addons.product.models.product.ProductProduct`
         :return: the cumulative delay and cumulative delay's description
-        :rtype: tuple
+        :rtype: tuple[int, list[str, str]]
         """
         delay = sum(self.filtered(lambda r: r.action in ['pull', 'pull_push']).mapped('delay'))
-        delay_description = ''.join(['<tr><td>%s %s</td><td class="text-right">+ %d %s</td></tr>' % (_('Delay on'), html_escape(rule.name), rule.delay, _('day(s)')) for rule in self if rule.action in ['pull', 'pull_push'] and rule.delay])
+        if self.env.context.get('bypass_delay_description'):
+            delay_description = []
+        else:
+            delay_description = [
+                (_('Delay on %s', rule.name), _('+ %d day(s)', rule.delay))
+                for rule in self
+                if rule.action in ['pull', 'pull_push'] and rule.delay
+            ]
         return delay, delay_description
 
 
@@ -391,7 +432,7 @@ class ProcurementGroup(models.Model):
         actions_to_run = defaultdict(list)
         procurement_errors = []
         for procurement in procurements:
-            procurement.values.setdefault('company_id', self.env.company)
+            procurement.values.setdefault('company_id', procurement.location_id.company_id)
             procurement.values.setdefault('priority', '0')
             procurement.values.setdefault('date_planned', fields.Datetime.now())
             if (
@@ -425,7 +466,7 @@ class ProcurementGroup(models.Model):
         return True
 
     @api.model
-    def _search_rule(self, route_ids, product_id, warehouse_id, domain):
+    def _search_rule(self, route_ids, packaging_id, product_id, warehouse_id, domain):
         """ First find a rule among the ones defined on the procurement
         group, then try on the routes defined for the product, finally fallback
         on the default behavior
@@ -436,6 +477,10 @@ class ProcurementGroup(models.Model):
         res = self.env['stock.rule']
         if route_ids:
             res = Rule.search(expression.AND([[('route_id', 'in', route_ids.ids)], domain]), order='route_sequence, sequence', limit=1)
+        if not res and packaging_id:
+            packaging_routes = packaging_id.route_ids
+            if packaging_routes:
+                res = Rule.search(expression.AND([[('route_id', 'in', packaging_routes.ids)], domain]), order='route_sequence, sequence', limit=1)
         if not res:
             product_routes = product_id.route_ids | product_id.categ_id.total_route_ids
             if product_routes:
@@ -455,56 +500,60 @@ class ProcurementGroup(models.Model):
         location = location_id
         while (not result) and location:
             domain = self._get_rule_domain(location, values)
-            result = self._search_rule(values.get('route_ids', False), product_id, values.get('warehouse_id', False), domain)
+            result = self._search_rule(values.get('route_ids', False), values.get('product_packaging_id', False), product_id, values.get('warehouse_id', False), domain)
             location = location.location_id
         return result
 
     @api.model
     def _get_rule_domain(self, location, values):
-        return [('location_id', '=', location.id), ('action', '!=', 'push')]
-
-    def _merge_domain(self, values, rule, group_id):
-        return [
-            ('group_id', '=', group_id), # extra logic?
-            ('location_id', '=', rule.location_src_id.id),
-            ('location_dest_id', '=', values['location_id'].id),
-            ('picking_type_id', '=', rule.picking_type_id.id),
-            ('picking_id.printed', '=', False),
-            ('picking_id.state', 'in', ['draft', 'confirmed', 'waiting', 'assigned']),
-            ('picking_id.backorder_id', '=', False),
-            ('product_id', '=', values['product_id'].id)]
+        domain = ['&', ('location_id', '=', location.id), ('action', '!=', 'push')]
+        # In case the method is called by the superuser, we need to restrict the rules to the
+        # ones of the company. This is not useful as a regular user since there is a record
+        # rule to filter out the rules based on the company.
+        if self.env.su and values.get('company_id'):
+            domain_company = ['|', ('company_id', '=', False), ('company_id', 'child_of', values['company_id'].ids)]
+            domain = expression.AND([domain, domain_company])
+        return domain
 
     @api.model
-    def _get_moves_to_assign_domain(self):
-        return expression.AND([
-            [('state', 'in', ['confirmed', 'partially_available'])],
-            [('product_uom_qty', '!=', 0.0)]
-        ])
+    def _get_moves_to_assign_domain(self, company_id):
+        moves_domain = [
+            ('state', 'in', ['confirmed', 'partially_available']),
+            ('product_uom_qty', '!=', 0.0),
+            ('reservation_date', '<=', fields.Date.today())
+        ]
+        if company_id:
+            moves_domain = expression.AND([[('company_id', '=', company_id)], moves_domain])
+        return moves_domain
 
     @api.model
     def _run_scheduler_tasks(self, use_new_cursor=False, company_id=False):
         # Minimum stock rules
         domain = self._get_orderpoint_domain(company_id=company_id)
         orderpoints = self.env['stock.warehouse.orderpoint'].search(domain)
+        # ensure that qty_* which depends on datetime.now() are correctly
+        # recomputed
+        orderpoints.sudo()._compute_qty_to_order()
+        if use_new_cursor:
+            self._cr.commit()
         orderpoints.sudo()._procure_orderpoint_confirm(use_new_cursor=use_new_cursor, company_id=company_id, raise_user_error=False)
 
         # Search all confirmed stock_moves and try to assign them
-        domain = self._get_moves_to_assign_domain()
+        domain = self._get_moves_to_assign_domain(company_id)
         moves_to_assign = self.env['stock.move'].search(domain, limit=None,
-            order='priority desc, date asc')
-        for moves_chunk in split_every(100, moves_to_assign.ids):
-            self.env['stock.move'].browse(moves_chunk)._action_assign()
+            order='reservation_date, priority desc, date asc, id asc')
+        for moves_chunk in split_every(1000, moves_to_assign.ids):
+            self.env['stock.move'].browse(moves_chunk).sudo()._action_assign()
             if use_new_cursor:
                 self._cr.commit()
-
-        if use_new_cursor:
-            self._cr.commit()
+                _logger.info("A batch of %d moves are assigned and committed", len(moves_chunk))
 
         # Merge duplicated quants
         self.env['stock.quant']._quant_tasks()
 
         if use_new_cursor:
             self._cr.commit()
+            _logger.info("_run_scheduler_tasks is finished and committed")
 
     @api.model
     def run_scheduler(self, use_new_cursor=False, company_id=False):
@@ -517,6 +566,9 @@ class ProcurementGroup(models.Model):
                 self = self.with_env(self.env(cr=cr))  # TDE FIXME
 
             self._run_scheduler_tasks(use_new_cursor=use_new_cursor, company_id=company_id)
+        except Exception:
+            _logger.error("Error during stock scheduler", exc_info=True)
+            raise
         finally:
             if use_new_cursor:
                 try:

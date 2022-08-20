@@ -6,13 +6,15 @@
         <div class="o_wevent_online o_wevent_online_bg o_wesession_index">
             <!-- Options -->
             <t t-set="option_widescreen" t-value="option_widescreen or False"/>
-            <t t-set="option_track_wishlist" t-value="not event.is_done and request.website.viewref('website_event_track.session_topbar_wishlist').active"/>
+            <t t-set="option_track_wishlist" t-value="not event.is_done and is_view_active('website_event_track.session_topbar_wishlist')"/>
             <!-- Drag/Drop Area -->
             <div id="oe_structure_wesession_track_index_1" class="oe_structure"/>
             <!-- Content -->
             <div t-att-class="'o_wevent_online_page_container %s' % ('container pb-3' if not option_widescreen else 'pb-3')">
-                <div class="row mb-5 mx-0">
-                    <t t-call="website_event_track.event_track_aside"/>
+                <div t-att-class="'row mb-5 mx-0 %s' % ('justify-content-center' if not tracks_other else '')">
+                    <t t-if="tracks_other">
+                        <t t-call="website_event_track.event_track_aside"/>
+                    </t>
                     <t t-call="website_event_track.event_track_content"/>
                 </div>
             </div>
@@ -30,7 +32,7 @@
     <div name="o_wesession_track_main"
          t-att-class="'col-12 o_wevent_online_page_main o_wesession_track_main bg-white p-0 %s' % ('col-md-9 col-lg-10' if option_widescreen else 'col-md-8 col-lg-9')">
         <!-- LIVE INFORMATIONS -->
-        <div t-if="not track.event_id.is_ongoing" class="pt-3">
+        <div t-if="not track.event_id.is_ongoing and track.event_id.start_remaining" class="pt-3">
             <div class="mx-3 alert alert-warning">
                 Event <span t-esc="track.event_id.name" class="font-weight-bold"/>
                 <span t-if="track.event_id.start_today">
@@ -45,12 +47,10 @@
                 </span>
             </div>
         </div>
-        <div t-elif="track.track_start_remaining" class="pt-3">
-            <div class="mx-3 alert alert-warning">
-                Starting in
-                <span t-esc="track.track_start_remaining"
-                    t-options="{'widget': 'duration', 'digital': False, 'unit': 'second', 'round': 'minute'}"/>
-            </div>
+        <div t-elif="track.track_start_remaining">
+            <t t-call="website_event.display_timer_alert_widget">
+                <t t-set="time_to_live" t-value="track.track_start_remaining"/>
+            </t>
         </div>
         <!-- TRACK DESCRIPTION -->
         <div class="o_wesession_track_main_description overflow-auto">
@@ -135,9 +135,9 @@
 <!-- ============================================================ -->
 
 <template id="event_track_aside" name="Track: Aside">
-    <div t-att-class="'col-12 pl-0 pr-0 pr-md-3 o_wevent_online_page_aside o_wesession_track_aside %s' % ('col-md-3 col-lg-2' if option_widescreen else 'col-md-4 col-lg-3')">
+    <div t-att-class="'col-12 pl-0 pr-0 o_wevent_online_page_aside o_wesession_track_aside %s' % ('col-md-3 col-lg-2' if option_widescreen else 'col-md-4 col-lg-3')">
         <div class="bg-white pt-0 pt-md-3 o_wevent_online_page_aside_content">
-            <div class="mx-2" t-if="track.website_cta">
+            <div class="mx-2" t-if="track.date and track.website_cta">
                 <t t-set="cta_coundown" t-value="bool(track.website_cta_start_remaining)"/>
                 <div t-if="cta_coundown" class="text-center mt-2 mt-md-0 w-100 btn btn-primary d-none">
                     <t t-call="website_event.display_timer_widget">
@@ -175,13 +175,16 @@
                 <div class="tab-pane fade show active" id="track_list" role="tabpanel">
                     <ul class="list-unstyled mb-0">
                         <li t-foreach="tracks_other" t-as="track_other" class="w-100">
-                            <a t-if="user_event_manager or track_other.is_published"
+                            <a t-if="is_event_user or track_other.is_published"
+                                t-att-data-publish="track_other.website_published and 'on' or 'off'"
                                 class="d-block w-100 h-100 px-2 pt-2 pb-1 text-decoration-none"
                                 t-att-href="track_other.website_url">
                                 <t t-call="website_event_track.event_track_aside_other_track"/>
                             </a>
                             <div t-else="" class="text-muted px-2 pt-2 pb-1">
-                                <t t-call="website_event_track.event_track_aside_other_track"/>
+                                <div t-att-data-publish="track_other.website_published and 'on' or 'off'">
+                                    <t t-call="website_event_track.event_track_aside_other_track"/>
+                                </div>
                             </div>
                         </li>
                     </ul>
@@ -196,6 +199,8 @@
     <div class="d-flex align-items-center">
         <small class="text-muted" t-esc="track_other.partner_name"/>
         <div class="d-inline-block ml-auto o_wesession_track_aside_info text-truncate">
+            <small t-if="not track_other.website_published and user_event_manager"
+                class="badge badge-danger">Unpublished</small>
             <small t-if="track_other.is_track_live and not track_other.is_track_done"
                 class="badge badge-danger">Live</small>
             <small t-elif="track_other.is_track_done"

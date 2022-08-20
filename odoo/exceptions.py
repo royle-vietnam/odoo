@@ -121,13 +121,13 @@ class ValidationError(UserError):
 
 
 # Deprecated exceptions, only kept for backward compatibility, may be
-# removed in the future *without* any futher notice than the Deprecation
+# removed in the future *without* any further notice than the Deprecation
 # Warning.
 
 class except_orm(UserError):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, name, value=None):
         warnings.warn("except_orm is a deprecated alias to UserError.", DeprecationWarning)
-        super().__init__(*args, **kwargs)
+        super().__init__(f"{name}: {value}")
 
 class Warning(UserError):
     def __init__(self, *args, **kwargs):

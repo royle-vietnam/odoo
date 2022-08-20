@@ -22,7 +22,7 @@ this plan comply with this practices.
 This module has been tested as base for more of 1000 companies, because
 it is based in a mixtures of most common software in the Venezuelan
 market what will allow for sure to accountants feel them first steps with
-Odoo more confortable.
+Odoo more comfortable.
 
 This module doesn't pretend be the total localization for Venezuela,
 but it will help you to start really quickly with Odoo in this country.
@@ -46,11 +46,12 @@ but you will need set manually account defaults for taxes.
              'data/l10n_ve_chart_data.xml',
              'data/account.account.template.csv',
              'data/l10n_ve_chart_post_data.xml',
-             'data/account_data.xml',
+             'data/account_tax_group_data.xml',
              'data/account_tax_data.xml',
              'data/account_chart_template_data.xml'
     ],
     'demo': [
         'demo/demo_company.xml',
     ],
+    'license': 'LGPL-3',
 }

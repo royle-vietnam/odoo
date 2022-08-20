@@ -32,12 +32,12 @@
                 <filter string="Unread Messages" name="message_needaction" domain="[('message_needaction', '=', True)]"/>
                 <separator/>
                 <filter invisible="1" string="Late Activities" name="activities_overdue"
-                    domain="[('activity_ids.date_deadline', '&lt;', context_today().strftime('%Y-%m-%d'))]"
+                    domain="[('my_activity_date_deadline', '&lt;', context_today().strftime('%Y-%m-%d'))]"
                     help="Show all records which has next action date is before today"/>
                 <filter invisible="1" string="Today Activities" name="activities_today"
-                    domain="[('activity_ids.date_deadline', '=', context_today().strftime('%Y-%m-%d'))]"/>
+                    domain="[('my_activity_date_deadline', '=', context_today().strftime('%Y-%m-%d'))]"/>
                 <filter invisible="1" string="Future Activities" name="activities_upcoming_all"
-                    domain="[('activity_ids.date_deadline', '&gt;', context_today().strftime('%Y-%m-%d'))]"/>
+                    domain="[('my_activity_date_deadline', '&gt;', context_today().strftime('%Y-%m-%d'))]"/>
                 <separator/>
                 <filter string="Archived" name="inactive" domain="[('archive', '=', True)]"/>
                 <group  expand='0' string='Group by...'>
@@ -68,9 +68,9 @@
                         <field name="kanban_state" class="oe_inline" widget="state_selection"/>
                     </div>
                     <div class="oe_title">
-                        <label for="name" class="oe_edit_only" string="Title"/>
+                        <label for="name" string="Request"/>
                         <h1>
-                            <field name="name" placeholder="Maintenance Request"/>
+                            <field name="name" placeholder="e.g. Screen not working"/>
                         </h1>
                     </div>
                     <group>
@@ -99,7 +99,9 @@
                             <field name="company_id" options="{'no_create': True}" groups="base.group_multi_company"/>
                         </group>
                     </group>
-                    <field name='description' placeholder="Internal Notes"/>
+                    <group>
+                        <field name='description' placeholder="Internal Notes"/>
+                    </group>
                 </sheet>
                 <div class="oe_chatter">
                     <field name="message_follower_ids"/>
@@ -345,8 +347,8 @@
                     </div>
                     <widget name="web_ribbon" title="Archived" bg_color="bg-danger" attrs="{'invisible': [('active', '=', True)]}"/>
                     <div class="oe_title">
-                        <label for="name" class="oe_edit_only"/>
-                        <h1><field name="name" string="Name" placeholder="Equipment Name"/></h1>
+                        <label for="name"/>
+                        <h1><field name="name" string="Name" placeholder="e.g. LED Monitor"/></h1>
                     </div>
                     <group>
                         <group>
@@ -457,10 +459,10 @@
                                 <div class="o_kanban_record_bottom">
                                     <div class="oe_kanban_bottom_left">
                                         <div class="badge badge-danger" t-if="!selection_mode and record.maintenance_open_count.raw_value" >
-                                            <t t-raw="record.maintenance_open_count.raw_value"/> Request
+                                            <t t-out="record.maintenance_open_count.raw_value"/> Request
                                         </div>
                                         <div class="badge badge-secondary" t-if="!selection_mode and record.next_action_date.raw_value" >
-                                            <t t-raw="moment(record.next_action_date.raw_value).format('MMMM Do')"/>
+                                            <t t-out="moment(record.next_action_date.raw_value).format('MMMM Do')"/>
                                         </div>
                                     </div>
                                     <div class="oe_kanban_bottom_right">
@@ -518,12 +520,12 @@
                 <filter string="Unread Messages" name="message_needaction" domain="[('message_needaction','=',True)]"/>
                 <separator/>
                 <filter invisible="1" string="Late Activities" name="activities_overdue"
-                    domain="[('activity_ids.date_deadline', '&lt;', context_today().strftime('%Y-%m-%d'))]"
+                    domain="[('my_activity_date_deadline', '&lt;', context_today().strftime('%Y-%m-%d'))]"
                     help="Show all records which has next action date is before today"/>
                 <filter invisible="1" string="Today Activities" name="activities_today"
-                    domain="[('activity_ids.date_deadline', '=', context_today().strftime('%Y-%m-%d'))]"/>
+                    domain="[('my_activity_date_deadline', '=', context_today().strftime('%Y-%m-%d'))]"/>
                 <filter invisible="1" string="Future Activities" name="activities_upcoming_all"
-                    domain="[('activity_ids.date_deadline', '&gt;', context_today().strftime('%Y-%m-%d'))]"/>
+                    domain="[('my_activity_date_deadline', '&gt;', context_today().strftime('%Y-%m-%d'))]"/>
                 <separator/>
                 <filter string="Archived" name="inactive" domain="[('active','=',False)]"/>
                 <group  expand='0' string='Group by...'>
@@ -594,9 +596,9 @@
                     </button>
                 </div>
                 <div class="oe_title">
-                    <label for="name" class="oe_edit_only" string="Category Name"/>
+                    <label for="name" string="Category Name"/>
                     <h1>
-                        <field name="name"/>
+                        <field name="name" placeholder="e.g. Monitors"/>
                     </h1>
                 </div>
                 <group>
@@ -612,7 +614,9 @@
                         </div>
                     </div>
                 </group>
-                <field name="note" nolabel="1"/>
+                <group>
+                    <field name="note"/>
+                </group>
                 </sheet>
                 <div class="oe_chatter">
                     <field name="message_follower_ids"/>
@@ -755,9 +759,9 @@
                 <sheet>
                 <widget name="web_ribbon" title="Archived" bg_color="bg-danger" attrs="{'invisible': [('active', '=', True)]}"/>
                 <div class="oe_title">
-                    <label for="name" class="oe_edit_only" string="Team Name"/>
+                    <label for="name" string="Team Name"/>
                     <h1>
-                        <field name="name"/>
+                        <field name="name" placeholder="e.g. Internal Maintenance"/>
                     </h1>
                 </div>
                 <group>
@@ -964,7 +968,7 @@
         id="menu_maintenance_title"
         name="Maintenance"
         web_icon="maintenance,static/description/icon.png"
-        sequence="110"/>
+        sequence="160"/>
 
     <menuitem
         id="menu_m_dashboard"

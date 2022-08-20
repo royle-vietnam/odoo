@@ -1,8 +1,9 @@
-odoo.define('mail/static/src/models/chatter/chatter.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { attr, many2one, one2many, one2one } = require('mail/static/src/model/model_field.js');
+import { registerNewModel } from '@mail/model/model_core';
+import { attr, many2one, one2one } from '@mail/model/model_field';
+import { clear, insert, insertAndReplace, link, unlink } from '@mail/model/model_field_command';
+import { OnChange } from '@mail/model/model_onchange';
 
 function factory(dependencies) {
 
@@ -27,6 +28,22 @@ function factory(dependencies) {
         /**
          * @override
          */
+        _created() {
+            this._attachmentsLoaderTimeout = undefined;
+            this._isPreparingAttachmentsLoading = undefined;
+            // Bind necessary until OWL supports arrow function in handlers: https://github.com/odoo/owl/issues/876
+            this.onClickActivityBoxTitle = this.onClickActivityBoxTitle.bind(this);
+            this.onClickButtonAttachments = this.onClickButtonAttachments.bind(this);
+            this.onClickChatterTopbarClose = this.onClickChatterTopbarClose.bind(this);
+            this.onClickLogNote = this.onClickLogNote.bind(this);
+            this.onClickScheduleActivity = this.onClickScheduleActivity.bind(this);
+            this.onClickSendMessage = this.onClickSendMessage.bind(this);
+            this.onScrollScrollPanel = this.onScrollScrollPanel.bind(this);
+        }
+
+        /**
+         * @override
+         */
         _willDelete() {
             this._stopAttachmentsLoading();
             return super._willDelete(...arguments);
@@ -37,61 +54,132 @@ function factory(dependencies) {
         //----------------------------------------------------------------------
 
         focus() {
-            this.update({ isDoFocus: true });
+            if (this.composerView) {
+                this.composerView.update({ doFocus: true });
+            }
+        }
+
+        /**
+         * Handles click on activity box title.
+         *
+         * @param {MouseEvent} ev
+         */
+        onClickActivityBoxTitle(ev) {
+            ev.preventDefault();
+            this.update({ isActivityBoxVisible: !this.isActivityBoxVisible });
+        }
+
+        /**
+         * Handles click on the attachments button.
+         *
+         * @param {MouseEvent} ev
+         */
+        onClickButtonAttachments(ev) {
+            this.update({ isAttachmentBoxVisible: !this.isAttachmentBoxVisible });
+        }
+
+        /**
+         * Handles click on top bar close button.
+         *
+         * @param {MouseEvent} ev
+         */
+        onClickChatterTopbarClose(ev) {
+            this.componentChatterTopbar.trigger('o-close-chatter');
+        }
+
+        /**
+         * Handles click on "log note" button.
+         *
+         * @param {MouseEvent} ev
+         */
+        onClickLogNote() {
+            if (this.composerView && this.composerView.composer.isLog) {
+                this.update({ composerView: clear() });
+            } else {
+                this.showLogNote();
+            }
+        }
+
+        /**
+         * Handles click on "schedule activity" button.
+         *
+         * @param {MouseEvent} ev
+         */
+        onClickScheduleActivity(ev) {
+            const action = {
+                type: 'ir.actions.act_window',
+                name: this.env._t("Schedule Activity"),
+                res_model: 'mail.activity',
+                view_mode: 'form',
+                views: [[false, 'form']],
+                target: 'new',
+                context: {
+                    default_res_id: this.thread.id,
+                    default_res_model: this.thread.model,
+                },
+                res_id: false,
+            };
+            return this.env.bus.trigger('do-action', {
+                action,
+                options: {
+                    on_close: () => {
+                        if (!this.componentChatterTopbar) {
+                            return;
+                        }
+                        this.componentChatterTopbar.trigger('reload', { keepChanges: true });
+                    },
+                },
+            });
+        }
+
+        /**
+         * Handles click on "send message" button.
+         *
+         * @param {MouseEvent} ev
+         */
+        onClickSendMessage(ev) {
+            if (this.composerView && !this.composerView.composer.isLog) {
+                this.update({ composerView: clear() });
+            } else {
+                this.showSendMessage();
+            }
+        }
+
+        /**
+         * Handles scroll on this scroll panel.
+         *
+         * @param {Event} ev
+         */
+        onScrollScrollPanel(ev) {
+            if (!this.threadRef.comp) {
+                return;
+            }
+            this.threadRef.comp.onScroll(ev);
         }
 
         async refresh() {
-            const thread = this.thread;
-            if (!thread || thread.isTemporary) {
-                return;
+            if (this.hasActivities) {
+                this.thread.refreshActivities();
             }
-            thread.loadNewMessages();
-            if (!this._isPreparingAttachmentsLoading && !this.isShowingAttachmentsLoading) {
-                this._prepareAttachmentsLoading();
+            if (this.hasFollowers) {
+                this.thread.refreshFollowers();
+                this.thread.fetchAndUpdateSuggestedRecipients();
             }
-            await thread.fetchAttachments();
-            this._stopAttachmentsLoading();
-        }
-
-        async refreshActivities() {
-            if (!this.hasActivities) {
-                return;
+            if (this.hasMessageList) {
+                this.thread.refresh();
             }
-            if (!this.thread || this.thread.isTemporary) {
-                this.update({ activities: [['unlink-all']] });
-                return;
-            }
-            // A bit "extreme", may be improved
-            const [{ activity_ids: newActivityIds }] = await this.async(() => this.env.services.rpc({
-                model: this.thread.model,
-                method: 'read',
-                args: [this.thread.id, ['activity_ids']]
-            }));
-            const activitiesData = await this.async(() => this.env.services.rpc({
-                model: 'mail.activity',
-                method: 'activity_format',
-                args: [newActivityIds]
-            }));
-            const activities = this.env.models['mail.activity'].insert(activitiesData.map(
-                activityData => this.env.models['mail.activity'].convertData(activityData)
-            ));
-            this.update({ activities: [['replace', activities]] });
         }
 
         showLogNote() {
-            this.update({ isComposerVisible: true });
-            this.thread.composer.update({ isLog: true });
+            this.update({ composerView: insertAndReplace() });
+            this.composerView.composer.update({ isLog: true });
             this.focus();
         }
 
         showSendMessage() {
-            this.update({ isComposerVisible: true });
-            this.thread.composer.update({ isLog: false });
+            this.update({ composerView: insertAndReplace() });
+            this.composerView.composer.update({ isLog: false });
             this.focus();
-        }
-
-        toggleActivityBoxVisibility() {
-            this.update({ isActivityBoxVisible: !this.isActivityBoxVisible });
         }
 
         //----------------------------------------------------------------------
@@ -100,10 +188,12 @@ function factory(dependencies) {
 
         /**
          * @private
-         * @returns {mail.activity[]}
+         * @returns {boolean}
          */
-        _computeFutureActivities() {
-            return [['replace', this.activities.filter(activity => activity.state === 'planned')]];
+        _computeAttachmentList() {
+            return (this.thread && this.thread.allAttachments.length > 0)
+                ? insertAndReplace()
+                : clear();
         }
 
         /**
@@ -111,7 +201,7 @@ function factory(dependencies) {
          * @returns {boolean}
          */
         _computeHasThreadView() {
-            return this.thread && this.hasMessageList;
+            return Boolean(this.thread && this.hasMessageList);
         }
 
         /**
@@ -119,23 +209,84 @@ function factory(dependencies) {
          * @returns {boolean}
          */
         _computeIsDisabled() {
-            return !this.threadId;
+            return Boolean(!this.thread || this.thread.isTemporary);
         }
 
         /**
          * @private
-         * @returns {mail.activity[]}
+         * @returns {mail.thread_viewer}
          */
-        _computeOverdueActivities() {
-            return [['replace', this.activities.filter(activity => activity.state === 'overdue')]];
+        _computeThreadViewer() {
+            return insertAndReplace({
+                hasThreadView: this.hasThreadView,
+                order: 'desc',
+                thread: this.thread ? link(this.thread) : unlink(),
+            });
         }
 
         /**
          * @private
-         * @returns {mail.activity[]}
          */
-        _computeTodayActivities() {
-            return [['replace', this.activities.filter(activity => activity.state === 'today')]];
+        _onThreadIdOrThreadModelChanged() {
+            if (this.threadId) {
+                if (this.thread && this.thread.isTemporary) {
+                    this.thread.delete();
+                }
+                this.update({
+                    isAttachmentBoxVisible: this.isAttachmentBoxVisibleInitially,
+                    thread: insert({
+                        // If the thread was considered to have the activity
+                        // mixin once, it will have it forever.
+                        hasActivities: this.hasActivities ? true : undefined,
+                        id: this.threadId,
+                        model: this.threadModel,
+                    }),
+                });
+                if (this.hasActivities) {
+                    this.thread.refreshActivities();
+                }
+                if (this.hasFollowers) {
+                    this.thread.refreshFollowers();
+                    this.thread.fetchAndUpdateSuggestedRecipients();
+                }
+                if (this.hasMessageList) {
+                    this.thread.refresh();
+                }
+            } else if (!this.thread || !this.thread.isTemporary) {
+                const currentPartner = this.messaging.currentPartner;
+                const message = this.messaging.models['mail.message'].create({
+                    author: link(currentPartner),
+                    body: this.env._t("Creating a new record..."),
+                    id: getMessageNextTemporaryId(),
+                    isTemporary: true,
+                });
+                const nextId = getThreadNextTemporaryId();
+                this.update({
+                    isAttachmentBoxVisible: false,
+                    thread: insert({
+                        areAttachmentsLoaded: true,
+                        id: nextId,
+                        isTemporary: true,
+                        model: this.threadModel,
+                    }),
+                });
+                this.thread.cache.update({ messages: link(message) });
+            }
+        }
+
+        /**
+         * @private
+         */
+        _onThreadIsLoadingAttachmentsChanged() {
+            if (!this.thread || !this.thread.isLoadingAttachments) {
+                this._stopAttachmentsLoading();
+                this.update({ isShowingAttachmentsLoading: false });
+                return;
+            }
+            if (this._isPreparingAttachmentsLoading || this.isShowingAttachmentsLoading) {
+                return;
+            }
+            this._prepareAttachmentsLoading();
         }
 
         /**
@@ -146,7 +297,7 @@ function factory(dependencies) {
             this._attachmentsLoaderTimeout = this.env.browser.setTimeout(() => {
                 this.update({ isShowingAttachmentsLoading: true });
                 this._isPreparingAttachmentsLoading = false;
-            }, this.env.loadingBaseDelayDuration);
+            }, this.messaging.loadingBaseDelayDuration);
         }
 
         /**
@@ -155,137 +306,48 @@ function factory(dependencies) {
         _stopAttachmentsLoading() {
             this.env.browser.clearTimeout(this._attachmentsLoaderTimeout);
             this._attachmentsLoaderTimeout = null;
-            this.update({ isShowingAttachmentsLoading: false });
             this._isPreparingAttachmentsLoading = false;
-        }
-
-        /**
-         * @override
-         */
-        _updateAfter(previous) {
-            // thread
-            if (
-                this.threadModel !== previous.threadModel ||
-                this.threadId !== previous.threadId
-            ) {
-                // change of thread
-                this._updateRelationThread();
-                if (previous.thread && previous.thread.isTemporary) {
-                    // AKU FIXME: make dedicated models for "temporary" threads,
-                    // so that it auto-handles causality of messages for deletion
-                    // automatically
-                    const oldMainThreadCache = previous.thread.mainCache;
-                    const message = oldMainThreadCache.messages[0];
-                    message.delete();
-                    previous.thread.delete();
-                }
-            }
-
-            if (
-                !previous.activityIds ||
-                previous.activityIds.join(',') !== this.activityIds.join(',')
-            ) {
-                this.refreshActivities();
-            }
-            if (
-                !previous.followerIds ||
-                previous.followerIds.join(',') !== this.followerIds.join(',')
-            ) {
-                if (this.thread) {
-                    this.thread.refreshFollowers();
-                    this.thread.fetchAndUpdateSuggestedRecipients();
-                }
-            }
-            if (
-                !previous.messageIds ||
-                previous.thread !== this.thread ||
-                this.messageIds.join(',') !== previous.messageIds.join(',')
-            ) {
-                this.refresh();
-            }
-        }
-
-        /**
-         * @override
-         */
-        _updateBefore() {
-            return {
-                activityIds: this.activityIds,
-                followerIds: this.followerIds,
-                messageIds: this.messageIds,
-                threadModel: this.threadModel,
-                threadId: this.threadId,
-                thread: this.thread,
-            };
-        }
-
-        /**
-         * @private
-         */
-        _updateRelationThread() {
-            if (!this.threadId) {
-                if (this.thread && this.thread.isTemporary) {
-                    return;
-                }
-                const nextId = getThreadNextTemporaryId();
-                const thread = this.env.models['mail.thread'].create({
-                    areAttachmentsLoaded: true,
-                    id: nextId,
-                    isTemporary: true,
-                    model: this.threadModel,
-                });
-                const currentPartner = this.env.messaging.currentPartner;
-                const message = this.env.models['mail.message'].create({
-                    author: [['link', currentPartner]],
-                    body: this.env._t("Creating a new record..."),
-                    id: getMessageNextTemporaryId(),
-                    isTemporary: true,
-                });
-                this.update({ thread: [['link', thread]] });
-                for (const cache of thread.caches) {
-                    cache.update({ messages: [['link', message]] });
-                }
-            } else {
-                // thread id and model
-                const thread = this.env.models['mail.thread'].insert({
-                    id: this.threadId,
-                    model: this.threadModel,
-                });
-                this.update({ thread: [['link', thread]] });
-            }
         }
 
     }
 
     Chatter.fields = {
-        activities: one2many('mail.activity', {
+        /**
+         * Determines the attachment list that will be used to display the attachments.
+         */
+        attachmentList: one2one('mail.attachment_list', {
+            compute: '_computeAttachmentList',
             inverse: 'chatter',
+            isCausal: true,
+            readonly: true,
         }),
-        activityIds: attr({
-            default: [],
-        }),
-        activitiesState: attr({
-            related: 'activities.state',
-        }),
-        composer: many2one('mail.composer', {
-            related: 'thread.composer',
+        component: attr(),
+        /**
+         * States the OWL component of this chatter top bar.
+         */
+        componentChatterTopbar: attr(),
+        /**
+         * Determines the composer view used to post in this chatter (if any).
+         */
+        composerView: one2one('mail.composer_view', {
+            inverse: 'chatter',
+            isCausal: true,
         }),
         context: attr({
             default: {},
         }),
-        followerIds: attr({
-            default: [],
-        }),
-        futureActivities: one2many('mail.activity', {
-            compute: '_computeFutureActivities',
-            dependencies: ['activitiesState'],
-        }),
+        /**
+         * Determines whether `this` should display an activity box.
+         */
         hasActivities: attr({
             default: true,
         }),
         hasExternalBorder: attr({
             default: true,
         }),
+        /**
+         * Determines whether `this` should display followers menu.
+         */
         hasFollowers: attr({
             default: true,
         }),
@@ -310,53 +372,57 @@ function factory(dependencies) {
          */
         hasThreadView: attr({
             compute: '_computeHasThreadView',
-            dependencies: [
-                'hasMessageList',
-                'thread',
-            ],
         }),
         hasTopbarCloseButton: attr({
             default: false,
         }),
+        /**
+         * States the id of this chatter. This id does not correspond to any
+         * specific value, it is just a unique identifier given by the creator
+         * of this record.
+         */
+        id: attr({
+            readonly: true,
+            required: true,
+        }),
         isActivityBoxVisible: attr({
             default: true,
         }),
+        /**
+         * Determiners whether the attachment box is currently visible.
+         */
         isAttachmentBoxVisible: attr({
             default: false,
         }),
-        isComposerVisible: attr({
+        /**
+         * Determiners whether the attachment box is visible initially.
+         */
+        isAttachmentBoxVisibleInitially: attr({
             default: false,
         }),
         isDisabled: attr({
             compute: '_computeIsDisabled',
             default: false,
-            dependencies: ['threadId'],
-        }),
-        /**
-         * Determine whether this chatter should be focused at next render.
-         */
-        isDoFocus: attr({
-            default: false,
         }),
         isShowingAttachmentsLoading: attr({
             default: false,
-        }),
-        messageIds: attr({
-            default: [],
-        }),
-        overdueActivities: one2many('mail.activity', {
-            compute: '_computeOverdueActivities',
-            dependencies: ['activitiesState'],
         }),
         /**
          * Determines the `mail.thread` that should be displayed by `this`.
          */
         thread: many2one('mail.thread'),
-        threadAttachmentCount: attr({
-            default: 0,
-        }),
+        /**
+         * Determines the id of the thread that will be displayed by `this`.
+         */
         threadId: attr(),
+        /**
+         * Determines the model of the thread that will be displayed by `this`.
+         */
         threadModel: attr(),
+        /**
+         * States the OWL ref of the "thread" (ThreadView) of this chatter.
+         */
+        threadRef: attr(),
         /**
          * States the `mail.thread_view` displaying `this.thread`.
          */
@@ -367,15 +433,24 @@ function factory(dependencies) {
          * Determines the `mail.thread_viewer` managing the display of `this.thread`.
          */
         threadViewer: one2one('mail.thread_viewer', {
-            default: [['create']],
+            compute: '_computeThreadViewer',
             inverse: 'chatter',
             isCausal: true,
-        }),
-        todayActivities: one2many('mail.activity', {
-            compute: '_computeTodayActivities',
-            dependencies: ['activitiesState'],
+            readonly: true,
+            required: true,
         }),
     };
+    Chatter.identifyingFields = ['id'];
+    Chatter.onChanges = [
+        new OnChange({
+            dependencies: ['threadId', 'threadModel'],
+            methodName: '_onThreadIdOrThreadModelChanged',
+        }),
+        new OnChange({
+            dependencies: ['thread.isLoadingAttachments'],
+            methodName: '_onThreadIsLoadingAttachmentsChanged',
+        }),
+    ];
 
     Chatter.modelName = 'mail.chatter';
 
@@ -383,5 +458,3 @@ function factory(dependencies) {
 }
 
 registerNewModel('mail.chatter', factory);
-
-});

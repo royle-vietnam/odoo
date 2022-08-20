@@ -1,7 +1,6 @@
-odoo.define('website_livechat/static/src/models/messaging_notification_handler/messaging_notification_handler.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerInstancePatchModel } = require('mail/static/src/model/model_core.js');
+import { registerInstancePatchModel } from '@mail/model/model_core';
 
 registerInstancePatchModel('mail.messaging_notification_handler', 'website_livechat/static/src/models/messaging_notification_handler/messaging_notification_handler.js', {
 
@@ -12,21 +11,20 @@ registerInstancePatchModel('mail.messaging_notification_handler', 'website_livec
     /**
      * @override
      */
-    _handleNotificationPartner(data) {
-        const { info } = data;
-        if (info === 'send_chat_request') {
-            this._handleNotificationPartnerChannel(data);
-            const channel = this.env.models['mail.thread'].findFromIdentifyingData({
-                id: data.id,
+    async _handleNotification(message) {
+        if (message.type === 'website_livechat.send_chat_request') {
+            const convertedData = this.messaging.models['mail.thread'].convertData(
+                Object.assign({ model: 'mail.channel' }, message.payload)
+            );
+            this.messaging.models['mail.thread'].insert(convertedData);
+            const channel = this.messaging.models['mail.thread'].findFromIdentifyingData({
+                id: message.payload.id,
                 model: 'mail.channel',
             });
-            this.env.messaging.chatWindowManager.openThread(channel, {
+            this.messaging.chatWindowManager.openThread(channel, {
                 makeActive: true,
             });
-            return;
         }
-        return this._super(data);
+        return this._super(message);
     },
-});
-
 });

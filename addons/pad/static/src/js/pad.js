@@ -10,9 +10,13 @@ var _t = core._t;
 var FieldPad = AbstractField.extend({
     template: 'FieldPad',
     content: "",
-    events: {
+    events: _.extend({}, AbstractField.prototype.events, {
         'click .oe_pad_switch': '_onToggleFullScreen',
-    },
+    }),
+    isQuickEditable: true,
+    quickEditExclusion: [
+        '[href]',
+    ],
 
     /**
      * @override
@@ -38,6 +42,9 @@ var FieldPad = AbstractField.extend({
             this.$(".oe_unconfigured").removeClass('d-none');
             this.$(".oe_configured").addClass('d-none');
             return Promise.resolve();
+        }
+        if (this.mode === 'edit' && typeof(this.value) === 'object') {
+            this.value = this.value.toJSON();
         }
         if (this.mode === 'edit' && _.str.startsWith(this.value, 'http')) {
             this.url = this.value;
@@ -122,7 +129,8 @@ var FieldPad = AbstractField.extend({
                 context: {
                     model: this.model,
                     field_name: this.name,
-                    object_id: this.res_id
+                    object_id: this.res_id,
+                    record: this.recordData,
                 },
             }, {
                 shadow: true
@@ -156,6 +164,11 @@ var FieldPad = AbstractField.extend({
                     .removeClass('oe_pad_loading')
                     .html('<div class="oe_pad_readonly"><div>');
                 self.$('.oe_pad_readonly').html(data);
+                _.each(self.$('a'), (link) => {
+                    if (link.hostname !== window.location.hostname && link.target === "") {
+                        link.target = "_blank";
+                    }
+                });
             }).guardedCatch(function () {
                 self.$('.oe_pad_content').text(_t('Unable to load pad'));
             });
@@ -171,6 +184,13 @@ var FieldPad = AbstractField.extend({
     // Handlers
     //--------------------------------------------------------------------------
 
+    /**
+     * @override
+     * @private
+     */
+    _onKeydown: function () {
+        // managed by the pad.
+    },
     /**
      * @override
      * @private

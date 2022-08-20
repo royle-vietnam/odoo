@@ -89,6 +89,9 @@ class TestSaleService(TestCommonSaleTimesheet):
 
         self.assertEqual(self.sale_order.tasks_count, 2, "Adding a new service line on a confirmer SO should create a new task.")
 
+        # delete timesheets before deleting the task, so as to trigger the error
+        # about linked sales order lines and not the one about linked timesheets
+        task.timesheet_ids.unlink()
         # not possible to delete a task linked to a SOL
         with self.assertRaises(ValidationError):
             task.unlink()
@@ -243,7 +246,7 @@ class TestSaleService(TestCommonSaleTimesheet):
         self.assertTrue(so_line1.project_id, "SO confirmation should create a project and link it to SOL")
         self.assertEqual(self.sale_order.tasks_count, 1, "The SO should have only one task")
         self.assertEqual(so_line1.task_id.sale_line_id, so_line1, "The created task is also linked to its origin sale line, for invoicing purpose.")
-        self.assertFalse(so_line1.task_id.user_id, "The created task should be unassigned")
+        self.assertFalse(so_line1.task_id.user_ids, "The created task should be unassigned")
         self.assertEqual(so_line1.product_uom_qty, so_line1.task_id.planned_hours, "The planned hours should be the same as the ordered quantity of the native SO line")
 
         so_line1.write({'product_uom_qty': 20})
@@ -528,14 +531,14 @@ class TestSaleService(TestCommonSaleTimesheet):
             'name': '%s: substask1' % (task.name,)
         })
 
-        self.assertEqual(subtask.sale_line_id, task.sale_line_id, "By, default, a child task should have the same SO line than its mother")
-        self.assertEqual(task2.sale_line_id, project.sale_line_id, "A new task in a billable project should have the same SO line than its project")
-        self.assertEqual(task2.partner_id, so_line_deliver_new_task_project.order_partner_id, "A new task in a billable project should have the same SO line than its project")
+        self.assertEqual(subtask.sale_line_id, task.sale_line_id, "By, default, a child task should have the same SO line as its mother")
+        self.assertEqual(task2.sale_line_id, project.sale_line_id, "A new task in a billable project should have the same SO line as its project")
+        self.assertEqual(task2.partner_id, so_line_deliver_new_task_project.order_partner_id, "A new task in a billable project should have the same SO line as its project")
 
         # moving subtask in another project
-        subtask.write({'project_id': self.project_global.id})
+        subtask.write({'display_project_id': self.project_global.id})
 
-        self.assertEqual(subtask.sale_line_id, task.sale_line_id, "A child task should always have the same SO line than its mother, even when changing project")
+        self.assertEqual(subtask.sale_line_id, task.sale_line_id, "A child task should always have the same SO line as its mother, even when changing project")
         self.assertEqual(subtask.sale_line_id, so_line_deliver_new_task_project)
 
         # changing the SO line of the mother task
@@ -597,3 +600,171 @@ class TestSaleService(TestCommonSaleTimesheet):
         # copy the task
         task_copy = task.copy()
         self.assertEqual(task_copy.sale_line_id, task.sale_line_id, "Duplicating task should keep its Sale line")
+
+    def test_remaining_hours_prepaid_services(self):
+        """ Test if the remaining hours is correctly computed
+
+            Test Case:
+            =========
+            1) Check the remaining hours in the SOL containing a prepaid service product,
+            2) Create task in project with pricing type is equal to "task rate" and has the customer in the SO
+                and check if the remaining hours is equal to the remaining hours in the SOL,
+            3) Create timesheet in the task for this SOL and check if the remaining hours correctly decrease,
+            4) Change the SOL in the task and see if the remaining hours is correctly recomputed.
+            5) Create without storing the timesheet to check if remaining hours in SOL does not change.
+        """
+        # 1) Check the remaining hours in the SOL containing a prepaid service product
+        prepaid_service_sol = self.so.order_line.filtered(lambda sol: sol.product_id.service_policy == 'ordered_timesheet')
+        self.assertEqual(len(prepaid_service_sol), 1, "It should only have one SOL with prepaid service product in this SO.")
+        self.assertEqual(prepaid_service_sol.remaining_hours, prepaid_service_sol.product_uom_qty - prepaid_service_sol.qty_delivered, "The remaining hours of this SOL should be equal to the ordered quantity minus the delivered quantity.")
+
+        # 2) Create task in project with pricing type is equal to "task rate" and has the customer in the SO
+        # and check if the remaining hours is equal to the remaining hours in the SOL,
+        task = self.env['project.task'].create({
+            'name': 'Test task',
+            'project_id': self.project_task_rate.id,
+        })
+        self.assertEqual(task.partner_id, self.project_task_rate.partner_id)
+        self.assertEqual(task.partner_id, self.so.partner_id)
+        self.assertEqual(task.remaining_hours_so, prepaid_service_sol.remaining_hours)
+
+        # 3) Create timesheet in the task for this SOL and check if the remaining hours correctly decrease
+        self.env['account.analytic.line'].create({
+            'name': 'Test Timesheet',
+            'project_id': self.project_task_rate.id,
+            'task_id': task.id,
+            'unit_amount': 1,
+        })
+        self.assertEqual(task.remaining_hours_so, 1, "Before the creation of a timesheet, the remaining hours was 2 hours, when we timesheet 1 hour, the remaining hours should be equal to 1 hour.")
+        self.assertEqual(prepaid_service_sol.remaining_hours, task.remaining_hours_so, "The remaining hours on the SOL should also be equal to 1 hour.")
+
+        # 4) Change the SOL in the task and see if the remaining hours is correctly recomputed.
+        task.update({
+            'sale_line_id': self.so.order_line[0].id,
+        })
+        self.assertEqual(task.remaining_hours_so, False, "Since the SOL doesn't contain a prepaid service product, the remaining_hours_so should be equal to False.")
+        self.assertEqual(prepaid_service_sol.remaining_hours, 2, "Since the timesheet on task has the same SOL than the one in the task, the remaining_hours should increase of 1 hour to be equal to 2 hours.")
+
+        # 5) Create without storing the timesheet to check if remaining hours in SOL does not change
+        timesheet = self.env['account.analytic.line'].new({
+            'name': 'Test Timesheet',
+            'project_id': self.project_task_rate.id,
+            'task_id': task.id,
+            'unit_amount': 1,
+            'so_line': prepaid_service_sol.id,
+            'is_so_line_edited': True,
+        })
+        self.assertEqual(timesheet.so_line, prepaid_service_sol, "The SOL should be the same than one containing the prepaid service product.")
+        self.assertEqual(prepaid_service_sol.remaining_hours, 2, "The remaining hours should not change.")
+
+    def test_several_uom_sol_to_planned_hours(self):
+        planned_hours_for_uom = {
+            'day': 8.0,
+            'hour': 1.0,
+            'unit': 1.0,
+            'gram': 0.0,
+        }
+
+        Product = self.env['product.product']
+        product_vals = {
+            'type': 'service',
+            'service_type': 'timesheet',
+            'project_id': self.project_global.id,
+            'service_tracking': 'task_global_project',
+        }
+
+        SaleOrderLine = self.env['sale.order.line']
+        sol_vals = {
+            'product_uom_qty': 1,
+            'price_unit': 100,
+            'order_id': self.sale_order.id,
+        }
+
+        self.project_global.task_ids = False
+        for uom_name in planned_hours_for_uom:
+            uom_id = self.env.ref('uom.product_uom_%s' % uom_name)
+
+            product_vals.update({
+                'name': uom_name,
+                'uom_id': uom_id.id,
+                'uom_po_id': uom_id.id,
+            })
+            product = Product.create(product_vals)
+
+            sol_vals.update({
+                'name': uom_name,
+                'product_id': product.id,
+                'product_uom': uom_id.id,
+            })
+            SaleOrderLine.create(sol_vals)
+
+        self.sale_order.action_confirm()
+
+        tasks = self.project_global.task_ids
+        for task in tasks:
+            self.assertEqual(task.planned_hours, planned_hours_for_uom[task.sale_line_id.name])
+
+        project_updates_data = self.project_global._get_sold_items()['data']
+        for datum in project_updates_data:
+            # A datum looks like this: {'name': 'day', 'value': '0.0 / 8.0 Hours',...}
+            uom_in = datum['name']
+
+            # So the value looks like this: '0.0 / 8.0 Hours'
+            # We extract the ordered quantity (second number in the string) and the displayed unit of measure
+            values = datum['value'][6:].split(' ')
+            qty = float(values[0])
+            uom_out = values[1]
+
+            # All uom but grams should have been converted to company's project time unit
+            company_time_uom = self.env.company.project_time_mode_id
+            if uom_in == 'gram':
+                self.assertEqual(qty, 1.0)
+                self.assertEqual(uom_out, self.env.ref('uom.product_uom_gram').display_name)
+            else:
+                self.assertEqual(qty, planned_hours_for_uom[uom_in])
+                self.assertEqual(uom_out, company_time_uom.display_name)
+
+    def test_add_product_analytic_account(self):
+        """ When we have a project with an analytic account and we add a product to the task,
+            the consequent invoice line should have the same analytic account as the project.
+        """
+        # Ensure the SO has no analytic account to give to its SOLs
+        self.assertFalse(self.sale_order.analytic_account_id)
+        Product = self.env['product.product']
+        SaleOrderLine = self.env['sale.order.line']
+
+        # Create a SO with a service that creates a task
+        product_create = Product.create({
+            'name': 'Product that creates the task',
+            'type': 'service',
+            'service_type': 'timesheet',
+            'project_id': self.project_global.id,
+            'service_tracking': 'task_global_project',
+        })
+        sale_order_line_create = SaleOrderLine.create({
+            'order_id': self.sale_order.id,
+            'name': product_create.name,
+            'product_id': product_create.id,
+            'product_uom_qty': 5,
+            'product_uom': product_create.uom_id.id,
+            'price_unit': product_create.list_price,
+        })
+        self.sale_order.action_confirm()
+
+        # Add a SOL with a task_id to mimmic the "Add a product" flow on the task
+        product_add = Product.create({'name': 'Product added on task'})
+        SaleOrderLine.create({
+            'order_id': self.sale_order.id,
+            'name': product_add.name,
+            'product_id': product_add.id,
+            'product_uom_qty': 5,
+            'product_uom': product_add.uom_id.id,
+            'price_unit': product_add.list_price,
+            'task_id': sale_order_line_create.task_id.id,
+        })
+        self.sale_order._create_invoices()
+
+        # Check that the resulting invoice line and the project have the same analytic account
+        invoice_line = self.sale_order.invoice_ids.line_ids.filtered(lambda line: line.product_id == product_add)
+        self.assertEqual(invoice_line.analytic_account_id, self.project_global.analytic_account_id,
+             "SOL's analytic account should be the same as the project's")

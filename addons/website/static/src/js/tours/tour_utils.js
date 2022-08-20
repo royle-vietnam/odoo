@@ -1,44 +1,14 @@
 odoo.define("website.tour_utils", function (require) {
 "use strict";
 
-const core = require("web.core");
-const _t = core._t;
-
-/**
-
-const snippets = [
-    {
-        id: 's_cover',
-        name: 'Cover',
-    },
-    {
-        id: 's_text_image',
-        name: 'Text - Image',
-    }
-];
-
-tour.register("themename_tour", {
-    url: "/",
-    saveAs: "homepage",
-}, [
-    wTourUtils.dragNDrop(snippets[0]),
-    wTourUtils.clickOnText(snippets[0], 'h1'),
-    wTourUtils.changeOption('colorFilter', 'span.o_we_color_preview', _t('color filter')),
-    wTourUtils.selectHeader(),
-    wTourUtils.changeOption('HeaderTemplate', '[data-name="header_alignment_opt"]', _t('alignment')),
-    wTourUtils.goBackToBlocks(),
-    wTourUtils.dragNDrop(snippets[1]),
-    wTourUtils.changeImage(snippets[1]),
-    wTourUtils.clickOnSave(),
-]);
-**/
-
-
+const {_t} = require("web.core");
+const {Markup} = require('web.utils');
+var tour = require("web_tour.tour");
 
 function addMedia(position = "right") {
     return {
         trigger: `.modal-content footer .btn-primary`,
-        content: _t("<b>Add</b> the selected image."),
+        content: Markup(_t("<b>Add</b> the selected image.")),
         position: position,
         run: "click",
     };
@@ -46,8 +16,8 @@ function addMedia(position = "right") {
 
 function changeBackground(snippet, position = "bottom") {
     return {
-        trigger: ".o_we_customize_panel .o_we_edit_image",
-        content: _t("<b>Customize</b> any block through this menu. Try to change the background image of this block."),
+        trigger: ".o_we_customize_panel .o_we_bg_success",
+        content: Markup(_t("<b>Customize</b> any block through this menu. Try to change the background image of this block.")),
         position: position,
         run: "click",
     };
@@ -56,16 +26,27 @@ function changeBackground(snippet, position = "bottom") {
 function changeBackgroundColor(position = "bottom") {
     return {
         trigger: ".o_we_customize_panel .o_we_color_preview",
-        content: _t("<b>Customize</b> any block through this menu. Try to change the background color of this block."),
+        content: Markup(_t("<b>Customize</b> any block through this menu. Try to change the background color of this block.")),
         position: position,
         run: "click",
+    };
+}
+
+function selectColorPalette(position = "left") {
+    return {
+        trigger: ".o_we_customize_panel .o_we_so_color_palette we-selection-items",
+        alt_trigger: ".o_we_customize_panel .o_we_color_preview",
+        content: Markup(_t(`<b>Select</b> a Color Palette.`)),
+        position: position,
+        run: 'click',
+        location: position === 'left' ? '#oe_snippets' : undefined,
     };
 }
 
 function changeColumnSize(position = "right") {
     return {
         trigger: `.oe_overlay.ui-draggable.o_we_overlay_sticky.oe_active .o_handle.e`,
-        content: _t("<b>Slide</b> this button to change the column size."),
+        content: Markup(_t("<b>Slide</b> this button to change the column size.")),
         position: position,
     };
 }
@@ -73,7 +54,8 @@ function changeColumnSize(position = "right") {
 function changeIcon(snippet, index = 0, position = "bottom") {
     return {
         trigger: `#wrapwrap .${snippet.id} i:eq(${index})`,
-        content: _t("<b>Double click on an icon</b> to change it with one of our choice."),
+        extra_trigger: "body.editor_enable",
+        content: Markup(_t("<b>Double click on an icon</b> to change it with one of your choice.")),
         position: position,
         run: "dblclick",
     };
@@ -81,8 +63,9 @@ function changeIcon(snippet, index = 0, position = "bottom") {
 
 function changeImage(snippet, position = "bottom") {
     return {
-        trigger: `#wrapwrap .${snippet.id} img`,
-        content: _t("<b>Double click on an image</b> to change it with one of our choice."),
+        trigger: snippet.id ? `#wrapwrap .${snippet.id} img` : snippet,
+        extra_trigger: "body.editor_enable",
+        content: Markup(_t("<b>Double click on an image</b> to change it with one of your choice.")),
         position: position,
         run: "dblclick",
     };
@@ -95,9 +78,21 @@ function changeOption(optionName, weName = '', optionTooltipLabel = '', position
     const option_block = `we-customizeblock-option[class='snippet-option-${optionName}']`
     return {
         trigger: `${option_block} ${weName}, ${option_block} [title='${weName}']`,
-        content: _t(`<b>Click</b> on this option to change the ${optionTooltipLabel} of the block.`),
+        content: Markup(_.str.sprintf(_t("<b>Click</b> on this option to change the %s of the block."), optionTooltipLabel)),
         position: position,
         run: "click",
+    };
+}
+
+function selectNested(trigger, optionName, alt_trigger = null, optionTooltipLabel = '', position = "top") {
+    const option_block = `we-customizeblock-option[class='snippet-option-${optionName}']`;
+    return {
+        trigger: trigger,
+        content: Markup(_.str.sprintf(_t("<b>Select</b> a %s."), optionTooltipLabel)),
+        alt_trigger: alt_trigger == null ? undefined : `${option_block} ${alt_trigger}`,
+        position: position,
+        run: 'click',
+        location: position === 'left' ? '#oe_snippets' : undefined,
     };
 }
 
@@ -110,7 +105,8 @@ function changePaddingSize(direction) {
     }
     return {
         trigger: `.oe_overlay.ui-draggable.o_we_overlay_sticky.oe_active .o_handle.${paddingDirection}`,
-        content: _t(`<b>Slide</b> this button to change the ${direction} padding`),
+        content: Markup(_.str.sprintf(_t("<b>Slide</b> this button to change the %s padding"), direction)),
+        consumeEvent: 'mousedown',
         position: position,
     };
 }
@@ -122,7 +118,7 @@ function changePaddingSize(direction) {
 function clickOnEdit(position = "bottom") {
     return {
         trigger: "a[data-action=edit]",
-        content: _t("<b>Click Edit</b> to start designing your homepage."),
+        content: Markup(_t("<b>Click Edit</b> to start designing your homepage.")),
         extra_trigger: ".homepage",
         position: position,
     };
@@ -135,19 +131,25 @@ function clickOnEdit(position = "bottom") {
  */
 function clickOnSnippet(snippet, position = "bottom") {
     return {
-        trigger: `#wrapwrap .${snippet.id}`,
-        content: _t("<b>Click on a snippet</b> to access its options menu."),
+        trigger: snippet.id ? `#wrapwrap .${snippet.id}` : snippet,
+        extra_trigger: "body.editor_enable #oe_snippets.o_loaded",
+        content: Markup(_t("<b>Click on a snippet</b> to access its options menu.")),
         position: position,
         run: "click",
     };
 }
 
 function clickOnSave(position = "bottom") {
-    return {
+    return [{
         trigger: "button[data-action=save]",
-        content: _t("Good job! It's time to <b>Save</b> your work."),
+        in_modal: false,
+        content: Markup(_t("Good job! It's time to <b>Save</b> your work.")),
         position: position,
-    };
+    }, {
+        trigger: 'body:not(.editor_enable)',
+        auto: true, // Just making sure save is finished in automatic tests
+        run: () => null,
+    }];
 }
 
 /**
@@ -158,8 +160,9 @@ function clickOnSave(position = "bottom") {
  */
 function clickOnText(snippet, element, position = "bottom") {
     return {
-        trigger: `#wrapwrap .${snippet.id} ${element}`,
-        content: _t("Even if this title is cool, you can change it. <b>Click on a text</b> to start editing it."),
+        trigger: snippet.id ? `#wrapwrap .${snippet.id} ${element}` : snippet,
+        extra_trigger: "body.editor_enable",
+        content: Markup(_t("<b>Click on a text</b> to start editing it.")),
         position: position,
         run: "text",
         consumeEvent: "input",
@@ -176,9 +179,11 @@ function dragNDrop(snippet, position = "bottom") {
         trigger: `#oe_snippets .oe_snippet[name="${snippet.name}"] .oe_snippet_thumbnail:not(.o_we_already_dragging)`,
         extra_trigger: "body.editor_enable.editor_has_snippets",
         moveTrigger: '.oe_drop_zone',
-        content: _t(`Drag the <b>${snippet.name}</b> building block and drop it in your page.`),
+        content: Markup(_.str.sprintf(_t("Drag the <b>%s</b> building block and drop it at the bottom of the page."), snippet.name)),
         position: position,
-        run: "drag_and_drop #wrap",
+        // Normally no main snippet can be dropped in the default footer but
+        // targeting it allows to force "dropping at the end of the page".
+        run: "drag_and_drop #wrapwrap > footer",
     };
 }
 
@@ -191,10 +196,10 @@ function goBackToBlocks(position = "bottom") {
     };
 }
 
-function goToOptions(position = "bottom") {
+function goToTheme(position = "bottom") {
     return {
         trigger: '.o_we_customize_theme_btn',
-        content: _t("Go to the Options tab"),
+        content: _t("Go to the Theme tab"),
         position: position,
         run: "click",
     };
@@ -203,7 +208,7 @@ function goToOptions(position = "bottom") {
 function selectHeader(position = "bottom") {
     return {
         trigger: `header#top`,
-        content: _t(`<b>Click</b> on this header to configure it.`),
+        content: Markup(_t(`<b>Click</b> on this header to configure it.`)),
         position: position,
         run: "click",
     };
@@ -212,11 +217,44 @@ function selectHeader(position = "bottom") {
 function selectSnippetColumn(snippet, index = 0, position = "bottom") {
      return {
         trigger: `#wrapwrap .${snippet.id} .row div[class*="col-lg-"]:eq(${index})`,
-        content: _t("<b>Click</b> on this column to access its options."),
+        content: Markup(_t("<b>Click</b> on this column to access its options.")),
          position: position,
         run: "click",
      };
- }
+}
+
+function prepend_trigger(steps, prepend_text='') {
+    for (const step of steps) {
+        if (!step.noPrepend && prepend_text) {
+            step.trigger = prepend_text + step.trigger;
+        }
+    }
+    return steps;
+}
+
+function registerThemeHomepageTour(name, steps) {
+    tour.register(name, {
+        url: "/?enable_editor=1",
+        sequence: 1010,
+        saveAs: "homepage",
+    }, prepend_trigger(
+        steps.concat(clickOnSave()),
+        "html[data-view-xmlid='website.homepage'] "
+    ));
+}
+
+function clickOnExtraMenuItem(stepOptions) {
+    return Object.assign({}, {
+        content: "Click on the extra menu dropdown toggle if it is there",
+        trigger: '#top_menu',
+        run: function () {
+            const extraMenuButton = this.$anchor[0].querySelector('.o_extra_menu_items a.nav-link');
+            if (extraMenuButton) {
+                extraMenuButton.click();
+            }
+        },
+    }, stepOptions);
+}
 
 return {
     addMedia,
@@ -233,8 +271,12 @@ return {
     clickOnText,
     dragNDrop,
     goBackToBlocks,
-    goToOptions,
+    goToTheme,
+    selectColorPalette,
     selectHeader,
+    selectNested,
     selectSnippetColumn,
+    registerThemeHomepageTour,
+    clickOnExtraMenuItem,
 };
 });

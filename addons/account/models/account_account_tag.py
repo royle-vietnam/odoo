@@ -7,8 +7,8 @@ class AccountAccountTag(models.Model):
     _name = 'account.account.tag'
     _description = 'Account Tag'
 
-    name = fields.Char('Tag Name', required=True)
-    applicability = fields.Selection([('accounts', 'Accounts'), ('taxes', 'Taxes')], required=True, default='accounts')
+    name = fields.Char('Tag Name1', required=True)
+    applicability = fields.Selection([('accounts', 'Accounts'), ('taxes', 'Taxes'), ('products', 'Products')], required=True, default='accounts')
     color = fields.Integer('Color Index')
     active = fields.Boolean(default=True, help="Set active to false to hide the Account Tag without removing it.")
     tax_report_line_ids = fields.Many2many(string="Tax Report Lines", comodel_name='account.tax.report.line', relation='account_tax_report_line_tags_rel', help="The tax report lines using this tag")
@@ -22,9 +22,3 @@ class AccountAccountTag(models.Model):
         """
         escaped_tag_name = tag_name.replace('\\', '\\\\').replace('%', '\%').replace('_', '\_')
         return self.env['account.account.tag'].search([('name', '=like', '_' + escaped_tag_name), ('country_id', '=', country_id), ('applicability', '=', 'taxes')])
-
-    @api.constrains('country_id', 'applicability')
-    def _validate_tag_country(self):
-        for record in self:
-            if record.applicability == 'taxes' and not record.country_id:
-                raise ValidationError(_("A tag defined to be used on taxes must always have a country set."))

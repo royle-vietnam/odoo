@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from odoo.addons.test_mail_full.tests.common import TestMailFullCommon, TestRecipients
+from odoo.addons.test_mail_full.tests.common import TestMailFullCommon, TestMailFullRecipients
 
 
-class TestSmsTemplate(TestMailFullCommon, TestRecipients):
+class TestSmsTemplate(TestMailFullCommon, TestMailFullRecipients):
 
     @classmethod
     def setUpClass(cls):
@@ -15,12 +15,15 @@ class TestSmsTemplate(TestMailFullCommon, TestRecipients):
         })
         cls.test_record = cls._reset_mail_context(cls.test_record)
 
-        cls.body_en = 'Dear ${object.display_name} this is an SMS.'
-        cls.body_fr = u"Hello ${object.display_name} ceci est en français."
+        cls.body_en = 'Dear {{ object.display_name }} this is an SMS.'
+        cls.body_fr = u"Hello {{ object.display_name }} ceci est en français."
         cls.sms_template = cls._create_sms_template('mail.test.sms', body=cls.body_en)
 
     def test_sms_template_render(self):
         rendered_body = self.sms_template._render_template(self.sms_template.body, self.sms_template.model, self.test_record.ids)
+        self.assertEqual(rendered_body[self.test_record.id], 'Dear %s this is an SMS.' % self.test_record.display_name)
+
+        rendered_body = self.sms_template._render_field('body', self.test_record.ids)
         self.assertEqual(rendered_body[self.test_record.id], 'Dear %s this is an SMS.' % self.test_record.display_name)
 
     def test_sms_template_lang(self):
@@ -36,7 +39,7 @@ class TestSmsTemplate(TestMailFullCommon, TestRecipients):
         })
         # set template to try to use customer lang
         self.sms_template.write({
-            'lang': '${object.customer_id.lang}',
+            'lang': '{{ object.customer_id.lang }}',
         })
         # create a second record linked to a customer in another language
         self.partner_2.write({

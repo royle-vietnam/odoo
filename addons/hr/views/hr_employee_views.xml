@@ -14,11 +14,11 @@
                     <filter string="Unread Messages" name="message_needaction" domain="[('message_needaction', '=', True)]"/>
                     <separator/>
                     <filter invisible="1" string="Late Activities" name="activities_overdue"
-                        domain="[('activity_ids.date_deadline', '&lt;', context_today().strftime('%Y-%m-%d'))]"/>
+                        domain="[('my_activity_date_deadline', '&lt;', context_today().strftime('%Y-%m-%d'))]"/>
                     <filter invisible="1" string="Today Activities" name="activities_today"
-                        domain="[('activity_ids.date_deadline', '=', context_today().strftime('%Y-%m-%d'))]"/>
+                        domain="[('my_activity_date_deadline', '=', context_today().strftime('%Y-%m-%d'))]"/>
                     <filter invisible="1" string="Future Activities" name="activities_upcoming_all"
-                        domain="[('activity_ids.date_deadline', '&gt;', context_today().strftime('%Y-%m-%d'))]"/>
+                        domain="[('my_activity_date_deadline', '&gt;', context_today().strftime('%Y-%m-%d'))]"/>
                     <separator/>
                     <filter string="Archived" name="inactive" domain="[('active', '=', False)]"/>
                     <group expand="0" string="Group By">
@@ -42,6 +42,7 @@
                     <field name="active" invisible="1"/>
                     <field name="user_partner_id" invisible="1"/>
                     <field name="hr_presence_state" invisible="1"/>
+                    <field name="image_128" invisible="1" />
                     <header>
                         <button name="%(plan_wizard_action)d" string="Launch Plan" type="action" groups="hr.group_hr_manager"/>
                     </header>
@@ -73,7 +74,8 @@
                             </button>
                         </div>
                         <widget name="web_ribbon" title="Archived" bg_color="bg-danger" attrs="{'invisible': [('active', '=', True)]}"/>
-                        <field name="image_1920" widget='image' class="oe_avatar" options='{"zoom": true, "preview_image":"image_128"}'/>
+                        <field name="avatar_128" invisible="1"/>
+                        <field name="image_1920" widget='image' class="oe_avatar" options='{"zoom": true, "preview_image":"avatar_128"}'/>
                         <div class="oe_title">
                             <h1 class="d-flex">
                                 <field name="name" placeholder="Employee's Name" required="True"/>
@@ -90,6 +92,8 @@
                                 <field name="work_phone" widget="phone"/>
                                 <field name="work_email" widget="email"/>
                                 <field name="company_id" groups="base.group_multi_company"/>
+                                <field name="company_country_id" invisible="1"/>
+                                <field name="company_country_code" invisible="1"/>
                             </group>
                             <group>
                                 <field name="department_id"/>
@@ -105,19 +109,20 @@
                                             <field name="address_id"
                                                 context="{'show_address': 1}"
                                                 options='{"always_reload": True, "highlight_first_line": True}'/>
-                                            <field name="work_location"/>
+                                            <field name="work_location_id" context="{'default_address_id': address_id}" />
                                         </group>
                                         <group name="managers" string="Approvers" class="hide-group-if-empty">
                                             <!-- is overridden in other hr related modules -->
                                         </group>
                                         <group name="departure" string="Departure" attrs="{'invisible': [('active', '=', True)]}">
-                                            <field name="departure_reason"/>
+                                            <field name="departure_reason_id" options="{'no_edit': True, 'no_create': True, 'no_open': True}"/>
                                             <field name="departure_description"/>
                                             <field name="departure_date"/>
                                         </group>
                                         <group string="Schedule">
                                             <field name="resource_calendar_id" required="1"/>
-                                            <field name="tz"/>
+                                            <field name="id" invisible="1"/>
+                                            <field name="tz" attrs="{'required': [('id', '!=', False)]}"/>
                                         </group>
                                     </div>
                                 </div>
@@ -132,7 +137,8 @@
                                                 'form_view_ref': 'base.res_partner_view_form_private'}"
                                             options='{"always_reload": True, "highlight_first_line": True}'/>
                                         <field name="private_email" string="Email"/>
-                                        <field name="phone" class="o_force_ltr" groups="hr.group_hr_user" string="Phone"/>
+                                        <field name="phone" class="o_force_ltr" groups="hr.group_hr_user" string="Phone" readonly="True"/>
+                                        <field name="lang" string="Language"/>
                                         <field name="bank_account_id" context="{'default_partner_id': address_home_id}"/>
                                         <label for="km_home_work"/>
                                         <div class="o_row" name="div_km_home_work">
@@ -162,10 +168,12 @@
                                         <field name="emergency_contact"/>
                                         <field name="emergency_phone" class="o_force_ltr"/>
                                     </group>
-                                    <group string="Work Permit" name="work_permit">
+                                    <group string="Work Permit" name="has_work_permit">
                                         <field name="visa_no"/>
                                         <field name="permit_no"/>
                                         <field name="visa_expire"/>
+                                        <field name="work_permit_expiration_date"/>
+                                        <field name="has_work_permit"/>
                                     </group>
                                     <group string="Education">
                                         <field name="certificate"/>
@@ -177,10 +185,10 @@
                             <page name="hr_settings" string="HR Settings" groups="hr.group_hr_user">
                                 <group>
                                     <group string='Status' name="active_group">
+                                        <field name="employee_type"/>
                                         <field name="user_id" string="Related User" domain="[('share', '=', False)]"/>
-                                        <field name="job_id"/>
                                     </group>
-                                    <group string="Attendance" name="identification_group">
+                                    <group string="Attendance/Point of Sale" name="identification_group">
                                         <field name="pin" string="PIN Code"/>
                                         <label for="barcode"/>
                                         <div class="o_row">
@@ -189,6 +197,10 @@
                                             <button name="%(hr_employee_print_badge)d" string="Print Badge" class="btn btn-link" type="action" attrs="{'invisible': [('barcode', '=', False)]}"/>
                                         </div>
                                     </group>
+                                    <group string='Payroll' name="payroll_group">
+                                        <field name="job_id"/>
+                                    </group>
+                                    <group name="application_group"/>
                                 </group>
                             </page>
                         </notebook>
@@ -207,16 +219,21 @@
             <field name="name">hr.employee.tree</field>
             <field name="model">hr.employee</field>
             <field name="arch" type="xml">
-                <tree string="Employees" multi_edit="1" sample="1">
+                <tree string="Employees" multi_edit="1" sample="1" js_class="hr_employee_list">
                     <field name="name" readonly="1"/>
                     <field name="work_phone" class="o_force_ltr" readonly="1"/>
                     <field name="work_email"/>
+                    <field name="activity_ids" widget="list_activity"/>
+                    <field name="activity_user_id" optional="hide" string="Activity by" widget="many2one_avatar_user"/>
+                    <field name="activity_date_deadline" widget="remaining_days" options="{'allow_order': '1'}"/>
                     <field name="company_id" groups="base.group_multi_company" readonly="1"/>
                     <field name="department_id"/>
                     <field name="job_id"/>
                     <field name="parent_id"/>
-                    <field name="work_location" optional="hide"/>
+                    <field name="work_location_id" optional="hide"/>
                     <field name="coach_id" invisible="1"/>
+                    <field name="active" invisible="1"/>
+                    <field name="category_ids" widget="many2many_tags" options="{'color_field': 'color'}" optional="hide"/>
                 </tree>
             </field>
         </record>
@@ -232,10 +249,11 @@
                    <field name="user_id"/>
                    <field name="user_partner_id"/>
                    <field name="hr_icon_display"/>
+                   <field name="image_128" />
                    <templates>
                        <t t-name="kanban-box">
                        <div class="oe_kanban_global_click o_kanban_record_has_image_fill o_hr_kanban_record">
-                           <field name="image_128" widget="image" class="o_kanban_image_fill_left" options="{'zoom': true, 'zoom_delay': 1000, 'background': true, 'preventClicks': false}"/>
+                           <field name="avatar_128" widget="image" class="o_kanban_image_fill_left" options="{'zoom': true, 'zoom_delay': 1000, 'background': true, 'preventClicks': false}"/>
 
                             <div class="oe_kanban_details">
                                <div class="o_kanban_record_top">
@@ -288,14 +306,17 @@
                                    <li t-if="record.work_email.raw_value" class="o_text_overflow"><field name="work_email" /></li>
                                    <li t-if="record.work_phone.raw_value" class="o_force_ltr"><field name="work_phone" /></li>
                                </ul>
-                                <div class="oe_kanban_content">
-                                    <div class="o_kanban_record_bottom">
-                                        <div class="oe_kanban_bottom_left"/>
-                                        <div class="oe_kanban_bottom_right">
-                                            <a title="Chat" icon="fa-comments" href="#" class="ml8 o_employee_chat_btn" attrs="{'invisible': [('user_id','=', False)]}" role="button"><i class="fa fa-comments"/></a>
-                                        </div>
-                                    </div>
-                                </div>
+                           </div>
+                           <div class="oe_kanban_content position-absolute fixed-bottom mr-2 o_hr_employee_kanban_bottom">
+                               <div class="o_kanban_record_bottom">
+                                   <div class="oe_kanban_bottom_left"/>
+                                   <div class="oe_kanban_bottom_right float-right">
+                                       <a title="Chat" icon="fa-comments" href="#" class="ml8 o_employee_chat_btn" attrs="{'invisible': [('user_id','=', False)]}" role="button"><i class="fa fa-comments"/></a>
+                                       <div class="hr_activity_container">
+                                           <field name="activity_ids" widget="kanban_activity"/>
+                                       </div>
+                                   </div>
+                               </div>
                            </div>
                        </div>
                        </t>
@@ -312,7 +333,7 @@
                     <field name="id"/>
                     <templates>
                         <div t-name="activity-box">
-                            <img t-att-src="activity_image('hr.employee', 'image_128', record.id.raw_value)" role="img" t-att-title="record.id.value" t-att-alt="record.id.value"/>
+                            <img t-att-src="activity_image('hr.employee', 'avatar_128', record.id.raw_value)" role="img" t-att-title="record.id.value" t-att-alt="record.id.value"/>
                             <div>
                                 <field name="name" display="full"/>
                                 <field name="job_id" muted="1" display="full"/>

@@ -3,8 +3,8 @@
 
 import ast
 
-from odoo import SUPERUSER_ID
-from odoo.exceptions import UserError, ValidationError
+from odoo import SUPERUSER_ID, Command
+from odoo.exceptions import RedirectWarning, UserError, ValidationError
 from odoo.tests.common import TransactionCase, BaseCase
 from odoo.tools import mute_logger
 from odoo.tools.safe_eval import safe_eval, const_eval, expr_eval
@@ -366,8 +366,8 @@ class TestBase(TransactionCase):
                                       'phone': '1122334455',
                                       'email': 'info@sunhelm.com',
                                       'vat': 'BE0477472701',
-                                      'child_ids': [(4, p0.id),
-                                                    (0, 0, {'name': 'Alrik Greenthorn',
+                                      'child_ids': [Command.link(p0.id),
+                                                    Command.create({'name': 'Alrik Greenthorn',
                                                             'email': 'agr@sunhelm.com'})]})
         p1 = res_partner.create({'name': 'Otto Blackwood',
                                  'email': 'otto.blackwood@sunhelm.com',
@@ -376,19 +376,19 @@ class TestBase(TransactionCase):
                                   'email': 'ggr@sunhelm.com',
                                   'parent_id': p1.id})
         p2 = res_partner.search([('email', '=', 'agr@sunhelm.com')], limit=1)
-        sunhelm.write({'child_ids': [(0, 0, {'name': 'Ulrik Greenthorn',
+        sunhelm.write({'child_ids': [Command.create({'name': 'Ulrik Greenthorn',
                                              'email': 'ugr@sunhelm.com'})]})
         p3 = res_partner.search([('email', '=', 'ugr@sunhelm.com')], limit=1)
 
         for p in (p0, p1, p11, p2, p3):
             self.assertEqual(p.commercial_partner_id, sunhelm, 'Incorrect commercial entity resolution')
             self.assertEqual(p.vat, sunhelm.vat, 'Commercial fields must be automatically synced')
-        sunhelmvat = 'BE0123456789'
+        sunhelmvat = 'BE0123456749'
         sunhelm.write({'vat': sunhelmvat})
         for p in (p0, p1, p11, p2, p3):
             self.assertEqual(p.vat, sunhelmvat, 'Commercial fields must be automatically and recursively synced')
 
-        p1vat = 'BE0987654321'
+        p1vat = 'BE0987654394'
         p1.write({'vat': p1vat})
         for p in (sunhelm, p0, p11, p2, p3):
             self.assertEqual(p.vat, sunhelmvat, 'Sync to children should only work downstream and on commercial entities')
@@ -401,7 +401,7 @@ class TestBase(TransactionCase):
         self.assertEqual(p1.commercial_partner_id, p1, 'Incorrect commercial entity resolution after setting is_company')
 
         # writing on parent should not touch child commercial entities
-        sunhelmvat2 = 'BE0112233445'
+        sunhelmvat2 = 'BE0112233453'
         sunhelm.write({'vat': sunhelmvat2})
         self.assertEqual(p1.vat, p1vat, 'Setting is_company should stop auto-sync of commercial fields')
         self.assertEqual(p0.vat, sunhelmvat2, 'Commercial fields must be automatically synced')
@@ -508,8 +508,10 @@ class TestBase(TransactionCase):
                                 'partner_id': test_partner.id,
                                 })
         # Cannot archive the partner
+        with self.assertRaises(RedirectWarning):
+            test_partner.with_user(self.env.ref('base.user_admin')).toggle_active()
         with self.assertRaises(ValidationError):
-            test_partner.toggle_active()
+            test_partner.with_user(self.env.ref('base.user_demo')).toggle_active()
 
         # Can archive the user but the partner stays active
         test_user.toggle_active()
@@ -554,8 +556,8 @@ class TestPartnerRecursion(TransactionCase):
         """ Indirect hacky write to create cycle in children """
         p3b = self.p1.create({'name': 'Elmtree Grand-Child 1.2', 'parent_id': self.p2.id})
         with self.assertRaises(ValidationError):
-            self.p2.write({'child_ids': [(1, self.p3.id, {'parent_id': p3b.id}),
-                                         (1, p3b.id, {'parent_id': self.p3.id})]})
+            self.p2.write({'child_ids': [Command.update(self.p3.id, {'parent_id': p3b.id}),
+                                         Command.update(p3b.id, {'parent_id': self.p3.id})]})
 
     def test_110_res_partner_recursion_multi_update(self):
         """ multi-write on several partners in same hierarchy must not trigger a false cycle detection """
@@ -605,7 +607,7 @@ class TestParentStore(TransactionCase):
         """ Duplicate the children then reassign them to the new parent (2nd method). """
         new_cat1 = self.cat1.copy()
         new_cat2 = self.cat2.copy()
-        new_cat0 = self.cat0.copy({'child_ids': [(6, 0, (new_cat1 + new_cat2).ids)]})
+        new_cat0 = self.cat0.copy({'child_ids': [Command.set((new_cat1 + new_cat2).ids)]})
         new_struct = new_cat0.search([('parent_id', 'child_of', new_cat0.id)])
         self.assertEqual(len(new_struct), 4, "After duplication, the new object must have the childs records")
         old_struct = new_cat0.search([('parent_id', 'child_of', self.cat0.id)])
@@ -617,7 +619,7 @@ class TestParentStore(TransactionCase):
         new_cat1 = self.cat1.copy()
         new_cat2 = self.cat2.copy()
         new_cat0 = self.cat0.copy({'child_ids': []})
-        new_cat0.write({'child_ids': [(4, new_cat1.id), (4, new_cat2.id)]})
+        new_cat0.write({'child_ids': [Command.link(new_cat1.id), Command.link(new_cat2.id)]})
         new_struct = new_cat0.search([('parent_id', 'child_of', new_cat0.id)])
         self.assertEqual(len(new_struct), 4, "After duplication, the new object must have the childs records")
         old_struct = new_cat0.search([('parent_id', 'child_of', self.cat0.id)])
@@ -649,8 +651,8 @@ class TestGroups(TransactionCase):
         # four groups with no cycle, check them all together
         a = self.env['res.groups'].create({'name': 'A'})
         b = self.env['res.groups'].create({'name': 'B'})
-        c = self.env['res.groups'].create({'name': 'G', 'implied_ids': [(6, 0, (a + b).ids)]})
-        d = self.env['res.groups'].create({'name': 'D', 'implied_ids': [(6, 0, c.ids)]})
+        c = self.env['res.groups'].create({'name': 'G', 'implied_ids': [Command.set((a + b).ids)]})
+        d = self.env['res.groups'].create({'name': 'D', 'implied_ids': [Command.set(c.ids)]})
         self.assertTrue((a + b + c + d)._check_m2m_recursion('implied_ids'))
 
         # create a cycle and check
@@ -661,6 +663,35 @@ class TestGroups(TransactionCase):
         a = self.env['res.groups'].with_context(lang='en_US').create({'name': 'A'})
         b = a.copy()
         self.assertFalse(a.name == b.name)
+
+    def test_apply_groups(self):
+        a = self.env['res.groups'].create({'name': 'A'})
+        b = self.env['res.groups'].create({'name': 'B'})
+        c = self.env['res.groups'].create({'name': 'C', 'implied_ids': [Command.set(a.ids)]})
+
+        # C already implies A, we want both B+C to imply A
+        (b + c)._apply_group(a)
+
+        self.assertIn(a, b.implied_ids)
+        self.assertIn(a, c.implied_ids)
+
+    def test_remove_groups(self):
+        u = self.env['res.users'].create({'login': 'u', 'name': 'U'})
+
+        a = self.env['res.groups'].create({'name': 'A', 'users': [Command.set(u.ids)]})
+        b = self.env['res.groups'].create({'name': 'B', 'users': [Command.set(u.ids)]})
+        c = self.env['res.groups'].create({'name': 'C', 'implied_ids': [Command.set(a.ids)]})
+
+        # C already implies A, we want none of B+C to imply A
+        (b + c)._remove_group(a)
+
+        self.assertNotIn(a, b.implied_ids)
+        self.assertNotIn(a, c.implied_ids)
+
+        # Since B didn't imply A, removing A from the implied groups of (B+C)
+        # should not remove user U from A, even though C implied A, since C does
+        # not have U as a user
+        self.assertIn(u, a.users)
 
 
 class TestUsers(TransactionCase):

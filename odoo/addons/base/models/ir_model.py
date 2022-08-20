@@ -3,7 +3,7 @@
 import itertools
 import logging
 import re
-import time
+import psycopg2
 from ast import literal_eval
 from collections import defaultdict
 from collections.abc import Mapping
@@ -11,11 +11,11 @@ from operator import itemgetter
 
 from psycopg2 import sql
 
-from odoo import api, fields, models, tools, _
+from odoo import api, fields, models, tools, _, Command
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.osv import expression
 from odoo.tools import pycompat, unique
-from odoo.tools.safe_eval import safe_eval, datetime, dateutil
+from odoo.tools.safe_eval import safe_eval, datetime, dateutil, time
 
 _logger = logging.getLogger(__name__)
 
@@ -151,7 +151,7 @@ class IrModel(models.Model):
     def _default_field_id(self):
         if self.env.context.get('install_mode'):
             return []                   # no default field when importing
-        return [(0, 0, {'name': 'x_name', 'field_description': 'Name', 'ttype': 'char', 'copied': True})]
+        return [Command.create({'name': 'x_name', 'field_description': 'Name', 'ttype': 'char', 'copied': True})]
 
     name = fields.Char(string='Model Description', translate=True, required=True)
     model = fields.Char(default='x_', required=True, index=True)
@@ -201,7 +201,7 @@ class IrModel(models.Model):
         self.count = 0
         for model in self:
             records = self.env[model.model]
-            if not records._abstract:
+            if not records._abstract and records._auto:
                 cr.execute(sql.SQL('SELECT COUNT(*) FROM {}').format(sql.Identifier(records._table)))
                 model.count = cr.fetchone()[0]
 
@@ -276,14 +276,16 @@ class IrModel(models.Model):
                 _logger.runbot('The model %s could not be dropped because it did not exist in the registry.', model.model)
         return True
 
-    def unlink(self):
+    @api.ondelete(at_uninstall=False)
+    def _unlink_if_manual(self):
         # Prevent manual deletion of module tables
-        if not self._context.get(MODULE_UNINSTALL_FLAG):
-            for model in self:
-                if model.state != 'manual':
-                    raise UserError(_("Model '%s' contains module data and cannot be removed.", model.name))
-                # prevent screwing up fields that depend on these models' fields
-                model.field_id._prepare_update()
+        for model in self:
+            if model.state != 'manual':
+                raise UserError(_("Model '%s' contains module data and cannot be removed.", model.name))
+
+    def unlink(self):
+        # prevent screwing up fields that depend on these models' fields
+        self.field_id._prepare_update()
 
         # delete fields whose comodel is being removed
         self.env['ir.model.fields'].search([('relation', 'in', self.mapped('model'))]).unlink()
@@ -412,9 +414,13 @@ class IrModel(models.Model):
     def _add_manual_models(self):
         """ Add extra models to the registry. """
         # clean up registry first
-        custom_models = [name for name, model_class in self.pool.items() if model_class._custom]
-        for name in custom_models:
-            del self.pool[name]
+        for name, Model in list(self.pool.items()):
+            if Model._custom:
+                del self.pool.models[name]
+                # remove the model's name from its parents' _inherit_children
+                for Parent in Model.__bases__:
+                    if hasattr(Parent, 'pool'):
+                        Parent._inherit_children.discard(name)
         # add manual models
         cr = self.env.cr
         cr.execute('SELECT * FROM ir_model WHERE state=%s', ['manual'])
@@ -424,8 +430,18 @@ class IrModel(models.Model):
             if tools.table_kind(cr, Model._table) not in ('r', None):
                 # not a regular table, so disable schema upgrades
                 Model._auto = False
-                cr.execute('SELECT * FROM %s LIMIT 0' % Model._table)
-                columns = {desc[0] for desc in cr.description}
+                cr.execute(
+                    '''
+                    SELECT a.attname
+                      FROM pg_attribute a
+                      JOIN pg_class t
+                        ON a.attrelid = t.oid
+                       AND t.relname = %s
+                     WHERE a.attnum > 0 -- skip system columns
+                    ''',
+                    [Model._table]
+                )
+                columns = {colinfo[0] for colinfo in cr.fetchall()}
                 Model._log_access = set(models.LOG_ACCESS_COLUMNS) <= columns
 
 
@@ -751,7 +767,7 @@ class IrModelFields(models.Model):
                 for dep in model._dependent_fields(field):
                     if dep.manual:
                         failed_dependencies.append((field, dep))
-                for inverse in model._field_inverses.get(field, ()):
+                for inverse in model.pool.field_inverses[field]:
                     if inverse.manual and inverse.type == 'one2many':
                         failed_dependencies.append((field, inverse))
 
@@ -796,19 +812,21 @@ class IrModelFields(models.Model):
             # the registry has been modified, restore it
             self.pool.setup_models(self._cr)
 
+    @api.ondelete(at_uninstall=False)
+    def _unlink_if_manual(self):
+        # Prevent manual deletion of module columns
+        if any(field.state != 'manual' for field in self):
+            raise UserError(_("This column contains module data and cannot be removed!"))
+
     def unlink(self):
         if not self:
             return True
-
-        # Prevent manual deletion of module columns
-        if not self._context.get(MODULE_UNINSTALL_FLAG) and \
-                any(field.state != 'manual' for field in self):
-            raise UserError(_("This column contains module data and cannot be removed!"))
 
         # prevent screwing up fields that depend on these fields
         self._prepare_update()
 
         # determine registry fields corresponding to self
+        triggers = self.pool.field_triggers
         fields = []
         for record in self:
             try:
@@ -832,7 +850,7 @@ class IrModelFields(models.Model):
                 if field is not None:
                     discard_fields(subtree)
 
-        discard_fields(self.pool.field_triggers)
+        discard_fields(triggers)
         self.pool.registry_invalidated = True
 
         # The field we just deleted might be inherited, and the registry is
@@ -985,7 +1003,7 @@ class IrModelFields(models.Model):
             'store': bool(field.store),
             'copied': bool(field.copy),
             'on_delete': field.ondelete if field.type == 'many2one' else None,
-            'related': ".".join(field.related) if field.related else None,
+            'related': field.related or None,
             'readonly': bool(field.readonly),
             'required': bool(field.required),
             'selectable': bool(field.search or field.store),
@@ -1017,6 +1035,8 @@ class IrModelFields(models.Model):
             model_id = self.env['ir.model']._get_id(model_name)
             for field in self.env[model_name]._fields.values():
                 rows.append(self._reflect_field_params(field, model_id))
+        if not rows:
+            return
         cols = list(unique(['model', 'name'] + list(rows[0])))
         expected = [tuple(row[col] for col in cols) for row in rows]
 
@@ -1094,6 +1114,8 @@ class IrModelFields(models.Model):
                 attrs['size'] = field_data['size'] or None
         elif field_data['ttype'] in ('selection', 'reference'):
             attrs['selection'] = self.env['ir.model.fields.selection']._get_selection_data(field_data['id'])
+            if field_data['ttype'] == 'selection':
+                attrs['group_expand'] = field_data['group_expand']
         elif field_data['ttype'] == 'many2one':
             if not self.pool.loaded and field_data['relation'] not in self.env:
                 return
@@ -1338,7 +1360,8 @@ class IrModelSelection(models.Model):
 
         return result
 
-    def unlink(self):
+    @api.ondelete(at_uninstall=False)
+    def _unlink_if_manual(self):
         # Prevent manual deletion of module columns
         if (
             self.pool.ready
@@ -1348,6 +1371,7 @@ class IrModelSelection(models.Model):
                               'Please modify them through Python code, '
                               'preferably through a custom addon!'))
 
+    def unlink(self):
         self._process_ondelete()
         result = super().unlink()
 
@@ -1362,6 +1386,29 @@ class IrModelSelection(models.Model):
 
     def _process_ondelete(self):
         """ Process the 'ondelete' of the given selection values. """
+        def safe_write(records, fname, value):
+            if not records:
+                return
+            try:
+                with self.env.cr.savepoint():
+                    records.write({fname: value})
+            except Exception:
+                # going through the ORM failed, probably because of an exception
+                # in an override or possibly a constraint.
+                _logger.runbot(
+                    "Could not fulfill ondelete action for field %s.%s, "
+                    "attempting ORM bypass...", records._name, fname,
+                )
+                query = sql.SQL("UPDATE {} SET {}=%s WHERE id IN %s").format(
+                    sql.Identifier(records._table),
+                    sql.Identifier(fname),
+                )
+                # if this fails then we're shit out of luck and there's nothing
+                # we can do except fix on a case-by-case basis
+                value = field.convert_to_column(value, records)
+                self.env.cr.execute(query, [value, records._ids])
+                records.invalidate_cache([fname])
+
         for selection in self:
             Model = self.env[selection.field_id.model]
             # The field may exist in database but not in registry. In this case
@@ -1373,14 +1420,23 @@ class IrModelSelection(models.Model):
             if not field or not field.store or Model._abstract:
                 continue
 
-            ondelete = (field.ondelete or {}).get(selection.value) or 'set null'
-            if callable(ondelete):
+            ondelete = (field.ondelete or {}).get(selection.value)
+            # special case for custom fields
+            if ondelete is None and field.manual and not field.required:
+                ondelete = 'set null'
+
+            if ondelete is None:
+                # nothing to do, the selection does not come from a field extension
+                continue
+            elif callable(ondelete):
                 ondelete(selection._get_records())
             elif ondelete == 'set null':
-                selection._get_records().write({field.name: False})
+                safe_write(selection._get_records(), field.name, False)
             elif ondelete == 'set default':
                 value = field.convert_to_write(field.default(Model), Model)
-                selection._get_records().write({field.name: value})
+                safe_write(selection._get_records(), field.name, value)
+            elif ondelete.startswith('set '):
+                safe_write(selection._get_records(), field.name, ondelete[4:])
             elif ondelete == 'cascade':
                 selection._get_records().unlink()
             else:
@@ -1533,7 +1589,7 @@ class IrModelConstraint(models.Model):
         constraint_module = {
             constraint[0]: cls._module
             for cls in reversed(type(model).mro())
-            if not getattr(cls, 'pool', None)
+            if models.is_definition_class(cls)
             for constraint in getattr(cls, '_local_sql_constraints', ())
         }
 
@@ -1860,7 +1916,7 @@ class IrModelData(models.Model):
     # NEW V8 API
     @api.model
     @tools.ormcache('xmlid')
-    def xmlid_lookup(self, xmlid):
+    def _xmlid_lookup(self, xmlid):
         """Low level xmlid lookup
         Return (id, res_model, res_id) or raise ValueError if not found
         """
@@ -1873,65 +1929,31 @@ class IrModelData(models.Model):
         return result
 
     @api.model
-    def xmlid_to_res_model_res_id(self, xmlid, raise_if_not_found=False):
+    def _xmlid_to_res_model_res_id(self, xmlid, raise_if_not_found=False):
         """ Return (res_model, res_id)"""
         try:
-            return self.xmlid_lookup(xmlid)[1:3]
+            return self._xmlid_lookup(xmlid)[1:3]
         except ValueError:
             if raise_if_not_found:
                 raise
             return (False, False)
 
     @api.model
-    def xmlid_to_res_id(self, xmlid, raise_if_not_found=False):
+    def _xmlid_to_res_id(self, xmlid, raise_if_not_found=False):
         """ Returns res_id """
-        return self.xmlid_to_res_model_res_id(xmlid, raise_if_not_found)[1]
-
-    @api.model
-    def xmlid_to_object(self, xmlid, raise_if_not_found=False):
-        """ Return a Model object, or ``None`` if ``raise_if_not_found`` is 
-        set
-        """
-        t = self.xmlid_to_res_model_res_id(xmlid, raise_if_not_found)
-        res_model, res_id = t
-
-        if res_model and res_id:
-            record = self.env[res_model].browse(res_id)
-            if record.exists():
-                return record
-            if raise_if_not_found:
-                raise ValueError('No record found for unique ID %s. It may have been deleted.' % (xmlid))
-        return None
-
-    @api.model
-    def _get_id(self, module, xml_id):
-        """Returns the id of the ir.model.data record corresponding to a given module and xml_id (cached) or raise a ValueError if not found"""
-        return self.xmlid_lookup("%s.%s" % (module, xml_id))[0]
-
-    @api.model
-    def get_object_reference(self, module, xml_id):
-        """Returns (model, res_id) corresponding to a given module and xml_id (cached) or raise ValueError if not found"""
-        return self.xmlid_lookup("%s.%s" % (module, xml_id))[1:3]
+        return self._xmlid_to_res_model_res_id(xmlid, raise_if_not_found)[1]
 
     @api.model
     def check_object_reference(self, module, xml_id, raise_on_access_error=False):
         """Returns (model, res_id) corresponding to a given module and xml_id (cached), if and only if the user has the necessary access rights
         to see that object, otherwise raise a ValueError if raise_on_access_error is True or returns a tuple (model found, False)"""
-        model, res_id = self.get_object_reference(module, xml_id)
+        model, res_id = self._xmlid_lookup("%s.%s" % (module, xml_id))[1:3]
         #search on id found in result to check if current user has read access right
         if self.env[model].search([('id', '=', res_id)]):
             return model, res_id
         if raise_on_access_error:
             raise AccessError(_('Not enough access rights on the external ID:') + ' %s.%s' % (module, xml_id))
         return model, False
-
-    @api.model
-    def get_object(self, module, xml_id):
-        """ Returns a browsable record for the given module name and xml_id.
-            If not found, raise a ValueError or return None, depending
-            on the value of `raise_exception`.
-        """
-        return self.xmlid_to_object("%s.%s" % (module, xml_id), raise_if_not_found=True)
 
     def unlink(self):
         """ Regular unlink method, but make sure to clear the caches. """
@@ -2002,7 +2024,9 @@ class IrModelData(models.Model):
             INSERT INTO ir_model_data (module, name, model, res_id, noupdate)
             VALUES {rows}
             ON CONFLICT (module, name)
-            DO UPDATE SET write_date=(now() at time zone 'UTC') {where}
+            DO UPDATE SET (model, res_id, write_date) =
+                (EXCLUDED.model, EXCLUDED.res_id, now() at time zone 'UTC')
+                {where}
         """.format(
             rows=", ".join([rowf] * len(sub_rows)),
             where="WHERE NOT ir_model_data.noupdate" if update else "",
@@ -2013,7 +2037,7 @@ class IrModelData(models.Model):
         """ Simply mark the given XML id as being loaded, and return the
             corresponding record.
         """
-        record = self.xmlid_to_object(xml_id)
+        record = self.env.ref(xml_id, raise_if_not_found=False)
         if record:
             self.pool.loaded_xmlids.add(xml_id)
         return record
@@ -2056,6 +2080,19 @@ class IrModelData(models.Model):
             else:
                 records_items.append((data.model, data.res_id))
 
+        # avoid prefetching fields that are going to be deleted: during uninstall, it is
+        # possible to perform a recompute (via flush) after the database columns have been
+        # deleted but before the new registry has been created, meaning the recompute will
+        # be executed on a stale registry, and if some of the data for executing the compute
+        # methods is not in cache it will be fetched, and fields that exist in the registry but not
+        # in the database will be prefetched, this will of course fail and prevent the uninstall.
+        for ir_field in self.env['ir.model.fields'].browse(field_ids):
+            model = self.pool.get(ir_field.model)
+            if model is not None:
+                field = model._fields.get(ir_field.name)
+                if field is not None:
+                    field.prefetch = False
+
         # to collect external ids of records that cannot be deleted
         undeletable_ids = []
 
@@ -2097,7 +2134,6 @@ class IrModelData(models.Model):
                     records.unlink()
             except Exception:
                 if len(records) <= 1:
-                    _logger.info('Unable to delete %s', records, exc_info=True)
                     undeletable_ids.extend(ref_data._ids)
                 else:
                     # divide the batch in two, and recursively delete them
@@ -2122,21 +2158,44 @@ class IrModelData(models.Model):
         constraints = self.env['ir.model.constraint'].search([('module', 'in', modules.ids)])
         constraints._module_data_uninstall()
 
-        # Remove fields, selections and relations. Note that the selections of
-        # removed fields do not require any "data fix", as their corresponding
-        # column no longer exists. We can therefore completely ignore them. That
-        # is why selections are removed after fields: most selections are
-        # deleted on cascade by their corresponding field.
-        delete(self.env['ir.model.fields'].browse(unique(field_ids)))
+        # If we delete a selection field, and some of its values have ondelete='cascade',
+        # we expect the records with that value to be deleted. If we delete the field first,
+        # the column is dropped and the selection is gone, and thus the records above will not
+        # be deleted.
         delete(self.env['ir.model.fields.selection'].browse(unique(selection_ids)).exists())
+        delete(self.env['ir.model.fields'].browse(unique(field_ids)))
         relations = self.env['ir.model.relation'].search([('module', 'in', modules.ids)])
         relations._module_data_uninstall()
 
         # remove models
         delete(self.env['ir.model'].browse(unique(model_ids)))
 
+        # log undeletable ids
+        _logger.info("ir.model.data could not be deleted (%s)", undeletable_ids)
+
+        # sort out which undeletable model data may have become deletable again because
+        # of records being cascade-deleted or tables being dropped just above
+        for data in self.browse(undeletable_ids).exists():
+            record = self.env[data.model].browse(data.res_id)
+            try:
+                with self.env.cr.savepoint():
+                    if record.exists():
+                        # record exists therefore the data is still undeletable,
+                        # remove it from module_data
+                        module_data -= data
+                        continue
+            except psycopg2.ProgrammingError:
+                # This most likely means that the record does not exist, since record.exists()
+                # is rougly equivalent to `SELECT id FROM table WHERE id=record.id` and it may raise
+                # a ProgrammingError because the table no longer exists (and so does the
+                # record), also applies to ir.model.fields, constraints, etc.
+                pass
         # remove remaining module data records
-        (module_data - self.browse(undeletable_ids)).unlink()
+        module_data.unlink()
+
+    @api.model
+    def _process_end_unlink_record(self, record):
+        record.unlink()
 
     @api.model
     def _process_end(self, modules):
@@ -2207,7 +2266,7 @@ class IrModelData(models.Model):
             if record.exists():
                 module = xmlid.split('.', 1)[0]
                 record = record.with_context(module=module)
-                record.unlink()
+                self._process_end_unlink_record(record)
             else:
                 bad_imd_ids.append(id)
         if bad_imd_ids:
@@ -2223,7 +2282,7 @@ class IrModelData(models.Model):
         """ Toggle the noupdate flag on the external id of the record """
         record = self.env[model].browse(res_id)
         if record.check_access_rights('write'):
-            for xid in  self.search([('model', '=', model), ('res_id', '=', res_id)]):
+            for xid in self.search([('model', '=', model), ('res_id', '=', res_id)]):
                 xid.noupdate = not xid.noupdate
 
 

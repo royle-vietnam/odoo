@@ -80,22 +80,18 @@ class TestStockLandedCostsMrp(ValuationReconciliationTestCommon):
         })
 
     def test_landed_cost_on_mrp(self):
-        inventory = self.env['stock.inventory'].create({
-            'name': 'Initial inventory',
-            'line_ids': [(0, 0, {
-                'product_id': self.product_component1.id,
-                'product_uom_id': self.product_component1.uom_id.id,
-                'product_qty': 500,
-                'location_id': self.warehouse_1.lot_stock_id.id
-            }), (0, 0, {
-                'product_id': self.product_component2.id,
-                'product_uom_id': self.product_component2.uom_id.id,
-                'product_qty': 500,
-                'location_id': self.warehouse_1.lot_stock_id.id
-            })]
+        # Initial inventory
+        quants = self.env['stock.quant'].with_context(inventory_mode=True).create({
+            'product_id': self.product_component1.id,
+            'inventory_quantity': 500,
+            'location_id': self.warehouse_1.lot_stock_id.id,
         })
-        inventory.action_start()
-        inventory.action_validate()
+        quants |= self.env['stock.quant'].with_context(inventory_mode=True).create({
+            'product_id': self.product_component2.id,
+            'inventory_quantity': 500,
+            'location_id': self.warehouse_1.lot_stock_id.id,
+        })
+        quants.action_apply_inventory()
 
         man_order_form = Form(self.env['mrp.production'].with_user(self.allow_user))
         man_order_form.product_id = self.product_refrigerator
@@ -120,17 +116,17 @@ class TestStockLandedCostsMrp(ValuationReconciliationTestCommon):
         mo_form = Form(man_order.with_user(self.allow_user))
         mo_form.qty_producing = 2
         man_order = mo_form.save()
-
-
         man_order.button_mark_done()
 
         landed_cost = Form(self.env['stock.landed.cost'].with_user(self.allow_user)).save()
         landed_cost.target_model = 'manufacturing'
 
-        self.assertTrue(man_order.id in landed_cost.allowed_mrp_production_ids.ids)
+        # Check domain of the views
+        self.assertTrue(man_order in self.env['mrp.production'].search([
+            ('move_finished_ids.stock_valuation_layer_ids', '!=', False), ('company_id', '=', landed_cost.company_id.id)]))
+
         landed_cost.mrp_production_ids = [(6, 0, [man_order.id])]
         landed_cost.cost_lines = [(0, 0, {'product_id': self.landed_cost.id, 'price_unit': 5.0, 'split_method': 'equal'})]
-
         landed_cost.button_validate()
 
         self.assertEqual(landed_cost.state, 'done')
@@ -139,3 +135,44 @@ class TestStockLandedCostsMrp(ValuationReconciliationTestCommon):
         self.assertEqual(len(landed_cost.stock_valuation_layer_ids), 1)
         self.assertEqual(landed_cost.stock_valuation_layer_ids.product_id, self.product_refrigerator)
         self.assertEqual(landed_cost.stock_valuation_layer_ids.value, 5.0)
+
+    def test_landed_cost_on_mrp_02(self):
+        """
+            Test that a user who has manager access to stock can create and validate a landed cost linked
+            to a Manufacturing order without the need for MRP access
+        """
+        # Create a user with only manager access to stock
+        stock_manager = self.env['res.users'].with_context({'no_reset_password': True}).create({
+            'name': "Stock Manager",
+            'login': "test",
+            'email': "test@test.com",
+            'groups_id': [(6, 0, [self.env.ref('stock.group_stock_manager').id])]
+        })
+        # Make some stock and reserve
+        self.env['stock.quant']._update_available_quantity(self.product_component1, self.warehouse_1.lot_stock_id, 10)
+        self.env['stock.quant']._update_available_quantity(self.product_component2, self.warehouse_1.lot_stock_id, 10)
+
+        # Create and confirm a MO with a user who has access to MRP
+        man_order_form = Form(self.env['mrp.production'].with_user(self.allow_user))
+        man_order_form.product_id = self.product_refrigerator
+        man_order_form.bom_id = self.bom_refri
+        man_order_form.product_qty = 1.0
+        man_order = man_order_form.save()
+        man_order.action_confirm()
+        # produce product
+        man_order_form.qty_producing = 1
+        man_order_form.save()
+        man_order.button_mark_done()
+
+        # Create the landed cost with the stock_manager user
+        landed_cost = Form(self.env['stock.landed.cost'].with_user(stock_manager)).save()
+        landed_cost.target_model = 'manufacturing'
+
+        # Check that the MO can be selected by the stock_manger user
+        self.assertTrue(man_order in self.env['mrp.production'].search([
+            ('move_finished_ids.stock_valuation_layer_ids', '!=', False), ('company_id', '=', landed_cost.company_id.id)]))
+        landed_cost.mrp_production_ids = [(6, 0, [man_order.id])]
+
+        # Check that he can validate the landed cost without an access error
+        landed_cost.with_user(stock_manager).button_validate()
+        self.assertEqual(landed_cost.state, 'done')

@@ -4,10 +4,10 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: Odoo Server saas~13.5\n"
+"Project-Id-Version: Odoo Server saas~14.5\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2020-09-01 07:29+0000\n"
-"PO-Revision-Date: 2020-09-01 07:29+0000\n"
+"POT-Creation-Date: 2021-09-14 10:28+0000\n"
+"PO-Revision-Date: 2021-09-14 10:28+0000\n"
 "Last-Translator: \n"
 "Language-Team: \n"
 "MIME-Version: 1.0\n"
@@ -37,6 +37,15 @@ msgstr ""
 #: model:ir.model.fields,help:event_sale.field_event_type_ticket__description
 msgid ""
 "A description of the ticket that you want to communicate to your customers."
+msgstr ""
+
+#. module: event_sale
+#: model:ir.model.fields,help:event_sale.field_product_product__detailed_type
+#: model:ir.model.fields,help:event_sale.field_product_template__detailed_type
+msgid ""
+"A storable product is a product for which you manage stock. The Inventory app has to be installed.\n"
+"A consumable product is a product for which stock is not managed.\n"
+"A service is a non-material product you provide."
 msgstr ""
 
 #. module: event_sale
@@ -120,18 +129,9 @@ msgid "Description"
 msgstr ""
 
 #. module: event_sale
-#: model:ir.model.fields,field_description:event_sale.field_account_move__display_name
-#: model:ir.model.fields,field_description:event_sale.field_event_event__display_name
 #: model:ir.model.fields,field_description:event_sale.field_event_event_configurator__display_name
-#: model:ir.model.fields,field_description:event_sale.field_event_event_ticket__display_name
-#: model:ir.model.fields,field_description:event_sale.field_event_registration__display_name
-#: model:ir.model.fields,field_description:event_sale.field_event_type_ticket__display_name
-#: model:ir.model.fields,field_description:event_sale.field_product_product__display_name
-#: model:ir.model.fields,field_description:event_sale.field_product_template__display_name
 #: model:ir.model.fields,field_description:event_sale.field_registration_editor__display_name
 #: model:ir.model.fields,field_description:event_sale.field_registration_editor_line__display_name
-#: model:ir.model.fields,field_description:event_sale.field_sale_order__display_name
-#: model:ir.model.fields,field_description:event_sale.field_sale_order_line__display_name
 msgid "Display Name"
 msgstr ""
 
@@ -169,6 +169,11 @@ msgid "Event Configurator"
 msgstr ""
 
 #. module: event_sale
+#: model:ir.model.fields,field_description:event_sale.field_sale_order_line__event_ok
+msgid "Event Ok"
+msgstr ""
+
+#. module: event_sale
 #: model:ir.model,name:event_sale.model_event_registration
 #: model:product.product,name:event_sale.product_product_event
 msgid "Event Registration"
@@ -189,17 +194,13 @@ msgstr ""
 #: model:ir.model.fields,field_description:event_sale.field_event_event_configurator__event_ticket_id
 #: model:ir.model.fields,field_description:event_sale.field_registration_editor_line__event_ticket_id
 #: model:ir.model.fields,field_description:event_sale.field_sale_order_line__event_ticket_id
+#: model:ir.model.fields.selection,name:event_sale.selection__product_template__detailed_type__event
 msgid "Event Ticket"
 msgstr ""
 
 #. module: event_sale
 #: model:ir.model.fields,field_description:event_sale.field_product_product__event_ticket_ids
 msgid "Event Tickets"
-msgstr ""
-
-#. module: event_sale
-#: model_terms:ir.ui.view,arch_db:event_sale.event_sale_product_template_form
-msgid "Events"
 msgstr ""
 
 #. module: event_sale
@@ -213,28 +214,10 @@ msgid "Free"
 msgstr ""
 
 #. module: event_sale
-#: model:ir.model.fields,field_description:event_sale.field_account_move__id
-#: model:ir.model.fields,field_description:event_sale.field_event_event__id
 #: model:ir.model.fields,field_description:event_sale.field_event_event_configurator__id
-#: model:ir.model.fields,field_description:event_sale.field_event_event_ticket__id
-#: model:ir.model.fields,field_description:event_sale.field_event_registration__id
-#: model:ir.model.fields,field_description:event_sale.field_event_type_ticket__id
-#: model:ir.model.fields,field_description:event_sale.field_product_product__id
-#: model:ir.model.fields,field_description:event_sale.field_product_template__id
 #: model:ir.model.fields,field_description:event_sale.field_registration_editor__id
 #: model:ir.model.fields,field_description:event_sale.field_registration_editor_line__id
-#: model:ir.model.fields,field_description:event_sale.field_sale_order__id
-#: model:ir.model.fields,field_description:event_sale.field_sale_order_line__id
 msgid "ID"
-msgstr ""
-
-#. module: event_sale
-#: model:ir.model.fields,help:event_sale.field_product_product__event_ok
-#: model:ir.model.fields,help:event_sale.field_product_template__event_ok
-#: model:ir.model.fields,help:event_sale.field_sale_order_line__event_ok
-msgid ""
-"If checked this product automatically creates an event registration at the "
-"sales order confirmation."
 msgstr ""
 
 #. module: event_sale
@@ -243,30 +226,14 @@ msgid "Is Paid"
 msgstr ""
 
 #. module: event_sale
-#: model:ir.model.fields,field_description:event_sale.field_product_product__event_ok
-#: model:ir.model.fields,field_description:event_sale.field_product_template__event_ok
-#: model:ir.model.fields,field_description:event_sale.field_sale_order_line__event_ok
-msgid "Is an Event Ticket"
-msgstr ""
-
-#. module: event_sale
 #: model:ir.model,name:event_sale.model_account_move
 msgid "Journal Entry"
 msgstr ""
 
 #. module: event_sale
-#: model:ir.model.fields,field_description:event_sale.field_account_move____last_update
-#: model:ir.model.fields,field_description:event_sale.field_event_event____last_update
 #: model:ir.model.fields,field_description:event_sale.field_event_event_configurator____last_update
-#: model:ir.model.fields,field_description:event_sale.field_event_event_ticket____last_update
-#: model:ir.model.fields,field_description:event_sale.field_event_registration____last_update
-#: model:ir.model.fields,field_description:event_sale.field_event_type_ticket____last_update
-#: model:ir.model.fields,field_description:event_sale.field_product_product____last_update
-#: model:ir.model.fields,field_description:event_sale.field_product_template____last_update
 #: model:ir.model.fields,field_description:event_sale.field_registration_editor____last_update
 #: model:ir.model.fields,field_description:event_sale.field_registration_editor_line____last_update
-#: model:ir.model.fields,field_description:event_sale.field_sale_order____last_update
-#: model:ir.model.fields,field_description:event_sale.field_sale_order_line____last_update
 msgid "Last Modified on"
 msgstr ""
 
@@ -310,6 +277,16 @@ msgid "Ok"
 msgstr ""
 
 #. module: event_sale
+#: model_terms:ir.ui.view,arch_db:event_sale.event_report_template_full_page_ticket_inherit_sale
+msgid "Order Date"
+msgstr ""
+
+#. module: event_sale
+#: model_terms:ir.ui.view,arch_db:event_sale.event_report_template_full_page_ticket_inherit_sale
+msgid "Order Ref"
+msgstr ""
+
+#. module: event_sale
 #: model:ir.model.fields,field_description:event_sale.field_registration_editor_line__registration_id
 msgid "Original Registration"
 msgstr ""
@@ -333,6 +310,7 @@ msgstr ""
 #. module: event_sale
 #: model:ir.model.fields,field_description:event_sale.field_event_event_ticket__price
 #: model:ir.model.fields,field_description:event_sale.field_event_type_ticket__price
+#: model_terms:ir.ui.view,arch_db:event_sale.event_report_template_full_page_ticket_inherit_sale
 msgid "Price"
 msgstr ""
 
@@ -358,6 +336,12 @@ msgstr ""
 #. module: event_sale
 #: model:ir.model,name:event_sale.model_product_template
 msgid "Product Template"
+msgstr ""
+
+#. module: event_sale
+#: model:ir.model.fields,field_description:event_sale.field_product_product__detailed_type
+#: model:ir.model.fields,field_description:event_sale.field_product_template__detailed_type
+msgid "Product Type"
 msgstr ""
 
 #. module: event_sale
@@ -412,11 +396,6 @@ msgstr ""
 #. module: event_sale
 #: model:ir.model.fields,field_description:event_sale.field_event_registration__utm_source_id
 msgid "Source"
-msgstr ""
-
-#. module: event_sale
-#: model_terms:ir.ui.view,arch_db:event_sale.event_event_report_template_badge
-msgid "Ticket Type"
 msgstr ""
 
 #. module: event_sale

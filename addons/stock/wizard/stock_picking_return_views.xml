@@ -24,7 +24,7 @@
                         <tree editable="top" create="0">
                             <field name="product_id"  options="{'no_create': True, 'no_open': True}" force_save="1"/>
                             <field name="quantity"/>
-                            <field name="uom_id" readonly="1" groups="uom.group_uom"/>
+                            <field name="uom_id" groups="uom.group_uom"/>
                             <field name="move_id" invisible="1"/>
                         </tree>
                     </field>
@@ -36,8 +36,8 @@
                     <field name="company_id" invisible="1"/>
                 </group>
                 <footer>
-                    <button name="create_returns" string="Return" type="object" class="btn-primary"/>
-                    <button string="Cancel" class="btn-secondary" special="cancel" />
+                    <button name="create_returns" string="Return" type="object" class="btn-primary" data-hotkey="q"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel" data-hotkey="z" />
                 </footer>
             </form>
         </field>

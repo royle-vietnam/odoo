@@ -1,10 +1,9 @@
-odoo.define('mail/static/src/models/partner/partner.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { attr, many2many, many2one, one2many, one2one } = require('mail/static/src/model/model_field.js');
-
-const utils = require('web.utils');
+import { registerNewModel } from '@mail/model/model_core';
+import { attr, many2many, many2one, one2many, one2one } from '@mail/model/model_field';
+import { insert, link, unlinkAll } from '@mail/model/model_field_command';
+import { cleanSearchTerm } from '@mail/utils/utils';
 
 function factory(dependencies) {
 
@@ -22,14 +21,17 @@ function factory(dependencies) {
          */
         static convertData(data) {
             const data2 = {};
+            if ('active' in data) {
+                data2.active = data.active;
+            }
             if ('country' in data) {
                 if (!data.country) {
-                    data2.country = [['unlink-all']];
+                    data2.country = unlinkAll();
                 } else {
-                    data2.country = [['insert', {
+                    data2.country = insert({
                         id: data.country[0],
                         name: data.country[1],
-                    }]];
+                    });
                 }
             }
             if ('display_name' in data) {
@@ -41,6 +43,9 @@ function factory(dependencies) {
             if ('id' in data) {
                 data2.id = data.id;
             }
+            if ('is_muted' in data) {
+                data2.isMuted = data.is_muted;
+            }
             if ('im_status' in data) {
                 data2.im_status = data.im_status;
             }
@@ -51,18 +56,57 @@ function factory(dependencies) {
             // relation
             if ('user_id' in data) {
                 if (!data.user_id) {
-                    data2.user = [['unlink-all']];
+                    data2.user = unlinkAll();
                 } else {
-                    data2.user = [
-                        ['insert', {
+                    let user = {};
+                    if (Array.isArray(data.user_id)) {
+                        user = {
                             id: data.user_id[0],
                             display_name: data.user_id[1],
-                        }],
-                    ];
+                        };
+                    } else {
+                        user = {
+                            id: data.user_id,
+                        };
+                    }
+                    user.isInternalUser = data.is_internal_user;
+                    data2.user = insert(user);
                 }
             }
 
             return data2;
+        }
+
+        /**
+         * Fetches partners matching the given search term to extend the
+         * JS knowledge and to update the suggestion list accordingly.
+         *
+         * @static
+         * @param {string} searchTerm
+         * @param {Object} [options={}]
+         * @param {mail.thread} [options.thread] prioritize and/or restrict
+         *  result in the context of given thread
+         */
+        static async fetchSuggestions(searchTerm, { thread } = {}) {
+            const kwargs = { search: searchTerm };
+            const isNonPublicChannel = thread && thread.model === 'mail.channel' && thread.public !== 'public';
+            if (isNonPublicChannel) {
+                kwargs.channel_id = thread.id;
+            }
+            const suggestedPartners = await this.env.services.rpc(
+                {
+                    model: 'res.partner',
+                    method: 'get_mention_suggestions',
+                    kwargs,
+                },
+                { shadow: true },
+            );
+            const partners = this.messaging.models['mail.partner'].insert(suggestedPartners.map(data =>
+                this.messaging.models['mail.partner'].convertData(data)
+            ));
+            if (isNonPublicChannel) {
+                thread.update({ members: link(partners) });
+            }
         }
 
         /**
@@ -77,16 +121,15 @@ function factory(dependencies) {
         static async imSearch({ callback, keyword, limit = 10 }) {
             // prefetched partners
             let partners = [];
-            const searchRegexp = new RegExp(
-                _.str.escapeRegExp(utils.unaccent(keyword)),
-                'i'
-            );
-            const currentPartner = this.env.messaging.currentPartner;
+            const cleanedSearchTerm = cleanSearchTerm(keyword);
+            const currentPartner = this.messaging.currentPartner;
             for (const partner of this.all(partner => partner.active)) {
                 if (partners.length < limit) {
                     if (
                         partner !== currentPartner &&
-                        searchRegexp.test(partner.name)
+                        partner.name &&
+                        partner.user &&
+                        cleanSearchTerm(partner.name).includes(cleanedSearchTerm)
                     ) {
                         partners.push(partner);
                     }
@@ -110,6 +153,56 @@ function factory(dependencies) {
         }
 
         /**
+         * Returns partners that match the given search term.
+         *
+         * @static
+         * @param {string} searchTerm
+         * @param {Object} [options={}]
+         * @param {mail.thread} [options.thread] prioritize and/or restrict
+         *  result in the context of given thread
+         * @returns {[mail.partner[], mail.partner[]]}
+         */
+        static searchSuggestions(searchTerm, { thread } = {}) {
+            let partners;
+            const isNonPublicChannel = thread && thread.model === 'mail.channel' && thread.public !== 'public';
+            if (isNonPublicChannel) {
+                // Only return the channel members when in the context of a
+                // non-public channel. Indeed, the message with the mention
+                // would be notified to the mentioned partner, so this prevents
+                // from inadvertently leaking the private message to the
+                // mentioned partner.
+                partners = thread.members;
+            } else {
+                partners = this.messaging.models['mail.partner'].all();
+            }
+            const cleanedSearchTerm = cleanSearchTerm(searchTerm);
+            const mainSuggestionList = [];
+            const extraSuggestionList = [];
+            for (const partner of partners) {
+                if (
+                    (!partner.active && partner !== this.messaging.partnerRoot) ||
+                    partner.id <= 0 ||
+                    this.messaging.publicPartners.includes(partner)
+                ) {
+                    // ignore archived partners (except OdooBot), temporary
+                    // partners (livechat guests), public partners (technical)
+                    continue;
+                }
+                if (
+                    (partner.nameOrDisplayName && cleanSearchTerm(partner.nameOrDisplayName).includes(cleanedSearchTerm)) ||
+                    (partner.email && cleanSearchTerm(partner.email).includes(cleanedSearchTerm))
+                ) {
+                    if (partner.user) {
+                        mainSuggestionList.push(partner);
+                    } else {
+                        extraSuggestionList.push(partner);
+                    }
+                }
+            }
+            return [mainSuggestionList, extraSuggestionList];
+        }
+
+        /**
          * @static
          */
         static async startLoopFetchImStatus() {
@@ -129,10 +222,10 @@ function factory(dependencies) {
                 kwargs: {
                     context: { active_test: false },
                 },
-            }));
+            }, { shadow: true }));
             this.update({ hasCheckedUser: true });
             if (userIds.length > 0) {
-                this.update({ user: [['insert', { id: userIds[0] }]] });
+                this.update({ user: insert({ id: userIds[0] }) });
             }
         }
 
@@ -159,6 +252,89 @@ function factory(dependencies) {
         }
 
         /**
+         * Returns the text that identifies this partner in a mention.
+         *
+         * @returns {string}
+         */
+        getMentionText() {
+            return this.name;
+        }
+
+        /**
+         * Returns a sort function to determine the order of display of partners
+         * in the suggestion list.
+         *
+         * @static
+         * @param {string} searchTerm
+         * @param {Object} [options={}]
+         * @param {mail.thread} [options.thread] prioritize result in the
+         *  context of given thread
+         * @returns {function}
+         */
+        static getSuggestionSortFunction(searchTerm, { thread } = {}) {
+            const cleanedSearchTerm = cleanSearchTerm(searchTerm);
+            return (a, b) => {
+                const isAInternalUser = a.user && a.user.isInternalUser;
+                const isBInternalUser = b.user && b.user.isInternalUser;
+                if (isAInternalUser && !isBInternalUser) {
+                    return -1;
+                }
+                if (!isAInternalUser && isBInternalUser) {
+                    return 1;
+                }
+                if (thread && thread.model === 'mail.channel') {
+                    const isAMember = thread.members.includes(a);
+                    const isBMember = thread.members.includes(b);
+                    if (isAMember && !isBMember) {
+                        return -1;
+                    }
+                    if (!isAMember && isBMember) {
+                        return 1;
+                    }
+                }
+                if (thread) {
+                    const isAFollower = thread.followersPartner.includes(a);
+                    const isBFollower = thread.followersPartner.includes(b);
+                    if (isAFollower && !isBFollower) {
+                        return -1;
+                    }
+                    if (!isAFollower && isBFollower) {
+                        return 1;
+                    }
+                }
+                const cleanedAName = cleanSearchTerm(a.nameOrDisplayName || '');
+                const cleanedBName = cleanSearchTerm(b.nameOrDisplayName || '');
+                if (cleanedAName.startsWith(cleanedSearchTerm) && !cleanedBName.startsWith(cleanedSearchTerm)) {
+                    return -1;
+                }
+                if (!cleanedAName.startsWith(cleanedSearchTerm) && cleanedBName.startsWith(cleanedSearchTerm)) {
+                    return 1;
+                }
+                if (cleanedAName < cleanedBName) {
+                    return -1;
+                }
+                if (cleanedAName > cleanedBName) {
+                    return 1;
+                }
+                const cleanedAEmail = cleanSearchTerm(a.email || '');
+                const cleanedBEmail = cleanSearchTerm(b.email || '');
+                if (cleanedAEmail.startsWith(cleanedSearchTerm) && !cleanedAEmail.startsWith(cleanedSearchTerm)) {
+                    return -1;
+                }
+                if (!cleanedBEmail.startsWith(cleanedSearchTerm) && cleanedBEmail.startsWith(cleanedSearchTerm)) {
+                    return 1;
+                }
+                if (cleanedAEmail < cleanedBEmail) {
+                    return -1;
+                }
+                if (cleanedAEmail > cleanedBEmail) {
+                    return 1;
+                }
+                return a.id - b.id;
+            };
+        }
+
+        /**
          * Opens a chat between the user of this partner and the current user
          * and returns it.
          *
@@ -180,7 +356,7 @@ function factory(dependencies) {
          * Opens the most appropriate view that is a profile for this partner.
          */
         async openProfile() {
-            return this.env.messaging.openDocument({
+            return this.messaging.openDocument({
                 id: this.id,
                 model: 'res.partner',
             });
@@ -191,10 +367,11 @@ function factory(dependencies) {
         //----------------------------------------------------------------------
 
         /**
-         * @override
+         * @private
+         * @returns {string}
          */
-        static _createRecordLocalId(data) {
-            return `${this.modelName}_${data.id}`;
+        _computeAvatarUrl() {
+            return `/web/image/res.partner/${this.id}/avatar_128`;
         }
 
         /**
@@ -202,35 +379,22 @@ function factory(dependencies) {
          * @private
          */
         static async _fetchImStatus() {
-            let toFetchPartnersLocalIds = [];
-            let partnerIdToLocalId = {};
-            const toFetchPartners = this.all(partner => partner.im_status !== null);
-            for (const partner of toFetchPartners) {
-                toFetchPartnersLocalIds.push(partner.localId);
-                partnerIdToLocalId[partner.id] = partner.localId;
+            const partnerIds = [];
+            for (const partner of this.all()) {
+                if (partner.im_status !== 'im_partner' && partner.id > 0) {
+                    partnerIds.push(partner.id);
+                }
             }
-            if (!toFetchPartnersLocalIds.length) {
+            if (partnerIds.length === 0) {
                 return;
             }
             const dataList = await this.env.services.rpc({
                 route: '/longpolling/im_status',
                 params: {
-                    partner_ids: toFetchPartnersLocalIds.map(partnerLocalId =>
-                        this.get(partnerLocalId).id
-                    ),
+                    partner_ids: partnerIds,
                 },
             }, { shadow: true });
-            for (const { id, im_status } of dataList) {
-                this.insert({ id, im_status });
-                delete partnerIdToLocalId[id];
-            }
-            // partners with no im_status => set null
-            for (const noImStatusPartnerLocalId of Object.values(partnerIdToLocalId)) {
-                const partner = this.get(noImStatusPartnerLocalId);
-                if (partner) {
-                    partner.update({ im_status: null });
-                }
-            }
+            this.insert(dataList);
         }
 
         /**
@@ -254,6 +418,14 @@ function factory(dependencies) {
 
         /**
          * @private
+         * @returns {boolean}
+         */
+        _computeIsOnline() {
+            return ['online', 'away'].includes(this.im_status);
+        }
+
+        /**
+         * @private
          * @returns {string|undefined}
          */
         _computeNameOrDisplayName() {
@@ -266,17 +438,22 @@ function factory(dependencies) {
         active: attr({
             default: true,
         }),
-        correspondentThreads: one2many('mail.thread', {
-            inverse: 'correspondent',
+        avatarUrl: attr({
+            compute: '_computeAvatarUrl',
         }),
         country: many2one('mail.country'),
+        /**
+         * Deprecated.
+         * States the `display_name` of this partner, as returned by the server.
+         * The value of this field is unreliable (notably its value depends on
+         * context on which it was received) therefore it should only be used as
+         * a default if the actual `name` is missing (@see `nameOrDisplayName`).
+         * And if a specific name format is required, it should be computed from
+         * relevant fields instead.
+         */
         display_name: attr({
             compute: '_computeDisplayName',
             default: "",
-            dependencies: [
-                'display_name',
-                'userDisplayName',
-            ],
         }),
         email: attr(),
         failureNotifications: one2many('mail.notification', {
@@ -289,8 +466,20 @@ function factory(dependencies) {
         hasCheckedUser: attr({
             default: false,
         }),
-        id: attr(),
+        id: attr({
+            readonly: true,
+            required: true,
+        }),
         im_status: attr(),
+        /**
+         * States whether this partner is online.
+         */
+        isOnline: attr({
+            compute: '_computeIsOnline',
+        }),
+        isMuted: attr({
+            default: false,
+        }),
         memberThreads: many2many('mail.thread', {
             inverse: 'members',
         }),
@@ -300,36 +489,28 @@ function factory(dependencies) {
         model: attr({
             default: 'res.partner',
         }),
-        /**
-         * Channels that are moderated by this partner.
-         */
-        moderatedChannels: many2many('mail.thread', {
-            inverse: 'moderators',
-        }),
         name: attr(),
         nameOrDisplayName: attr({
             compute: '_computeNameOrDisplayName',
-            dependencies: [
-                'display_name',
-                'name',
-            ],
+        }),
+        partnerSeenInfos: one2many('mail.thread_partner_seen_info', {
+            inverse: 'partner',
+            isCausal: true,
+        }),
+        rtcSessions: one2many('mail.rtc_session', {
+            inverse: 'partner',
         }),
         user: one2one('mail.user', {
             inverse: 'partner',
         }),
-        /**
-         * Serves as compute dependency.
-         */
-        userDisplayName: attr({
-            related: 'user.display_name',
+        volumeSetting: one2one('mail.volume_setting', {
+            inverse: 'partner',
         }),
     };
-
+    Partner.identifyingFields = ['id'];
     Partner.modelName = 'mail.partner';
 
     return Partner;
 }
 
 registerNewModel('mail.partner', factory);
-
-});

@@ -1,8 +1,8 @@
-odoo.define('mail/static/src/models/chat_window_manager/chat_window_manager.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { attr, many2one, one2many, one2one } = require('mail/static/src/model/model_field.js');
+import { registerNewModel } from '@mail/model/model_core';
+import { attr, many2one, one2many, one2one } from '@mail/model/model_field';
+import { insertAndReplace, link, replace, unlink } from '@mail/model/model_field_command';
 
 function factory(dependencies) {
 
@@ -89,37 +89,40 @@ function factory(dependencies) {
         }
 
         openNewMessage() {
-            let newMessageChatWindow = this.newMessageChatWindow;
-            if (!newMessageChatWindow) {
-                newMessageChatWindow = this.env.models['mail.chat_window'].create({
-                    manager: [['link', this]],
-                });
+            if (!this.newMessageChatWindow) {
+                this.update({ newMessageChatWindow: insertAndReplace({ manager: replace(this) }) });
             }
-            newMessageChatWindow.makeActive();
+            this.newMessageChatWindow.makeActive();
         }
 
         /**
          * @param {mail.thread} thread
          * @param {Object} [param1={}]
+         * @param {boolean} [param1.focus] if set, set focus the chat window
+         *   to open.
          * @param {boolean} [param1.isFolded=false]
          * @param {boolean} [param1.makeActive=false]
-         * @param {boolean} [param1.notifyServer=true]
+         * @param {boolean} [param1.notifyServer]
          * @param {boolean} [param1.replaceNewMessage=false]
          */
         openThread(thread, {
+            focus,
             isFolded = false,
             makeActive = false,
-            notifyServer = true,
+            notifyServer,
             replaceNewMessage = false
         } = {}) {
+            if (notifyServer === undefined) {
+                notifyServer = !this.messaging.device.isMobile;
+            }
             let chatWindow = this.chatWindows.find(chatWindow =>
                 chatWindow.thread === thread
             );
             if (!chatWindow) {
-                chatWindow = this.env.models['mail.chat_window'].create({
+                chatWindow = this.messaging.models['mail.chat_window'].create({
                     isFolded,
-                    manager: [['link', this]],
-                    thread: [['link', thread]],
+                    manager: link(this),
+                    thread: link(thread),
                 });
             } else {
                 chatWindow.update({ isFolded });
@@ -131,53 +134,65 @@ function factory(dependencies) {
             if (makeActive) {
                 // avoid double notify at this step, it will already be done at
                 // the end of the current method
-                chatWindow.makeActive({ notifyServer: false });
+                chatWindow.makeActive({ focus, notifyServer: false });
             }
             // Flux specific: notify server of chat window being opened.
-            if (notifyServer) {
+            if (notifyServer && !this.messaging.currentGuest) {
                 const foldState = chatWindow.isFolded ? 'folded' : 'open';
                 thread.notifyFoldStateToServer(foldState);
             }
         }
 
         /**
-         * Shift provided chat window to the left on screen.
+         * Shift provided chat window to previous visible index, which swap visible order of this
+         * chat window and the preceding visible one
          *
          * @param {mail.chat_window} chatWindow
          */
-        shiftLeft(chatWindow) {
+        shiftPrev(chatWindow) {
             const chatWindows = this.allOrdered;
             const index = chatWindows.findIndex(cw => cw === chatWindow);
             if (index === chatWindows.length - 1) {
-                // already left-most
+                // already first one
                 return;
             }
             const otherChatWindow = chatWindows[index + 1];
-            const _newOrdered = [...this._ordered];
-            _newOrdered[index] = otherChatWindow.localId;
-            _newOrdered[index + 1] = chatWindow.localId;
-            this.update({ _ordered: _newOrdered });
+            const _newOrdered = [...this.allOrdered];
+            _newOrdered[index] = otherChatWindow;
+            _newOrdered[index + 1] = chatWindow;
+            this.update({ allOrdered: replace(_newOrdered) });
             chatWindow.focus();
+            for (const loopedChatWindow of [chatWindow, otherChatWindow]) {
+                if (loopedChatWindow.threadView) {
+                    loopedChatWindow.threadView.addComponentHint('adjust-scroll');
+                }
+            }
         }
 
         /**
-         * Shift provided chat window to the right on screen.
+         * Shift provided chat window to next visible index, which swap visible order of this
+         * chat window and the following visible one.
          *
          * @param {mail.chat_window} chatWindow
          */
-        shiftRight(chatWindow) {
+        shiftNext(chatWindow) {
             const chatWindows = this.allOrdered;
             const index = chatWindows.findIndex(cw => cw === chatWindow);
             if (index === 0) {
-                // already right-most
+                // already last one
                 return;
             }
             const otherChatWindow = chatWindows[index - 1];
-            const _newOrdered = [...this._ordered];
-            _newOrdered[index] = otherChatWindow.localId;
-            _newOrdered[index - 1] = chatWindow.localId;
-            this.update({ _ordered: _newOrdered });
+            const _newOrdered = [...this.allOrdered];
+            _newOrdered[index] = otherChatWindow;
+            _newOrdered[index - 1] = chatWindow;
+            this.update({ allOrdered: replace(_newOrdered) });
             chatWindow.focus();
+            for (const loopedChatWindow of [chatWindow, otherChatWindow]) {
+                if (loopedChatWindow.threadView) {
+                    loopedChatWindow.threadView.addComponentHint('adjust-scroll');
+                }
+            }
         }
 
         /**
@@ -191,10 +206,15 @@ function factory(dependencies) {
             if (index1 === -1 || index2 === -1) {
                 return;
             }
-            const _newOrdered = [...this._ordered];
-            _newOrdered[index1] = chatWindow2.localId;
-            _newOrdered[index2] = chatWindow1.localId;
-            this.update({ _ordered: _newOrdered });
+            const _newOrdered = [...this.allOrdered];
+            _newOrdered[index1] = chatWindow2;
+            _newOrdered[index2] = chatWindow1;
+            this.update({ allOrdered: replace(_newOrdered) });
+            for (const chatWindow of [chatWindow1, chatWindow2]) {
+                if (chatWindow.threadView) {
+                    chatWindow.threadView.addComponentHint('adjust-scroll');
+                }
+            }
         }
 
         //----------------------------------------------------------------------
@@ -203,32 +223,10 @@ function factory(dependencies) {
 
         /**
          * @private
-         * @returns {string[]}
-         */
-        _compute_ordered() {
-            // remove unlinked chatWindows
-            const _ordered = this._ordered.filter(chatWindowLocalId =>
-                this.chatWindows.includes(this.env.models['mail.chat_window'].get(chatWindowLocalId))
-            );
-            // add linked chatWindows
-            for (const chatWindow of this.chatWindows) {
-                if (!_ordered.includes(chatWindow.localId)) {
-                    _ordered.push(chatWindow.localId);
-                }
-            }
-            return _ordered;
-        }
-
-        /**
-         * // FIXME: dependent on implementation that uses arbitrary order in relations!!
-         *
-         * @private
-         * @returns {mail.chat_window}
+         * @returns {mail.chat_window[]}
          */
         _computeAllOrdered() {
-            return [['replace', this._ordered.map(chatWindowLocalId =>
-                this.env.models['mail.chat_window'].get(chatWindowLocalId)
-            )]];
+            return link(this.chatWindows);
         }
 
         /**
@@ -236,9 +234,9 @@ function factory(dependencies) {
          * @returns {mail.chat_window[]}
          */
         _computeAllOrderedHidden() {
-            return [['replace', this.visual.hidden.chatWindowLocalIds.map(chatWindowLocalId =>
-                this.env.models['mail.chat_window'].get(chatWindowLocalId)
-            )]];
+            return replace(this.visual.hidden.chatWindowLocalIds.map(chatWindowLocalId =>
+                this.messaging.models['mail.chat_window'].get(chatWindowLocalId)
+            ));
         }
 
         /**
@@ -246,9 +244,9 @@ function factory(dependencies) {
          * @returns {mail.chat_window[]}
          */
         _computeAllOrderedVisible() {
-            return [['replace', this.visual.visible.map(({ chatWindowLocalId }) =>
-                this.env.models['mail.chat_window'].get(chatWindowLocalId)
-            )]];
+            return replace(this.visual.visible.map(({ chatWindowLocalId }) =>
+                this.messaging.models['mail.chat_window'].get(chatWindowLocalId)
+            ));
         }
 
         /**
@@ -274,21 +272,9 @@ function factory(dependencies) {
         _computeLastVisible() {
             const { length: l, [l - 1]: lastVisible } = this.allOrderedVisible;
             if (!lastVisible) {
-                return [['unlink']];
+                return unlink();
             }
-            return [['link', lastVisible]];
-        }
-
-        /**
-         * @private
-         * @returns {mail.chat_window|undefined}
-         */
-        _computeNewMessageChatWindow() {
-            const chatWindow = this.allOrdered.find(chatWindow => !chatWindow.thread);
-            if (!chatWindow) {
-                return [['unlink']];
-            }
-            return [['link', chatWindow]];
+            return link(lastVisible);
         }
 
         /**
@@ -314,11 +300,11 @@ function factory(dependencies) {
          */
         _computeVisual() {
             let visual = JSON.parse(JSON.stringify(BASE_VISUAL));
-            if (!this.env.messaging) {
+            if (!this.messaging || !this.messaging.device) {
                 return visual;
             }
-            const device = this.env.messaging.device;
-            const discuss = this.env.messaging.discuss;
+            const device = this.messaging.device;
+            const discuss = this.messaging.discuss;
             const BETWEEN_GAP_WIDTH = 5;
             const CHAT_WINDOW_WIDTH = 325;
             const END_GAP_WIDTH = device.isMobile ? 0 : 10;
@@ -381,101 +367,49 @@ function factory(dependencies) {
 
     ChatWindowManager.fields = {
         /**
-         * List of ordered chat windows (list of local ids)
+         * List of ordered chat windows.
          */
-        _ordered: attr({
-            compute: '_compute_ordered',
-            default: [],
-            dependencies: [
-                'chatWindows',
-            ],
-        }),
-        // FIXME: dependent on implementation that uses arbitrary order in relations!!
         allOrdered: one2many('mail.chat_window', {
             compute: '_computeAllOrdered',
-            dependencies: [
-                '_ordered',
-            ],
-        }),
-        allOrderedThread: one2many('mail.thread', {
-            related: 'allOrdered.thread',
         }),
         allOrderedHidden: one2many('mail.chat_window', {
             compute: '_computeAllOrderedHidden',
-            dependencies: ['visual'],
-        }),
-        allOrderedHiddenThread: one2many('mail.thread', {
-            related: 'allOrderedHidden.thread',
-        }),
-        allOrderedHiddenThreadMessageUnreadCounter: attr({
-            related: 'allOrderedHiddenThread.localMessageUnreadCounter',
         }),
         allOrderedVisible: one2many('mail.chat_window', {
             compute: '_computeAllOrderedVisible',
-            dependencies: ['visual'],
         }),
         chatWindows: one2many('mail.chat_window', {
             inverse: 'manager',
             isCausal: true,
         }),
-        device: one2one('mail.device', {
-            related: 'messaging.device',
-        }),
-        deviceGlobalWindowInnerWidth: attr({
-            related: 'device.globalWindowInnerWidth',
-        }),
-        deviceIsMobile: attr({
-            related: 'device.isMobile',
-        }),
-        discuss: one2one('mail.discuss', {
-            related: 'messaging.discuss',
-        }),
-        discussIsOpen: attr({
-            related: 'discuss.isOpen',
-        }),
         hasHiddenChatWindows: attr({
             compute: '_computeHasHiddenChatWindows',
-            dependencies: ['allOrderedHidden'],
         }),
         hasVisibleChatWindows: attr({
             compute: '_computeHasVisibleChatWindows',
-            dependencies: ['allOrderedVisible'],
         }),
         isHiddenMenuOpen: attr({
             default: false,
         }),
         lastVisible: many2one('mail.chat_window', {
             compute: '_computeLastVisible',
-            dependencies: ['allOrderedVisible'],
-        }),
-        messaging: one2one('mail.messaging', {
-            inverse: 'chatWindowManager',
         }),
         newMessageChatWindow: one2one('mail.chat_window', {
-            compute: '_computeNewMessageChatWindow',
-            dependencies: ['allOrderedThread'],
+            inverse: 'managerAsNewMessage',
+            isCausal: true,
         }),
         unreadHiddenConversationAmount: attr({
             compute: '_computeUnreadHiddenConversationAmount',
-            dependencies: ['allOrderedHiddenThreadMessageUnreadCounter'],
         }),
         visual: attr({
             compute: '_computeVisual',
             default: BASE_VISUAL,
-            dependencies: [
-                'allOrdered',
-                'deviceGlobalWindowInnerWidth',
-                'deviceIsMobile',
-                'discussIsOpen',
-            ],
         }),
     };
-
+    ChatWindowManager.identifyingFields = ['messaging'];
     ChatWindowManager.modelName = 'mail.chat_window_manager';
 
     return ChatWindowManager;
 }
 
 registerNewModel('mail.chat_window_manager', factory);
-
-});

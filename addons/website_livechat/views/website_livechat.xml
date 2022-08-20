@@ -5,25 +5,6 @@
             Integrate Livechat in Common Frontend for Website
             Template registering all the assets required to execute the Livechat from a page containing Odoo
         -->
-        <template id="assets_frontend" name="im_livechat assets frontend" inherit_id="website.assets_frontend">
-            <xpath expr="." position="inside">
-                <script type="text/javascript" src="/mail/static/src/js/utils.js"></script>
-                <script type="text/javascript" src="/website_livechat/static/src/bugfix/public_bugfix.js"></script>
-                <script type="text/javascript" src="/im_livechat/static/src/legacy/public_livechat.js"></script>
-                <!--Chat Request-->
-                <script type="text/javascript" src="/website_livechat/static/src/legacy/public_livechat.js"></script>
-                <!--Stylesheets-->
-                <link rel="stylesheet" type="text/scss" href="/im_livechat/static/src/legacy/public_livechat.scss"/>
-                <link rel="stylesheet" type="text/scss" href="/website_livechat/static/src/bugfix/public_bugfix.scss"/>
-            </xpath>
-        </template>
-
-        <template id="assets_editor_inherit_website_livechat" inherit_id="website.assets_editor" name="website_livechat Assets Editor">
-            <xpath expr="." position="inside">
-                <script type="text/javascript" src="/website_livechat/static/src/js/website_livechat.editor.js"></script>
-            </xpath>
-        </template>
-
         <template id="loader" inherit_id="website.layout" name="Livechat : include loader on Website">
             <xpath expr="//div[@id='wrapwrap']" position="after">
                 <t t-if="website and website.channel_id and not no_livechat">
@@ -120,7 +101,7 @@
                             <h3>The Team</h3>
                             <t t-foreach="team" t-as="user">
                                 <div class="media mt-3">
-                                    <img t-if="user.image_128" t-att-src="image_data_uri(user.image_128)" class="o_image_64_cover rounded o_livechat_operator_avatar" t-att-alt="user.livechat_username or user.name"/>
+                                    <img t-att-src="image_data_uri(user.avatar_128)" class="o_image_64_cover rounded o_livechat_operator_avatar" t-att-alt="user.livechat_username or user.name"/>
                                     <div class="media-body">
                                         <h5>
                                             <t t-if="user.livechat_username">
@@ -179,7 +160,7 @@
                                     <t t-foreach="channels" t-as="channel">
                                         <div t-attf-class="media#{' mt-3' if channel_index else ''}">
                                             <a t-attf-href="/livechat/channel/#{ slug(channel)}">
-                                                <img t-att-src="channel.image_128 and image_data_uri(channel.image_128) or '/web/static/src/img/placeholder.png'" t-att-alt="channel.name" class="o_image_64_cover"/>
+                                                <img t-att-src="channel.image_128 and image_data_uri(channel.image_128) or '/web/static/img/placeholder.png'" t-att-alt="channel.name" class="o_image_64_cover"/>
                                             </a>
                                             <div class="media-body h-100 my-auto">
                                                 <h4><t t-esc="channel.name"/></h4>

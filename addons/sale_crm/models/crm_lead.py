@@ -45,7 +45,6 @@ class CrmLead(models.Model):
             'default_opportunity_id': self.id,
             'search_default_partner_id': self.partner_id.id,
             'default_partner_id': self.partner_id.id,
-            'default_team_id': self.team_id.id,
             'default_campaign_id': self.campaign_id.id,
             'default_medium_id': self.medium_id.id,
             'default_origin': self.name,
@@ -53,6 +52,10 @@ class CrmLead(models.Model):
             'default_company_id': self.company_id.id or self.env.company.id,
             'default_tag_ids': [(6, 0, self.tag_ids.ids)]
         }
+        if self.team_id:
+            action['context']['default_team_id'] = self.team_id.id,
+        if self.user_id:
+            action['context']['default_user_id'] = self.user_id.id
         return action
 
     def action_view_sale_quotation(self):
@@ -83,3 +86,9 @@ class CrmLead(models.Model):
             action['views'] = [(self.env.ref('sale.view_order_form').id, 'form')]
             action['res_id'] = orders.id
         return action
+
+    def _merge_get_fields_specific(self):
+        fields_info = super(CrmLead, self)._merge_get_fields_specific()
+        # add all the orders from all lead to merge
+        fields_info['order_ids'] = lambda fname, leads: [(4, order.id) for order in leads.order_ids]
+        return fields_info

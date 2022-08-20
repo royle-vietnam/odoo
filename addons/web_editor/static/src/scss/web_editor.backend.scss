@@ -1,23 +1,21 @@
 .oe_form_field_html {
     position: relative;
     word-wrap: break-word;
+    overflow: hidden;
+
+    #codeview-btn-group {
+        position: absolute;
+        top: 0;
+        right: 0;
+    }
 
     .note-editable {
-        min-height: 330px;
         font: inherit !important;
         font-family: inherit !important;
         line-height: inherit !important;
         color: inherit !important;
-        overflow: visible;
+    }
 
-        p, div {
-            font-family: 'Lucida Grande', Helvetica, Verdana, Arial, sans-serif;
-            font-size: 13px;
-        }
-    }
-    ul > li > p, p {
-        margin: 0px;
-    }
     > iframe {
         display: block;
         width: 100%;
@@ -40,6 +38,11 @@
     table.table.table-bordered {
         table-layout: fixed;
     }
+    a {
+        // Ensure the link is visible enough in the editor.
+        $oe-link-color: o-color('o-cc3-link');
+        color: if($oe-link-color, $oe-link-color, #008f8c);
+    }
 }
 
 .o_field_widgetTextHtml_fullscreen {
@@ -51,10 +54,10 @@
         bottom: 0 !important;
         width: 100% !important;
         min-height: 100% !important;
-        z-index: 1001 !important;
+        z-index: $zindex-modal-backdrop + 1 !important;
         border: 0;
     }
-    > :not(.modal):not(.modal-backdrop) {
+    .tooltip-field-info {
         display: none;
     }
     .o_form_fullscreen_ancestor {

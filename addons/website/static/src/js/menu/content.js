@@ -1,14 +1,15 @@
-odoo.define('website.contentMenu', function (require) {
-'use strict';
+/** @odoo-module alias=website.contentMenu */
 
-var Class = require('web.Class');
-var core = require('web.core');
-var Dialog = require('web.Dialog');
-var time = require('web.time');
-var weWidgets = require('wysiwyg.widgets');
-var websiteNavbarData = require('website.navbar');
-var websiteRootData = require('website.root');
-var Widget = require('web.Widget');
+import Class from 'web.Class';
+import core from 'web.core';
+import Dialog from 'web.Dialog';
+import time from 'web.time';
+import weWidgets from 'wysiwyg.widgets';
+import websiteNavbarData from 'website.navbar';
+import Widget from 'web.Widget';
+import { Markup } from 'web.utils';
+
+import { registry } from "@web/core/registry";
 
 var _t = core._t;
 var qweb = core.qweb;
@@ -25,6 +26,7 @@ var PagePropertiesDialog = weWidgets.Dialog.extend({
         'click input#visibility_password': '_onPasswordClicked',
         'change input#visibility_password': '_onPasswordChanged',
         'change select#visibility': '_onVisibilityChanged',
+        'error.datetimepicker': '_onDateTimePickerError',
     }),
 
     /**
@@ -130,8 +132,20 @@ var PagePropertiesDialog = weWidgets.Dialog.extend({
             });
             dep_text = dep_text.join(', ');
             self.$('#dependencies_redirect').html(qweb.render('website.show_page_dependencies', { dependencies: dependencies, dep_text: dep_text }));
-            self.$('#dependencies_redirect [data-toggle="popover"]').popover({
-                container: 'body',
+            self.$('a.o_dependencies_redirect_link').on('click', () => {
+                self.$('.o_dependencies_redirect_list_popover').popover({
+                    html: true,
+                    title: _t('Dependencies'),
+                    boundary: 'viewport',
+                    placement: 'right',
+                    trigger: 'focus',
+                    content: () => {
+                        return qweb.render('website.get_tooltip_dependencies', {
+                            dependencies: dependencies,
+                        });
+                    },
+                    template: qweb.render('website.page_dependencies_popover'),
+                }).popover('toggle');
             });
         }));
 
@@ -165,7 +179,7 @@ var PagePropertiesDialog = weWidgets.Dialog.extend({
                   }));
 
         var datepickersOptions = {
-            minDate: moment({ y: 1 }),
+            minDate: moment({ y: 1000 }),
             maxDate: moment().add(200, 'y'),
             calendarWeeks: true,
             icons : {
@@ -425,6 +439,14 @@ var PagePropertiesDialog = weWidgets.Dialog.extend({
         this.$('#visibility_password').attr('required', ev.target.value === 'password');
     },
     /**
+     * Library clears the wrong date format so just ignore error
+     *
+     * @private
+     */
+    _onDateTimePickerError: function (ev) {
+        return false;
+    },
+    /**
      * @private
      */
     _onPasswordClicked: function (ev) {
@@ -440,10 +462,6 @@ var PagePropertiesDialog = weWidgets.Dialog.extend({
 });
 
 var MenuEntryDialog = weWidgets.LinkDialog.extend({
-    xmlDependencies: weWidgets.LinkDialog.prototype.xmlDependencies.concat(
-        ['/website/static/src/xml/website.contentMenu.xml']
-    ),
-
     /**
      * @constructor
      */
@@ -452,16 +470,34 @@ var MenuEntryDialog = weWidgets.LinkDialog.extend({
             title: _t("Add a menu item"),
         }, options || {}), editable, _.extend({
             needLabel: true,
-            text: data.name || '',
+            content: data.name || '',
             isNewWindow: data.new_window,
         }, data || {}));
+
+        this.linkWidget.xmlDependencies = this.linkWidget.xmlDependencies.concat(['/website/static/src/xml/website.contentMenu.xml']);
+
+        const oldSave = this.linkWidget.save;
+        /**
+         * @override
+         */
+        this.linkWidget.save = () => {
+            var $e = this.$('#o_link_dialog_label_input');
+            if (!$e.val() || !$e[0].checkValidity()) {
+                $e.closest('.form-group').addClass('o_has_error').find('.form-control, .custom-select').addClass('is-invalid');
+                $e.focus();
+                return Promise.reject();
+            }
+            return oldSave.bind(this.linkWidget)();
+        };
 
         this.menuType = data.menuType;
     },
     /**
      * @override
      */
-    start: function () {
+    start: async function () {
+        const res = await this._super(...arguments);
+
         // Remove style related elements
         this.$('.o_link_dialog_preview').remove();
         this.$('input[name="is_new_window"], .link-style').closest('.form-group').remove();
@@ -478,24 +514,7 @@ var MenuEntryDialog = weWidgets.LinkDialog.extend({
             $url.closest('.form-group').addClass('d-none');
         }
 
-        return this._super.apply(this, arguments);
-    },
-
-    //--------------------------------------------------------------------------
-    // Public
-    //--------------------------------------------------------------------------
-
-    /**
-     * @override
-     */
-    save: function () {
-        var $e = this.$('#o_link_dialog_label_input');
-        if (!$e.val() || !$e[0].checkValidity()) {
-            $e.closest('.form-group').addClass('o_has_error').find('.form-control, .custom-select').addClass('is-invalid');
-            $e.focus();
-            return;
-        }
-        return this._super.apply(this, arguments);
+        return res;
     },
 });
 
@@ -685,7 +704,7 @@ var EditMenuDialog = weWidgets.Dialog.extend({
             var newMenu = {
                 'fields': {
                     'id': _.uniqueId('new-'),
-                    'name': link.text,
+                    'name': _.unescape(link.content),
                     'url': link.url,
                     'new_window': link.isNewWindow,
                     'is_mega_menu': menuType === 'mega',
@@ -731,7 +750,7 @@ var EditMenuDialog = weWidgets.Dialog.extend({
             }, menu.fields));
             dialog.on('save', this, link => {
                 _.extend(menu.fields, {
-                    'name': link.text,
+                    'name': _.unescape(link.content),
                     'url': link.url,
                     'new_window': link.isNewWindow,
                 });
@@ -872,6 +891,7 @@ var ContentMenu = websiteNavbarData.WebsiteNavbarActionWidget.extend({
         return new Promise(function (resolve) {
             var dialog = new EditMenuDialog(self, {}, rootID);
             dialog.on('save', self, function () {
+                window.document.body.classList.add('o_wait_reload');
                 // Before reloading the page after menu modification, does the
                 // given action to do.
                 if (beforeReloadCallback) {
@@ -971,6 +991,15 @@ var ContentMenu = websiteNavbarData.WebsiteNavbarActionWidget.extend({
         // If simulate is true, it means we want the option to be toggled but
         // not saved on the server yet
         if (!forceSave) {
+            // Add the 'o_dirty' class on an editable element specific to the
+            // page to notify the editor that the page should be saved,
+            // otherwise it won't save anything if it doesn't detect any change
+            // inside the #wrapwrap. (e.g. the header "over the content" option
+            // which adds a class on the #wrapwrap itself and not inside it).
+            const pageEl = document.querySelector(`.o_editable[data-oe-model="ir.ui.view"][data-oe-id="${mo.viewid}"]`);
+            if (pageEl) {
+                pageEl.classList.add('o_dirty');
+            }
             return Promise.resolve();
         }
 
@@ -1048,35 +1077,24 @@ var PageManagement = Widget.extend({
  *                  It will affect redirect after page deletion: reload or '/'
  */
 // TODO: This function should be integrated in a widget in the future
-function _deletePage(pageId, fromPageManagement) {
-    var self = this;
-    new Promise(function (resolve, reject) {
-        // Search the page dependencies
-        self._getPageDependencies(pageId)
-        .then(function (dependencies) {
-            // Inform the user about those dependencies and ask him confirmation
-            return new Promise(function (confirmResolve, confirmReject) {
-                Dialog.safeConfirm(self, "", {
-                    title: _t("Delete Page"),
-                    $content: $(qweb.render('website.delete_page', {dependencies: dependencies})),
-                    confirm_callback: confirmResolve,
-                    cancel_callback: resolve,
-                });
-            });
-        }).then(function () {
-            // Delete the page if the user confirmed
-            return self._rpc({
-                model: 'website.page',
-                method: 'unlink',
-                args: [pageId],
-            });
-        }).then(function () {
+async function _deletePage(pageId, fromPageManagement) {
+    const dependencies = await this._getPageDependencies(pageId);
+    for (const locs of Object.values(dependencies)) {
+        for (const loc of locs) {
+            loc.text = Markup(loc.text);
+        }
+    }
+    Dialog.safeConfirm(this, "", {
+        title: _t("Delete Page"),
+        $content: $(qweb.render('website.delete_page', {dependencies: dependencies})),
+        async confirm_callback() {
+            await this._rpc({model: 'website.page', method: 'unlink', args: [pageId]});
             if (fromPageManagement) {
                 window.location.reload(true);
             } else {
                 window.location.href = '/';
             }
-        }, reject);
+        }
     });
 }
 /**
@@ -1107,14 +1125,19 @@ function _clonePage(pageId) {
     });
 }
 
-websiteNavbarData.websiteNavbarRegistry.add(ContentMenu, '#content-menu');
-websiteRootData.websiteRootRegistry.add(PageManagement, '#list_website_pages');
+registry.category("website_navbar_widgets").add("ContentMenu", {
+    Widget: ContentMenu,
+    selector: '#content-menu',
+});
+registry.category("public_root_widgets").add("PageManagement", {
+    Widget: PageManagement,
+    selector: '#list_website_pages',
+});
 
-return {
+export default {
     PagePropertiesDialog: PagePropertiesDialog,
     ContentMenu: ContentMenu,
     EditMenuDialog: EditMenuDialog,
     MenuEntryDialog: MenuEntryDialog,
     SelectEditMenuDialog: SelectEditMenuDialog,
 };
-});

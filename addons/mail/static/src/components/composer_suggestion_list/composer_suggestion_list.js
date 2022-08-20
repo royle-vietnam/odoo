@@ -1,74 +1,33 @@
-odoo.define('mail/static/src/components/composer_suggestion_list/composer_suggestion_list.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    ComposerSuggestion: require('mail/static/src/components/composer_suggestion/composer_suggestion.js'),
-};
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 
-class ComposerSuggestionList extends Component {
-
-    /**
-     * @override
-     */
-    constructor(...args) {
-        super(...args);
-        useStore(props => {
-            const composer = this.env.models['mail.composer'].get(props.composerLocalId);
-            const activeSuggestedRecord = composer
-                ? composer.activeSuggestedRecord
-                : undefined;
-            const extraSuggestedRecordsList = composer
-                ? composer.extraSuggestedRecordsList
-                : [];
-            const mainSuggestedRecordsList = composer
-                ? composer.mainSuggestedRecordsList
-                : [];
-            return {
-                activeSuggestedRecord: activeSuggestedRecord ? activeSuggestedRecord.__state : undefined,
-                composer: composer ? composer.__state : undefined,
-                extraSuggestedRecordsList: extraSuggestedRecordsList
-                    ? extraSuggestedRecordsList.map(record => record.__state)
-                    : [],
-                mainSuggestedRecordsList: mainSuggestedRecordsList
-                    ? mainSuggestedRecordsList.map(record => record.__state)
-                    : [],
-            };
-        }, {
-            compareDepth: {
-                extraSuggestedRecordsList: 1,
-                mainSuggestedRecordsList: 1,
-            },
-        });
-    }
+export class ComposerSuggestionList extends Component {
 
     //--------------------------------------------------------------------------
     // Public
     //--------------------------------------------------------------------------
 
     /**
-     * @returns {mail.composer}
+     * @returns {mail.composer_view}
      */
-    get composer() {
-        return this.env.models['mail.composer'].get(this.props.composerLocalId);
+    get composerView() {
+        return this.messaging && this.messaging.models['mail.composer_view'].get(this.props.composerViewLocalId);
     }
 
 }
 
 Object.assign(ComposerSuggestionList, {
-    components,
     defaultProps: {
         isBelow: false,
     },
     props: {
-        composerLocalId: String,
+        composerViewLocalId: String,
         isBelow: Boolean,
     },
     template: 'mail.ComposerSuggestionList',
 });
 
-return ComposerSuggestionList;
-
-});
+registerMessagingComponent(ComposerSuggestionList);

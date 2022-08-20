@@ -21,7 +21,7 @@ class ResConfigSettings(models.TransientModel):
         ('order', 'Invoice what is ordered'),
         ('delivery', 'Invoice what is delivered')
         ], 'Invoicing Policy',
-        default='delivery',
+        default='order',
         default_model='product.template')
     deposit_default_product_id = fields.Many2one(
         'product.product',
@@ -36,7 +36,7 @@ class ResConfigSettings(models.TransientModel):
     ], string='Customer Account', default='b2b', config_parameter='auth_signup.invitation_scope')
 
     module_delivery = fields.Boolean("Delivery Methods")
-    module_delivery_dhl = fields.Boolean("DHL USA Connector")
+    module_delivery_dhl = fields.Boolean("DHL Express Connector")
     module_delivery_fedex = fields.Boolean("FedEx Connector")
     module_delivery_ups = fields.Boolean("UPS Connector")
     module_delivery_usps = fields.Boolean("USPS Connector")
@@ -47,26 +47,38 @@ class ResConfigSettings(models.TransientModel):
     module_sale_coupon = fields.Boolean("Coupons & Promotions")
     module_sale_amazon = fields.Boolean("Amazon Sync")
 
-    automatic_invoice = fields.Boolean("Automatic Invoice",
-                                       help="The invoice is generated automatically and available in the customer portal "
-                                            "when the transaction is confirmed by the payment acquirer.\n"
-                                            "The invoice is marked as paid and the payment is registered in the payment journal "
-                                            "defined in the configuration of the payment acquirer.\n"
-                                            "This mode is advised if you issue the final invoice at the order and not after the delivery.",
-                                       config_parameter='sale.automatic_invoice')
-    template_id = fields.Many2one('mail.template', 'Email Template',
-                                  domain="[('model', '=', 'account.move')]",
-                                  config_parameter='sale.default_email_template',
-                                  default=lambda self: self.env.ref('account.email_template_edi_invoice', False))
-    confirmation_template_id = fields.Many2one('mail.template', string='Confirmation Email',
-                                               domain="[('model', '=', 'sale.order')]",
-                                               config_parameter='sale.default_confirmation_template',
-                                               help="Email sent to the customer once the order is paid.")
+    automatic_invoice = fields.Boolean(
+        string="Automatic Invoice",
+        help="The invoice is generated automatically and available in the customer portal when the "
+             "transaction is confirmed by the payment acquirer.\nThe invoice is marked as paid and "
+             "the payment is registered in the payment journal defined in the configuration of the "
+             "payment acquirer.\nThis mode is advised if you issue the final invoice at the order "
+             "and not after the delivery.",
+        config_parameter='sale.automatic_invoice',
+    )
+    invoice_mail_template_id = fields.Many2one(
+        comodel_name='mail.template',
+        string='Invoice Email Template',
+        domain="[('model', '=', 'account.move')]",
+        config_parameter='sale.default_invoice_email_template',
+        default=lambda self: self.env.ref('account.email_template_edi_invoice', False)
+    )
+    confirmation_mail_template_id = fields.Many2one(
+        comodel_name='mail.template',
+        string='Confirmation Email Template',
+        domain="[('model', '=', 'sale.order')]",
+        config_parameter='sale.default_confirmation_template',
+        help="Email sent to the customer once the order is paid."
+    )
 
     def set_values(self):
         super(ResConfigSettings, self).set_values()
         if self.default_invoice_policy != 'order':
             self.env['ir.config_parameter'].set_param('sale.automatic_invoice', False)
+
+        send_invoice_cron = self.env.ref('sale.send_invoice_cron', raise_if_not_found=False)
+        if send_invoice_cron:
+            send_invoice_cron.active = self.automatic_invoice
 
     @api.onchange('use_quotation_validity_days')
     def _onchange_use_quotation_validity_days(self):

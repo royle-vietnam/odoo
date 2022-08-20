@@ -39,9 +39,9 @@ class Rating(http.Controller):
         if not rating:
             return request.not_found()
         rate_names = {
-            5: _("satisfied"),
-            3: _("not satisfied"),
-            1: _("highly dissatisfied")
+            5: _("Satisfied"),
+            3: _("Okay"),
+            1: _("Dissatisfied")
         }
         rating.write({'rating': rate, 'consumed': True})
         lang = rating.partner_id.lang or get_lang(request.env).code
@@ -61,6 +61,6 @@ class Rating(http.Controller):
         record_sudo.rating_apply(rate, token=token, feedback=kwargs.get('feedback'))
         lang = rating.partner_id.lang or get_lang(request.env).code
         return request.env['ir.ui.view'].with_context(lang=lang)._render_template('rating.rating_external_page_view', {
-            'web_base_url': request.env['ir.config_parameter'].sudo().get_param('web.base.url'),
+            'web_base_url': rating.get_base_url(),
             'rating': rating,
         })

@@ -1,8 +1,7 @@
-odoo.define('website_slides.course.join.widget', function (require) {
-'use strict';
+/** @odoo-module **/
 
-var core = require('web.core');
-var publicWidget = require('web.public.widget');
+import core from 'web.core';
+import publicWidget from 'web.public.widget';
 
 var _t = core._t;
 
@@ -34,8 +33,8 @@ var CourseJoinWidget = publicWidget.Widget.extend({
         this.channel = options.channel;
         this.isMember = options.isMember;
         this.publicUser = options.publicUser;
-        this.joinMessage = options.joinMessage || _t('Join Course'),
-        this.beforeJoin = options.beforeJoin || Promise.resolve();
+        this.joinMessage = options.joinMessage || _t('Join Course');
+        this.beforeJoin = options.beforeJoin || function () {return Promise.resolve();};
         this.afterJoin = options.afterJoin || function () {document.location.reload();};
     },
 
@@ -153,9 +152,7 @@ publicWidget.registry.websiteSlidesCourseJoin = publicWidget.Widget.extend({
     },
 });
 
-return {
+export default {
     courseJoinWidget: CourseJoinWidget,
     websiteSlidesCourseJoin: publicWidget.registry.websiteSlidesCourseJoin
 };
-
-});

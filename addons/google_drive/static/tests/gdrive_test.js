@@ -4,8 +4,6 @@ odoo.define('google_drive.gdrive_integration', function (require) {
     const FormView = require('web.FormView');
     const testUtils = require('web.test_utils');
 
-    const cpHelpers = testUtils.controlPanel;
-
     QUnit.module('Google Drive Integration', {
         beforeEach() {
             this.data = {
@@ -62,12 +60,37 @@ odoo.define('google_drive.gdrive_integration', function (require) {
                     hasActionMenus: true,
                 },
             });
-            await cpHelpers.toggleActionMenu(form);
+            await testUtils.controlPanel.toggleActionMenu(form);
 
             assert.containsOnce(form, '.oe_share_gdoc_item',
                 "The button to the google action should be present");
 
-            await cpHelpers.toggleMenuItem(form, "Cyberdyne Systems");
+            await testUtils.controlPanel.toggleMenuItem(form, "Cyberdyne Systems");
+
+            form.destroy();
+        });
+
+        QUnit.test("no google drive data", async function (assert) {
+            assert.expect(1);
+
+            const form = await testUtils.createView({
+                actionMenusRegistry: true,
+                arch:
+                    `<form string="Partners">
+                        <field name="display_name"/>
+                    </form>`,
+                data: this.data,
+                model: 'partner',
+                res_id: 1,
+                View: FormView,
+                viewOptions: {
+                    hasActionMenus: true,
+                    ids: [1, 2],
+                    index: 0,
+                },
+            });
+
+            assert.containsNone(form, ".o_cp_action_menus .o_embed_menu");
 
             form.destroy();
         });
@@ -75,7 +98,7 @@ odoo.define('google_drive.gdrive_integration', function (require) {
         QUnit.test('click on the google drive attachments after switching records', async function (assert) {
             assert.expect(4);
 
-            let currentID;
+            let currentRecordId = 1;
             const form = await testUtils.createView({
                 actionMenusRegistry: true,
                 arch:
@@ -86,7 +109,7 @@ odoo.define('google_drive.gdrive_integration', function (require) {
                 async mockRPC(route, args) {
                     switch (route) {
                         case '/web/dataset/call_kw/google.drive.config/get_google_drive_config':
-                            assert.deepEqual(args.args, ['partner', currentID],
+                            assert.deepEqual(args.args, ['partner', currentRecordId],
                                 'The route to get google drive config should have been called');
                             return [{
                                 id: 27,
@@ -99,7 +122,7 @@ odoo.define('google_drive.gdrive_integration', function (require) {
                                 id: 1,
                             }];
                         case '/web/dataset/call_kw/google.drive.config/get_google_drive_url':
-                            assert.deepEqual(args.args, [27, currentID, 'T1000'],
+                            assert.deepEqual(args.args, [27, currentRecordId, 'T1000'],
                                 'The route to get the Google url should have been called');
                             return; // do not return anything or it will open a new tab.
                     }
@@ -113,15 +136,15 @@ odoo.define('google_drive.gdrive_integration', function (require) {
                     index: 0,
                 },
             });
-            currentID = 1;
-            await cpHelpers.toggleActionMenu(form);
-            await cpHelpers.toggleMenuItem(form, "Cyberdyne Systems");
 
-            await cpHelpers.pagerNext(form);
+            await testUtils.controlPanel.toggleActionMenu(form);
+            await testUtils.controlPanel.toggleMenuItem(form, "Cyberdyne Systems");
 
-            currentID = 2;
-            await cpHelpers.toggleActionMenu(form);
-            await cpHelpers.toggleMenuItem(form, "Cyberdyne Systems");
+            currentRecordId = 2;
+            await testUtils.controlPanel.pagerNext(form);
+
+            await testUtils.controlPanel.toggleActionMenu(form);
+            await testUtils.controlPanel.toggleMenuItem(form, "Cyberdyne Systems");
 
             form.destroy();
         });

@@ -22,6 +22,26 @@ class Company(models.Model):
         domain="[('model', '=', 'stock.picking')]",
         default=_default_confirmation_mail_template,
         help="Email sent to the customer once the order is done.")
+    annual_inventory_month = fields.Selection([
+        ('1', 'January'),
+        ('2', 'February'),
+        ('3', 'March'),
+        ('4', 'April'),
+        ('5', 'May'),
+        ('6', 'June'),
+        ('7', 'July'),
+        ('8', 'August'),
+        ('9', 'September'),
+        ('10', 'October'),
+        ('11', 'November'),
+        ('12', 'December'),
+    ], string='Annual Inventory Month',
+        default='12',
+        help="Annual inventory month for products not in a location with a cyclic inventory date. Set to no month if no automatic annual inventory.")
+    annual_inventory_day = fields.Integer(
+        string='Day of the month', default=31,
+        help="""Day of the month when the annual inventory should occur. If zero or negative, then the first day of the month will be selected instead.
+        If greater than the last day of a month, then the last day of the month will be selected instead.""")
 
     def _create_transit_location(self):
         '''Create a transit location with company_id being the given company_id. This is needed
@@ -77,7 +97,6 @@ class Company(models.Model):
                 company.id,
             )
 
-
     def _create_scrap_location(self):
         parent_location = self.env.ref('stock.stock_location_locations_virtual', raise_if_not_found=False)
         for company in self:
@@ -110,7 +129,7 @@ class Company(models.Model):
         when module stock is installed.
         """
         company_ids  = self.env['res.company'].search([])
-        company_with_warehouse = self.env['stock.warehouse'].search([]).mapped('company_id')
+        company_with_warehouse = self.env['stock.warehouse'].with_context(active_test=False).search([]).mapped('company_id')
         company_without_warehouse = company_ids - company_with_warehouse
         for company in company_without_warehouse:
             self.env['stock.warehouse'].create({
@@ -129,7 +148,7 @@ class Company(models.Model):
     def create_missing_inventory_loss_location(self):
         company_ids  = self.env['res.company'].search([])
         inventory_loss_product_template_field = self.env['ir.model.fields']._get('product.template', 'property_stock_inventory')
-        companies_having_property = self.env['ir.property'].sudo().search([('fields_id', '=', inventory_loss_product_template_field.id)]).mapped('company_id')
+        companies_having_property = self.env['ir.property'].sudo().search([('fields_id', '=', inventory_loss_product_template_field.id), ('res_id', '=', False)]).mapped('company_id')
         company_without_property = company_ids - companies_having_property
         company_without_property._create_inventory_loss_location()
 
@@ -137,7 +156,7 @@ class Company(models.Model):
     def create_missing_production_location(self):
         company_ids  = self.env['res.company'].search([])
         production_product_template_field = self.env['ir.model.fields']._get('product.template', 'property_stock_production')
-        companies_having_property = self.env['ir.property'].sudo().search([('fields_id', '=', production_product_template_field.id)]).mapped('company_id')
+        companies_having_property = self.env['ir.property'].sudo().search([('fields_id', '=', production_product_template_field.id), ('res_id', '=', False)]).mapped('company_id')
         company_without_property = company_ids - companies_having_property
         company_without_property._create_production_location()
 

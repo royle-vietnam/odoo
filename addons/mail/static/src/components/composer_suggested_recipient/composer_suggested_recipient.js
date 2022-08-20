@@ -1,10 +1,11 @@
-odoo.define('mail/static/src/components/composer_suggested_recipient/composer_suggested_recipient.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
+import { useUpdate } from '@mail/component_hooks/use_update/use_update';
 
-const { FormViewDialog } = require('web.view_dialogs');
-const { ComponentAdapter } = require('web.OwlCompatibility');
+import { FormViewDialog } from 'web.view_dialogs';
+import { ComponentAdapter } from 'web.OwlCompatibility';
+import session from 'web.session';
 
 const { Component } = owl;
 const { useRef } = owl.hooks;
@@ -20,24 +21,12 @@ class FormViewDialogComponentAdapter extends ComponentAdapter {
 
 }
 
-const components = {
-    FormViewDialogComponentAdapter,
-};
-
-class ComposerSuggestedRecipient extends Component {
+export class ComposerSuggestedRecipient extends Component {
 
     constructor(...args) {
         super(...args);
         this.id = _.uniqueId('o_ComposerSuggestedRecipient_');
-
-        useStore(props => {
-            const suggestedRecipientInfo = this.env.models['mail.suggested_recipient_info'].get(props.suggestedRecipientLocalId);
-            const partner = suggestedRecipientInfo && suggestedRecipientInfo.partner;
-            return {
-                partner: partner && partner.__state,
-                suggestedRecipientInfo: suggestedRecipientInfo && suggestedRecipientInfo.__state,
-            };
-        });
+        useUpdate({ func: () => this._update() });
         /**
          * Form view dialog class. Useful to reference it in the template.
          */
@@ -60,14 +49,6 @@ class ComposerSuggestedRecipient extends Component {
          */
         this._isDialogOpen = false;
         this._onDialogSaved = this._onDialogSaved.bind(this);
-    }
-
-    mounted() {
-        this._update();
-    }
-
-    patched() {
-        this._update();
     }
 
     //--------------------------------------------------------------------------
@@ -98,7 +79,7 @@ class ComposerSuggestedRecipient extends Component {
      * @returns {mail.suggested_recipient_info}
      */
     get suggestedRecipientInfo() {
-        return this.env.models['mail.suggested_recipient_info'].get(this.props.suggestedRecipientInfoLocalId);
+        return this.messaging && this.messaging.models['mail.suggested_recipient_info'].get(this.props.suggestedRecipientInfoLocalId);
     }
 
     //--------------------------------------------------------------------------
@@ -129,11 +110,13 @@ class ComposerSuggestedRecipient extends Component {
             // recipient that does not have a partner, the partner creation form
             // should be opened.
             if (isChecked && this._dialogRef && !this._isDialogOpen) {
+                const widget = this._dialogRef.comp.widget;
                 this._isDialogOpen = true;
-                this._dialogRef.comp.widget.on('closed', this, () => {
+                widget.on('closed', this, () => {
                     this._isDialogOpen = false;
                 });
-                this._dialogRef.comp.widget.open();
+                widget.context = Object.assign({}, widget.context, session.user_context);
+                widget.open();
             }
         }
     }
@@ -151,13 +134,11 @@ class ComposerSuggestedRecipient extends Component {
 }
 
 Object.assign(ComposerSuggestedRecipient, {
-    components,
+    components: { FormViewDialogComponentAdapter },
     props: {
         suggestedRecipientInfoLocalId: String,
     },
     template: 'mail.ComposerSuggestedRecipient',
 });
 
-return ComposerSuggestedRecipient;
-
-});
+registerMessagingComponent(ComposerSuggestedRecipient);

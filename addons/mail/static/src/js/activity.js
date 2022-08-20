@@ -1,16 +1,15 @@
-odoo.define('mail.Activity', function (require) {
-"use strict";
+/** @odoo-module **/
 
-var mailUtils = require('mail.utils');
+import * as mailUtils from '@mail/js/utils';
 
-var AbstractField = require('web.AbstractField');
-var BasicModel = require('web.BasicModel');
-var config = require('web.config');
-var core = require('web.core');
-var field_registry = require('web.field_registry');
-var session = require('web.session');
-var framework = require('web.framework');
-var time = require('web.time');
+import AbstractField from 'web.AbstractField';
+import BasicModel from 'web.BasicModel';
+import config from 'web.config';
+import core from 'web.core';
+import field_registry from 'web.field_registry';
+import session from 'web.session';
+import framework from 'web.framework';
+import time from 'web.time';
 
 var QWeb = core.qweb;
 var _t = core._t;
@@ -157,6 +156,21 @@ var BasicActivity = AbstractField.extend({
     // Private
     //------------------------------------------------------------
 
+    _getActivityFormAction(id) {
+        return {
+            type: 'ir.actions.act_window',
+            name: _t("Schedule Activity"),
+            res_model: 'mail.activity',
+            view_mode: 'form',
+            views: [[false, 'form']],
+            target: 'new',
+            context: {
+                default_res_id: this.res_id,
+                default_res_model: this.model,
+            },
+            res_id: id || false,
+        };
+    },
     /**
      * Send a feedback and reload page in order to mark activity as done
      *
@@ -201,11 +215,11 @@ var BasicActivity = AbstractField.extend({
                 if (rslt_action) {
                     self.do_action(rslt_action, {
                         on_close: function () {
-                            self.trigger_up('reload');
+                            self.trigger_up('reload', { keepChanges: true });
                         },
                     });
                 } else {
-                    self.trigger_up('reload');
+                    self.trigger_up('reload', { keepChanges: true });
                 }
             }
         );
@@ -217,19 +231,7 @@ var BasicActivity = AbstractField.extend({
      * @return {Promise}
      */
     _openActivityForm: function (id, callback) {
-        var action = {
-            type: 'ir.actions.act_window',
-            name: _t("Schedule Activity"),
-            res_model: 'mail.activity',
-            view_mode: 'form',
-            views: [[false, 'form']],
-            target: 'new',
-            context: {
-                default_res_id: this.res_id,
-                default_res_model: this.model,
-            },
-            res_id: id || false,
-        };
+        var action = this._getActivityFormAction(id);
         return this.do_action(action, { on_close: callback });
     },
     /**
@@ -272,7 +274,7 @@ var BasicActivity = AbstractField.extend({
                         activityID: activity.id,
                         attachmentIds: _.pluck(files, 'id')
                     }).then(function () {
-                        self.trigger_up('reload');
+                        self.trigger_up('reload', { keepChanges: true });
                     });
                 });
             }
@@ -339,7 +341,7 @@ var BasicActivity = AbstractField.extend({
         var $markDoneBtn = $(ev.currentTarget);
         var activityID = $markDoneBtn.data('activity-id');
         var previousActivityTypeID = $markDoneBtn.data('previous-activity-type-id') || false;
-        var forceNextActivity = $markDoneBtn.data('force-next-activity');
+        var chainingTypeActivity = $markDoneBtn.data('chaining-type-activity');
 
         if ($markDoneBtn.data('toggle') === 'collapse') {
             var $actLi = $markDoneBtn.parents('.o_log_activity');
@@ -348,7 +350,7 @@ var BasicActivity = AbstractField.extend({
             if (!$panel.data('bs.collapse')) {
                 var $form = $(QWeb.render('mail.activity_feedback_form', {
                     previous_activity_type_id: previousActivityTypeID,
-                    force_next: forceNextActivity
+                    chaining_type: chainingTypeActivity
                 }));
                 $panel.append($form);
                 self._onMarkActivityDoneActions($markDoneBtn, $form, activityID);
@@ -388,7 +390,7 @@ var BasicActivity = AbstractField.extend({
                 content: function () {
                     var $popover = $(QWeb.render('mail.activity_feedback_form', {
                         previous_activity_type_id: previousActivityTypeID,
-                        force_next: forceNextActivity
+                        chaining_type: chainingTypeActivity
                     }));
                     self._onMarkActivityDoneActions($markDoneBtn, $popover, activityID);
                     return $popover;
@@ -476,7 +478,7 @@ var BasicActivity = AbstractField.extend({
             },
         };
         return this.do_action(action, { on_close: function () {
-            self.trigger_up('reload');
+            self.trigger_up('reload', { keepChanges: true });
         } });
     },
     /**
@@ -541,109 +543,6 @@ var BasicActivity = AbstractField.extend({
 });
 
 // -----------------------------------------------------------------------------
-// Activities Widget for Form views ('mail_activity' widget)
-// -----------------------------------------------------------------------------
-// FIXME seems to still be needed in some cases like systray
-var Activity = BasicActivity.extend({
-    className: 'o_mail_activity',
-    events: _.extend({}, BasicActivity.prototype.events, {
-        'click a': '_onClickRedirect',
-    }),
-    specialData: '_fetchSpecialActivity',
-    /**
-     * @override
-     */
-    init: function () {
-        this._super.apply(this, arguments);
-        this._activities = this.record.specialData[this.name];
-    },
-    /**
-     * @override
-     */
-    destroy: function () {
-        this._unbindOnUploadAction();
-        return this._super.apply(this, arguments);
-    },
-
-    //------------------------------------------------------------
-    // Private
-    //------------------------------------------------------------
-    /**
-     * @private
-     * @param {Object} fieldsToReload
-     */
-    _reload: function (fieldsToReload) {
-        this.trigger_up('reload_mail_fields', fieldsToReload);
-    },
-    /**
-     * @override
-     * @private
-     */
-    _render: function () {
-        _.each(this._activities, function (activity) {
-            var note = mailUtils.parseAndTransform(activity.note || '', mailUtils.inline);
-            var is_blank = (/^\s*$/).test(note);
-            if (!is_blank) {
-                activity.note = mailUtils.parseAndTransform(activity.note, mailUtils.addLink);
-            } else {
-                activity.note = '';
-            }
-        });
-        var activities = setFileUploadID(setDelayLabel(this._activities));
-        if (activities.length) {
-            var nbActivities = _.countBy(activities, 'state');
-            this.$el.html(QWeb.render('mail.activity_items', {
-                uid: session.uid,
-                activities: activities,
-                nbPlannedActivities: nbActivities.planned,
-                nbTodayActivities: nbActivities.today,
-                nbOverdueActivities: nbActivities.overdue,
-                dateFormat: time.getLangDateFormat(),
-                datetimeFormat: time.getLangDatetimeFormat(),
-                session: session,
-                widget: this,
-            }));
-            this._bindOnUploadAction(this._activities);
-        } else {
-            this._unbindOnUploadAction(this._activities);
-            this.$el.empty();
-        }
-    },
-    /**
-     * @override
-     * @private
-     * @param {Object} record
-     */
-    _reset: function (record) {
-        this._super.apply(this, arguments);
-        this._activities = this.record.specialData[this.name];
-        // the mail widgets being persistent, one need to update the res_id on reset
-        this.res_id = record.res_id;
-    },
-
-    //------------------------------------------------------------
-    // Handlers
-    //------------------------------------------------------------
-
-    /**
-     * @private
-     * @param {MouseEvent} ev
-     */
-    _onClickRedirect: function (ev) {
-        var id = $(ev.currentTarget).data('oe-id');
-        if (id) {
-            ev.preventDefault();
-            var model = $(ev.currentTarget).data('oe-model');
-            this.trigger_up('redirect', {
-                res_id: id,
-                res_model: model,
-            });
-        }
-    },
-
-});
-
-// -----------------------------------------------------------------------------
 // Activities Widget for Kanban views ('kanban_activity' widget)
 // -----------------------------------------------------------------------------
 var KanbanActivity = BasicActivity.extend({
@@ -684,7 +583,7 @@ var KanbanActivity = BasicActivity.extend({
      * @private
      */
     _reload: function () {
-        this.trigger_up('reload', { db_id: this.record_id });
+        this.trigger_up('reload', { db_id: this.record_id, keepChanges: true });
     },
     /**
      * @override
@@ -862,7 +761,3 @@ field_registry
     .add('kanban_activity', KanbanActivity)
     .add('list_activity', ListActivity)
     .add('activity_exception', ActivityException);
-
-return Activity;
-
-});

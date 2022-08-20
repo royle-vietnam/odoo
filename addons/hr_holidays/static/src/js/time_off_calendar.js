@@ -2,10 +2,13 @@ odoo.define('hr_holidays.dashboard.view_custo', function(require) {
     'use strict';
 
     var core = require('web.core');
+    const config = require('web.config');
     var CalendarPopover = require('web.CalendarPopover');
     var CalendarController = require("web.CalendarController");
     var CalendarRenderer = require("web.CalendarRenderer");
+    var CalendarModel = require("web.CalendarModel");
     var CalendarView = require("web.CalendarView");
+    var dialogs = require('web.view_dialogs');
     var viewRegistry = require('web.view_registry');
 
     var _t = core._t;
@@ -60,7 +63,7 @@ odoo.define('hr_holidays.dashboard.view_custo', function(require) {
 
             $(QWeb.render('hr_holidays.dashboard.calendar.button', {
                 time_off: _t('New Time Off'),
-                request: _t('New Allocation'),
+                request: _t('Allocation Request'),
             })).appendTo(this.$buttons);
 
             if ($node) {
@@ -74,18 +77,50 @@ odoo.define('hr_holidays.dashboard.view_custo', function(require) {
         // Handlers
         //--------------------------------------------------------------------------
 
+        _getNewTimeOffContext: function() {
+            let date_from = moment().set({
+                'hour': 0,
+                'minute': 0,
+                'second': 0
+            });
+            date_from.subtract(this.getSession().getTZOffset(date_from), 'minutes');
+            date_from = date_from.locale('en').format('YYYY-MM-DD HH:mm:ss');
+            let date_to = moment().set({
+                'hour': 23,
+                'minute': 59,
+                'second': 59
+            });
+            date_to.subtract(this.getSession().getTZOffset(date_to), 'minutes');
+            date_to = date_to.locale('en').format('YYYY-MM-DD HH:mm:ss');
+            return {
+                'default_date_from': date_from,
+                'default_date_to': date_to,
+                'lang': this.context.lang
+            }
+        },
+
         /**
          * Action: create a new time off request
          *
          * @private
          */
         _onNewTimeOff: function () {
-            var self = this;
-
-            this.do_action('hr_holidays.hr_leave_action_my_request', {
-                on_close: function () {
-                    self.reload();
-                }
+            this._rpc({
+                model: 'ir.ui.view',
+                method: 'get_view_id',
+                args: ['hr_holidays.hr_leave_view_form_dashboard_new_time_off'],
+            }).then((ids) => {
+                this.timeOffDialog = new dialogs.FormViewDialog(this, {
+                    res_model: "hr.leave",
+                    view_id: ids,
+                    context: this._getNewTimeOffContext(),
+                    title: _t("New time off"),
+                    disable_multiple_selection: true,
+                    on_saved: () => {
+                        this.reload();
+                    },
+                });
+                this.timeOffDialog.open();
             });
         },
 
@@ -95,23 +130,54 @@ odoo.define('hr_holidays.dashboard.view_custo', function(require) {
          * @private
          */
         _onNewAllocation: function () {
-            var self = this;
-            this.do_action({
-                type: 'ir.actions.act_window',
-                res_model: 'hr.leave.allocation',
-                name: 'New Allocation Request',
-                views: [[false,'form']],
-                context: {'form_view_ref': 'hr_holidays.hr_leave_allocation_view_form_dashboard'},
-                target: 'new',
-            }, {
-                on_close: function () {
-                    self.reload();
-                }
+            let self = this;
+
+            self._rpc({
+                model: 'ir.ui.view',
+                method: 'get_view_id',
+                args: ['hr_holidays.hr_leave_allocation_view_form_dashboard'],
+            }).then(function(ids) {
+                self.allocationDialog = new dialogs.FormViewDialog(self, {
+                    res_model: "hr.leave.allocation",
+                    view_id: ids,
+                    context: {
+                        'default_state': 'confirm',
+                        'lang': self.context.lang,
+                    },
+                    title: _t("New Allocation"),
+                    disable_multiple_selection: true,
+                    on_saved: function() {
+                        self.reload();
+                    },
+                });
+                self.allocationDialog.open();
             });
+        },
+
+        /**
+         * @override
+         */
+        _setEventTitle: function () {
+            return _t('Time Off Request');
         },
     });
 
     var TimeOffPopoverRenderer = CalendarRenderer.extend({
+        template: "TimeOff.CalendarView.extend",
+        /**
+         * We're overriding this to display the weeknumbers on the year view
+         *
+         * @override
+         * @private
+         */
+        _getFullCalendarOptions: function () {
+            const oldOptions = this._super(...arguments);
+            // Parameters
+            oldOptions.views.dayGridYear.weekNumbers = true;
+            oldOptions.views.dayGridYear.weekNumbersWithinDays = false;
+            return oldOptions;
+        },
+
         config: _.extend({}, CalendarRenderer.prototype.config, {
             CalendarPopover: TimeOffCalendarPopover,
         }),
@@ -140,6 +206,21 @@ odoo.define('hr_holidays.dashboard.view_custo', function(require) {
                 self.$el.parent().find('.o_calendar_mini').hide();
             });
         },
+        /**
+         * @override
+         * @private
+         */
+        _renderCalendar: function() {
+            this._super.apply(this, arguments);
+            let weekNumbers = this.$el.find('.fc-week-number');
+            weekNumbers.each( function() {
+                let weekRow = this.parentNode;
+                // By default, each month has 6 weeks displayed, hide the week number if there is no days for the week
+                if(!weekRow.children[1].classList.length && !weekRow.children[weekRow.children.length-1].classList.length) {
+                    this.innerHTML = '';
+                }
+            });
+        },
     });
 
     var TimeOffCalendarRenderer = TimeOffPopoverRenderer.extend({
@@ -149,15 +230,28 @@ odoo.define('hr_holidays.dashboard.view_custo', function(require) {
                 return self._rpc({
                     model: 'hr.leave.type',
                     method: 'get_days_all_request',
-                    context: self.context,
+                    context: self.state.context,
                 });
             }).then(function (result) {
                 self.$el.parent().find('.o_calendar_mini').hide();
                 self.$el.parent().find('.o_timeoff_container').remove();
-                var elem = QWeb.render('hr_holidays.dashboard_calendar_header', {
-                    timeoffs: result,
-                });
-                self.$el.before(elem);
+
+                // Do not display header if there is no element to display
+                if (result.length > 0) {
+                    if (config.device.isMobile) {
+                        result.forEach((data) => {
+                            const elem = QWeb.render('hr_holidays.dashboard_calendar_header_mobile', {
+                                timeoff: data,
+                            });
+                            self.$el.find('.o_calendar_filter_item[data-value=' + data[3] + '] .o_cw_filter_title').append(elem);
+                        });
+                    } else {
+                        const elem = QWeb.render('hr_holidays.dashboard_calendar_header', {
+                            timeoffs: result,
+                        });
+                        self.$el.before(elem);
+                    }
+                }
             });
         },
     });
@@ -173,6 +267,7 @@ odoo.define('hr_holidays.dashboard.view_custo', function(require) {
      */
     var TimeOffCalendarAllView = CalendarView.extend({
         config: _.extend({}, CalendarView.prototype.config, {
+            Controller: TimeOffCalendarController,
             Renderer: TimeOffPopoverRenderer,
         }),
     });

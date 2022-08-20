@@ -7,7 +7,7 @@
         <field name="inherit_id" ref="product.product_supplierinfo_tree_view"/>
         <field name="arch" type="xml">
           <xpath expr="//field[@name='product_id']" position="after">
-              <field name="purchase_requisition_id" readonly="1" optional="hide"/>
+              <field name="purchase_requisition_id" optional="hide"/>
           </xpath>
         </field>
     </record>
@@ -36,15 +36,6 @@
                 </group>
             </group>
         </field>
-    </record>
-
-    <record id="act_res_partner_2_purchase_order" model="ir.actions.act_window">
-        <field name="name">Purchase orders</field>
-        <field name="res_model">purchase.order</field>
-        <field name="domain">[('requisition_id', '=', active_id)]</field>
-        <field name="context">{'default_requisition_id': active_id}</field>
-        <field name="binding_model_id" ref="model_purchase_requisition"/>
-        <field name="binding_view_types">form</field>
     </record>
 
 </odoo>

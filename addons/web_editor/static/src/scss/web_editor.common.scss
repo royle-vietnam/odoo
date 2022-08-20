@@ -1,5 +1,9 @@
 ///
-/// This file regroups basic style rules for web_editor enable page edition and backend utils.
+/// This file regroups basic style rules for web_editor enable page edition and
+/// backend utils.
+/// TODO many of those rules should probably not be declared for the backend.
+/// in particular the o_ccX rules, see code linked to the variable named
+/// 'prevent-backend-colors-alteration'.
 ///
 
 :root {
@@ -62,12 +66,19 @@
             @include print-variable('o-cc#{$index}-btn-secondary-border', $-btn-secondary or theme-color('secondary'));
         }
     }
+
+    @include print-variable('o-grid-gutter-width', $grid-gutter-width);
+    @include print-variable('o-md-container-max-width', map-get($container-max-widths, md));
 }
 
 html, body {
     position: relative;
     width: 100%;
     height: 100%;
+}
+
+*[contenteditable=true] {
+    outline: none;
 }
 
 .css_non_editable_mode_hidden {
@@ -117,28 +128,31 @@ ul.o_checklist {
     list-style: none;
 
     >li {
+        list-style: none;
         position: relative;
         margin-left: $o-checklist-margin-left;
 
-        &::before {
+        &:not(.oe-nested)::before {
             content: '';
             position: absolute;
             left: - $o-checklist-margin-left;
             display: block;
             height: $o-checklist-before-size;
             width: $o-checklist-before-size;
-            margin-top: 4px;
+            top: 4px;
             border: 1px solid;
             text-align: center;
             cursor: pointer;
         }
         &.o_checked {
             text-decoration: line-through;
-            &::after {
+            &::before {
                 content: "✓";
-                position: absolute;
-                left: - ($o-checklist-margin-left - $o-checklist-checkmark-width);
-                top: +1px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding-left: 1px #{"/*rtl:ignore*/"};
+                padding-top: 1px;
             }
         }
     }
@@ -400,10 +414,13 @@ a.o_underline {
         @mixin ace-line-error-mixin {
             content: "";
             z-index: 1000;
-            display: block;
-            background-color: theme-color('danger');
-            opacity: 0.5;
-            pointer-events: none;
+            display: flex;
+            background-color: $o-we-color-danger;
+            color: white;
+            font-size: 1.2em;
+            align-items: center;
+            justify-content: center;
+            cursor: help;
         }
 
         height: 70%; // in case flex is not supported
@@ -415,9 +432,16 @@ a.o_underline {
             .ace_gutter-cell.o_error {
                 position: relative;
 
+                &::before {
+                    @include o-position-absolute(-100vh, 0, -100vh);
+                    @include ace-line-error-mixin;
+                    width: 2px;
+                }
                 &::after {
                     @include o-position-absolute(-100%, 0, -100%, 0);
                     @include ace-line-error-mixin;
+                    font-family: FontAwesome;
+                    content: "\f071";
                 }
             }
         }
@@ -428,17 +452,29 @@ a.o_underline {
             height: 100%;
             cursor: ew-resize;
         }
-
-        .ace_scroller.o_error::after {
-            @include o-position-absolute(0, auto, 0, 0);
-            width: 3px;
-            @include ace-line-error-mixin;
-        }
     }
 }
 
-.ace_editor > .ace_gutter {
-    display: block !important; // display even with aria-hidden
+.o_ace_error_popover {
+    max-width: 40vw;
+
+    .popover-body {
+        background-color: lighten($o-we-ace-color, 10%);
+        color: #ebecee;
+    }
+    &.bs-popover-left .arrow::after {
+        border-left-color: lighten($o-we-ace-color, 10%);
+    }
+    &.bs-popover-right .arrow::after {
+        border-right-color: lighten($o-we-ace-color, 10%);
+    }
+    code {
+        display: block;
+        max-width: 100%;
+        overflow-x: auto;
+        white-space: pre;
+        color: cyan;
+    }
 }
 
 .o_ace_select2_dropdown {
@@ -477,16 +513,18 @@ a.o_underline {
     width: 100%;
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
 
     & > h2 {
         max-width: 500px;
         text-align: center;
+        margin-left: 150px;
     }
 
     &::before {
+        transform: scale(-1, 1);
         content: "";
-        @include o-position-absolute($top: 0, $right: 50px);
+        @include o-position-absolute($top: 0, $left: 50px);
         width: 100px;
         height: 150px;
         opacity: .5;
@@ -508,11 +546,11 @@ a.o_underline {
     // modal select media
     .o_technical_modal.o_web_editor_dialog {
         // see template 'web_editor.FieldTextHtml.fullscreen'
-        z-index: 2001;
+        z-index: $o-we-technical-modal-zindex;
 
         > .o_select_media_dialog {
             max-width: inherit !important;
-            z-index: 2001;
+            z-index: $o-we-technical-modal-zindex;
 
             .modal-dialog, .model-content {
                 height: 100%;
@@ -603,6 +641,15 @@ blockquote {
     font-style: italic;
 }
 
+// Extend bootstrap to create background and text utilities for some colors
+// outside of the $theme-colors too (but not btn-, alert-, etc).
+@for $index from 1 through 5 {
+    $-color-name: 'o-color-#{$index}';
+    $-color: color($-color-name);
+    @include bg-variant(".bg-#{$-color-name}", $-color);
+    @include text-emphasis-variant(".text-#{$-color-name}", $-color);
+}
+
 // Bg/text color classes generation
 .o_cc {
     #{$o-color-extras-nesting-selector} {
@@ -611,16 +658,45 @@ blockquote {
         .dropdown-menu .dropdown-item { // Need to add +1 priority thanks to
                                         // .dropdown-menu to counter a:not(.btn)
             &, h6 { // Quick fix: sometimes we use h6 in dropdowns
-                color: $dropdown-link-color;
+                color: $dropdown-link-color !important;
 
                 @include hover-focus {
-                    color: $dropdown-link-hover-color;
+                    color: $dropdown-link-hover-color !important;
                 }
             }
             &.disabled,
             &:disabled {
                 &, h6 { // Quick fix: sometimes we use h6 in dropdowns
-                    color: $dropdown-link-disabled-color;
+                    color: $dropdown-link-disabled-color !important;
+                }
+            }
+            .btn-link {
+                // Some search autocomplete results use btn-link for extra
+                // information that can be navigated to. (e.g. products give
+                // access to their categories)
+                // These need to be reset in case a dark palette is applied.
+                color: $link-color;
+
+                &:hover {
+                    color: $link-hover-color;
+                }
+                &:disabled {
+                    color: $btn-link-disabled-color;
+                }
+            }
+        }
+        .dropdown-menu .dropdown-item-text .text-muted {
+            // Search autocomplete messages are shown as text-muted entries.
+            // These need to be reset in case a dark palette is applied.
+            color: $text-muted !important;
+
+            a {
+                // Search autocomplete's fuzzy matched term is shown as a link
+                // within an information message.
+                color: $link-color;
+
+                &:hover {
+                    color: $link-hover-color;
                 }
             }
         }
@@ -720,7 +796,11 @@ blockquote {
                 &:active {
                     &, h6 { // Quick fix: sometimes we use h6 in dropdowns
                         @include gradient-bg($-btn-primary-color);
-                        color: color-yiq($-btn-primary-color);
+                        color: color-yiq($-btn-primary-color) !important;
+
+                        @include hover-focus {
+                            color: color-yiq($-btn-primary-color) !important;
+                        }
                     }
                 }
             }
@@ -737,13 +817,15 @@ blockquote {
     }
 }
 
-// Extend bootstrap to create background and text utilities for some colors
-// outside of the $theme-colors too (but not btn-, alert-, etc).
-@for $index from 1 through 5 {
-    $-color-name: 'o-color-#{$index}';
-    $-color: color($-color-name);
-    @include bg-variant(".bg-#{$-color-name}", $-color);
-    @include text-emphasis-variant(".text-#{$-color-name}", $-color);
+// Buttons with custom colors
+.btn-custom:hover, .btn-fill-custom:hover {
+    filter: invert(0.2);
+}
+.btn-outline-custom:not(:hover) {
+    // Custom buttons have their fill color or gradient specified in their
+    // element style. They must only be shown on hover for outline buttons.
+    background-color: transparent !important;
+    background-image: none !important;
 }
 
 // Base snippet rules
@@ -770,9 +852,124 @@ blockquote {
     pointer-events: none;
 }
 
-section {
+section, .oe_img_bg, [data-oe-shape-data] {
     @extend %o-we-background-layer-parent;
 }
 .o_we_bg_filter {
     @extend %o-we-background-layer;
+}
+
+.o_full_screen_height {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-around;
+    min-height: 100vh !important;
+}
+.o_half_screen_height {
+    @extend .o_full_screen_height;
+    min-height: 55vh !important;
+}
+
+// TODO remove cover_full and cover_mid classes (kept for compatibility for now)
+.cover_full {
+    @extend .o_full_screen_height;
+}
+.cover_mid {
+    @extend .o_half_screen_height;
+}
+
+// Smaller container
+.o_container_small {
+    @extend .container;
+    @include media-breakpoint-up(lg) {
+        max-width: map-get($container-max-widths, md);
+    }
+}
+
+// Background Images
+.oe_img_bg {
+    background-size: cover;
+    background-repeat: no-repeat;
+
+    &.o_bg_img_opt_repeat {
+        background-size: auto;
+        background-repeat: repeat;
+    }
+    &.o_bg_img_center {
+        background-position: center;
+    }
+}
+
+// Gradient
+// TODO should be in the editor lib since it is handled there... but could not
+// find the right place for it.
+.text-gradient {
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+
+    // FIXME (or wait for a fix in Chrome): the code below is needed to make
+    // animated text work with gradient background on Chrome. But the side
+    // effect is that text node wrapping by a span (e.g. bold, italic) no longer
+    // have the "gradient crossing all the text" on it but its own gradient.
+    * {
+        background-image: inherit;
+        -webkit-background-clip: inherit;
+        -webkit-text-fill-color: inherit;
+    }
+}
+
+/* QWEB */
+
+.odoo-editor-editable, .o_readonly {
+    t,
+    [t-if],
+    [t-elif],
+    [t-else],
+    [t-foreach] {
+        background-color: rgba(0, 0, 102, 0.1) !important;
+    }
+    t,
+    [t-esc],
+    [t-out],
+    [t-raw] {
+        border-radius: 2px;
+    }
+    [t-esc],
+    [t-out],
+    [t-raw] {
+        background-color: rgba(36, 154, 255, 0.16) !important;
+    }
+    [t-esc]:empty::before {
+        content: attr(t-esc);
+    }
+    [t-raw]:empty::before {
+        content: attr(t-raw);
+    }
+    [t-out]:empty::before {
+        content: attr(t-out);
+    }
+    t[t-set] {
+        display: none;
+    }
+    t[data-oe-t-inline] {
+        display: inline;
+    }
+    t:not([data-oe-t-inline]) {
+        display: block;
+    }
+    t[data-oe-t-inline]:not([data-oe-t-group-active]) {
+        display: unset;
+    }
+    [data-oe-t-group]:not([data-oe-t-group-active]) {
+        display: none !important;
+    }
+    [data-oe-t-group][data-oe-t-selectable] {
+        outline: 1px dashed rgba(0, 0, 102, 0.4) !important;
+    }
+}
+
+.oe-qweb-select {
+    position: absolute;
+    z-index: 1051;
+    background-color: white;
 }

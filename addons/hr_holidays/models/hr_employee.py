@@ -2,8 +2,9 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 import datetime
+from dateutil.relativedelta import relativedelta
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.tools.float_utils import float_round
 
 
@@ -28,11 +29,11 @@ class HrEmployeeBase(models.AbstractModel):
             ('validate', 'Approved'),
             ('cancel', 'Cancelled')
         ])
-    current_leave_id = fields.Many2one('hr.leave.type', compute='_compute_leave_status', string="Current Time Off Type")
     leave_date_from = fields.Date('From Date', compute='_compute_leave_status')
     leave_date_to = fields.Date('To Date', compute='_compute_leave_status')
     leaves_count = fields.Float('Number of Time Off', compute='_compute_remaining_leaves')
     allocation_count = fields.Float('Total number of days allocated.', compute='_compute_allocation_count')
+    allocations_count = fields.Integer('Total number of allocations', compute="_compute_allocation_count")
     allocation_used_count = fields.Float('Total number of days off used', compute='_compute_total_allocation_used')
     show_leaves = fields.Boolean('Able to see Remaining Time Off', compute='_compute_show_leaves')
     is_absent = fields.Boolean('Absent Today', compute='_compute_leave_status', search='_search_absent_employee')
@@ -40,9 +41,6 @@ class HrEmployeeBase(models.AbstractModel):
     allocation_used_display = fields.Char(compute='_compute_total_allocation_used')
     hr_icon_display = fields.Selection(selection_add=[('presence_holiday_absent', 'On leave'),
                                                       ('presence_holiday_present', 'Present but on leave')])
-
-    def _get_date_start_work(self):
-        return self.create_date
 
     def _get_remaining_leaves(self):
         """ Helper to compute the remaining leaves for the current employees
@@ -65,7 +63,7 @@ class HrEmployeeBase(models.AbstractModel):
                 join hr_leave_type s ON (s.id=h.holiday_status_id)
             WHERE
                 s.active = true AND h.state='validate' AND
-                (s.allocation_type='fixed' OR s.allocation_type='fixed_allocation') AND
+                s.requires_allocation='yes' AND
                 h.employee_id in %s
             GROUP BY h.employee_id""", (tuple(self.ids),))
         return dict((row['employee_id'], row['days']) for row in self._cr.dictfetchall())
@@ -85,14 +83,16 @@ class HrEmployeeBase(models.AbstractModel):
             ('holiday_status_id.active', '=', True),
             ('state', '=', 'validate'),
         ], ['number_of_days:sum', 'employee_id'], ['employee_id'])
-        rg_results = dict((d['employee_id'][0], d['number_of_days']) for d in data)
+        rg_results = dict((d['employee_id'][0], {"employee_id_count": d['employee_id_count'], "number_of_days": d['number_of_days']}) for d in data)
         for employee in self:
-            employee.allocation_count = rg_results.get(employee.id, 0.0)
+            result = rg_results.get(employee.id)
+            employee.allocation_count = float_round(result['number_of_days'], precision_digits=2) if result else 0.0
             employee.allocation_display = "%g" % employee.allocation_count
+            employee.allocations_count = result['employee_id_count'] if result else 0.0
 
     def _compute_total_allocation_used(self):
         for employee in self:
-            employee.allocation_used_count = employee.allocation_count - employee.remaining_leaves
+            employee.allocation_used_count = float_round(employee.allocation_count - employee.remaining_leaves, precision_digits=2)
             employee.allocation_used_display = "%g" % employee.allocation_used_count
 
     def _compute_presence_state(self):
@@ -125,14 +125,12 @@ class HrEmployeeBase(models.AbstractModel):
             leave_data[holiday.employee_id.id]['leave_date_from'] = holiday.date_from.date()
             leave_data[holiday.employee_id.id]['leave_date_to'] = holiday.date_to.date()
             leave_data[holiday.employee_id.id]['current_leave_state'] = holiday.state
-            leave_data[holiday.employee_id.id]['current_leave_id'] = holiday.holiday_status_id.id
 
         for employee in self:
             employee.leave_date_from = leave_data.get(employee.id, {}).get('leave_date_from')
             employee.leave_date_to = leave_data.get(employee.id, {}).get('leave_date_to')
             employee.current_leave_state = leave_data.get(employee.id, {}).get('current_leave_state')
-            employee.current_leave_id = leave_data.get(employee.id, {}).get('current_leave_id')
-            employee.is_absent = leave_data.get(employee.id) and leave_data.get(employee.id, {}).get('current_leave_state') not in ['cancel', 'refuse', 'draft']
+            employee.is_absent = leave_data.get(employee.id) and leave_data.get(employee.id, {}).get('current_leave_state') in ['validate']
 
     @api.depends('parent_id')
     def _compute_leave_manager(self):
@@ -153,11 +151,16 @@ class HrEmployeeBase(models.AbstractModel):
                 employee.show_leaves = False
 
     def _search_absent_employee(self, operator, value):
+        # This search is only used for the 'Absent Today' filter however
+        # this only returns employees that are absent right now.
+        today_date = datetime.datetime.utcnow().date()
+        today_start = fields.Datetime.to_string(today_date)
+        today_end = fields.Datetime.to_string(today_date + relativedelta(hours=23, minutes=59, seconds=59))
         holidays = self.env['hr.leave'].sudo().search([
             ('employee_id', '!=', False),
             ('state', 'not in', ['cancel', 'refuse']),
-            ('date_from', '<=', datetime.datetime.utcnow()),
-            ('date_to', '>=', datetime.datetime.utcnow())
+            ('date_from', '<=', today_end),
+            ('date_to', '>=', today_start),
         ])
         return [('id', 'in', holidays.mapped('employee_id').ids)]
 
@@ -204,3 +207,37 @@ class HrEmployeeBase(models.AbstractModel):
             allocations = self.env['hr.leave.allocation'].sudo().search([('state', 'in', ['draft', 'confirm']), ('employee_id', 'in', self.ids)])
             allocations.write(hr_vals)
         return res
+
+class HrEmployee(models.Model):
+    _inherit = 'hr.employee'
+
+    current_leave_id = fields.Many2one('hr.leave.type', compute='_compute_current_leave', string="Current Time Off Type",
+                                       groups="hr.group_hr_user")
+
+    def _compute_current_leave(self):
+        self.current_leave_id = False
+
+        holidays = self.env['hr.leave'].sudo().search([
+            ('employee_id', 'in', self.ids),
+            ('date_from', '<=', fields.Datetime.now()),
+            ('date_to', '>=', fields.Datetime.now()),
+            ('state', 'not in', ('cancel', 'refuse'))
+        ])
+        for holiday in holidays:
+            employee = self.filtered(lambda e: e.id == holiday.employee_id.id)
+            employee.current_leave_id = holiday.holiday_status_id.id
+
+    def _get_user_m2o_to_empty_on_archived_employees(self):
+        return super()._get_user_m2o_to_empty_on_archived_employees() + ['leave_manager_id']
+
+    def action_time_off_dashboard(self):
+        return {
+            'name': _('Time Off Dashboard'),
+            'type': 'ir.actions.act_window',
+            'res_model': 'hr.leave',
+            'views': [[self.env.ref('hr_holidays.hr_leave_employee_view_dashboard').id, 'calendar']],
+            'domain': [('employee_id', 'in', self.ids)],
+            'context': {
+                'employee_id': self.ids,
+            },
+        }

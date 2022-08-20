@@ -1,8 +1,8 @@
-odoo.define('mail/static/src/models/country/country.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { attr } = require('mail/static/src/model/model_field.js');
+import { registerNewModel } from '@mail/model/model_core';
+import { attr } from '@mail/model/model_field';
+import { clear } from '@mail/model/model_field_command';
 
 function factory(dependencies) {
 
@@ -13,24 +13,33 @@ function factory(dependencies) {
         //----------------------------------------------------------------------
 
         /**
-         * @override
+         * @private
+         * @returns {string|undefined}
          */
-        static _createRecordLocalId(data) {
-            return `${this.modelName}_${data.id}`;
+        _computeFlagUrl() {
+            if (!this.code) {
+                return clear();
+            }
+            return `/base/static/img/country_flags/${this.code}.png`;
         }
 
     }
 
     Country.fields = {
-        id: attr(),
+        code: attr(),
+        flagUrl: attr({
+            compute: '_computeFlagUrl',
+        }),
+        id: attr({
+            readonly: true,
+            required: true,
+        }),
         name: attr(),
     };
-
+    Country.identifyingFields = ['id'];
     Country.modelName = 'mail.country';
 
     return Country;
 }
 
 registerNewModel('mail.country', factory);
-
-});

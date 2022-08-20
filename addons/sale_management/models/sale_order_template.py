@@ -17,7 +17,7 @@ class SaleOrderTemplate(models.Model):
 
     name = fields.Char('Quotation Template', required=True)
     sale_order_template_line_ids = fields.One2many('sale.order.template.line', 'sale_order_template_id', 'Lines', copy=True)
-    note = fields.Text('Terms and conditions', translate=True)
+    note = fields.Html('Terms and conditions', translate=True)
     sale_order_template_option_ids = fields.One2many('sale.order.template.option', 'sale_order_template_id', 'Optional Products', copy=True)
     number_of_days = fields.Integer('Quotation Duration',
         help='Number of days for the validity date computation of the quotation')
@@ -112,7 +112,7 @@ class SaleOrderTemplateLine(models.Model):
     product_id = fields.Many2one(
         'product.product', 'Product', check_company=True,
         domain=[('sale_ok', '=', True)])
-    product_uom_qty = fields.Float('Quantity', required=True, digits='Product UoS', default=1)
+    product_uom_qty = fields.Float('Quantity', required=True, digits='Product Unit of Measure', default=1)
     product_uom_id = fields.Many2one('uom.uom', 'Unit of Measure', domain="[('category_id', '=', product_uom_category_id)]")
     product_uom_category_id = fields.Many2one(related='product_id.uom_id.category_id', readonly=True)
 
@@ -163,7 +163,7 @@ class SaleOrderTemplateOption(models.Model):
         required=True, check_company=True)
     uom_id = fields.Many2one('uom.uom', 'Unit of Measure ', required=True, domain="[('category_id', '=', product_uom_category_id)]")
     product_uom_category_id = fields.Many2one(related='product_id.uom_id.category_id', readonly=True)
-    quantity = fields.Float('Quantity', required=True, digits='Product UoS', default=1)
+    quantity = fields.Float('Quantity', required=True, digits='Product Unit of Measure', default=1)
 
     @api.onchange('product_id')
     def _onchange_product_id(self):

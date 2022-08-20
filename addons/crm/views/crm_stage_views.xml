@@ -36,11 +36,9 @@
             <form string="Stage">
                 <sheet>
                     <div class="oe_title">
-                        <div class="oe_edit_only">
-                            <label for="name"/>
-                        </div>
+                        <label for="name"/>
                         <h1>
-                            <field name="name"/>
+                            <field name="name" placeholder="e.g. Negotiation"/>
                         </h1>
                     </div>
                     <group>
@@ -70,10 +68,6 @@
             is positioned in the sales cycle.
           </p>
         </field>
-    </record>
-
-    <record id="menu_crm_lead_stage_act" model="ir.ui.menu">
-        <field name="action" ref="crm.crm_stage_action"/>
     </record>
 
 </odoo>

@@ -1,13 +1,21 @@
 .s_dynamic {
   .carousel-control-prev, .carousel-control-next {
     position: absolute;
-    text-shadow: 0px 0px 3px #343A40;
     width: 4rem;
+
+    > span.fa {
+      color: gray('700');
+      background: radial-gradient($white 50%, transparent 50%);
+    }
   }
-  .carousel-control-prev{
-    left: -4rem
+  .dynamic_snippet_template .card-footer a, .dynamic_snippet_template .card-footer button, .o_dynamic_snippet_btn_wrapper {
+    z-index: 2;
   }
-  .carousel-control-next{
-    right: -4rem
+  .dynamic_snippet_template .card-body .card-text {
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    text-overflow: ellipsis;
+    overflow: hidden;
   }
 }

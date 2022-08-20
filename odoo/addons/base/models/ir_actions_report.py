@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
+from markupsafe import Markup
+
 from odoo import api, fields, models, tools, SUPERUSER_ID, _
 from odoo.exceptions import UserError, AccessError
 from odoo.tools.safe_eval import safe_eval, time
 from odoo.tools.misc import find_in_path
-from odoo.tools import config
+from odoo.tools import config, is_html_empty, parse_version
 from odoo.sql_db import TestCursor
 from odoo.http import request
 from odoo.osv.expression import NEGATIVE_TERM_OPERATORS, FALSE_DOMAIN
@@ -21,9 +23,8 @@ import json
 
 from lxml import etree
 from contextlib import closing
-from distutils.version import LooseVersion
 from reportlab.graphics.barcode import createBarcodeDrawing
-from PyPDF2 import PdfFileWriter, PdfFileReader
+from PyPDF2 import PdfFileWriter, PdfFileReader, utils
 from collections import OrderedDict
 from collections.abc import Iterable
 from PIL import Image, ImageFile
@@ -63,12 +64,12 @@ else:
     match = re.search(b'([0-9.]+)', out)
     if match:
         version = match.group(0).decode('ascii')
-        if LooseVersion(version) < LooseVersion('0.12.0'):
+        if parse_version(version) < parse_version('0.12.0'):
             _logger.info('Upgrade Wkhtmltopdf to (at least) 0.12.0')
             wkhtmltopdf_state = 'upgrade'
         else:
             wkhtmltopdf_state = 'ok'
-        if LooseVersion(version) >= LooseVersion('0.12.2'):
+        if parse_version(version) >= parse_version('0.12.2'):
             wkhtmltopdf_dpi_zoom_ratio = True
 
         if config['workers'] == 1:
@@ -149,6 +150,8 @@ class IrActionsReport(models.Model):
             # expected in the route /report/<converter>/<reportname> and must
             # not be removed by clean_action
             "context", "data",
+            # and this one is used by the frontend later on.
+            "close_on_report_download",
         }
 
     def associated_view(self):
@@ -246,7 +249,6 @@ class IrActionsReport(models.Model):
         '''
         return wkhtmltopdf_state
 
-    @api.model
     def get_paperformat(self):
         return self.paperformat_id or self.env.company.paperformat_id
 
@@ -322,6 +324,8 @@ class IrActionsReport(models.Model):
                 command_args.extend(['--orientation', str(paperformat_id.orientation)])
             if paperformat_id.header_line:
                 command_args.extend(['--header-line'])
+            if paperformat_id.disable_shrinking:
+                command_args.extend(['--disable-smart-shrinking'])
 
         if landscape:
             command_args.extend(['--orientation', 'landscape'])
@@ -343,13 +347,13 @@ class IrActionsReport(models.Model):
         :return: bodies, header, footer, specific_paperformat_args
         '''
         IrConfig = self.env['ir.config_parameter'].sudo()
-        base_url = IrConfig.get_param('report.url') or IrConfig.get_param('web.base.url')
 
         # Return empty dictionary if 'web.minimal_layout' not found.
         layout = self.env.ref('web.minimal_layout', False)
         if not layout:
             return {}
         layout = self.env['ir.ui.view'].browse(self.env['ir.ui.view'].get_view_id('web.minimal_layout'))
+        base_url = IrConfig.get_param('report.url') or layout.get_base_url()
 
         root = lxml.html.fromstring(html)
         match_klass = "//div[contains(concat(' ', normalize-space(@class), ' '), ' {} ')]"
@@ -373,12 +377,21 @@ class IrActionsReport(models.Model):
             footer_node.append(node)
 
         # Retrieve bodies
+        layout_sections = None
         for node in root.xpath(match_klass.format('article')):
             layout_with_lang = layout
-            # set context language to body language
             if node.get('data-oe-lang'):
+                # context language to body language
                 layout_with_lang = layout_with_lang.with_context(lang=node.get('data-oe-lang'))
-            body = layout_with_lang._render(dict(subst=False, body=lxml.html.tostring(node), base_url=base_url))
+                # set header/lang to body lang prioritizing current user language
+                if not layout_sections or node.get('data-oe-lang') == self.env.lang:
+                    layout_sections = layout_with_lang
+            body = layout_with_lang._render({
+                'subst': False,
+                'body': Markup(lxml.html.tostring(node, encoding='unicode')),
+                'base_url': base_url,
+                'report_xml_id': self.xml_id
+            })
             bodies.append(body)
             if node.get('data-oe-model') == self.model:
                 res_ids.append(int(node.get('data-oe-id', 0)))
@@ -386,7 +399,7 @@ class IrActionsReport(models.Model):
                 res_ids.append(None)
 
         if not bodies:
-            body = bytearray().join([lxml.html.tostring(c) for c in body_parent.getchildren()])
+            body = ''.join(lxml.html.tostring(c, encoding='unicode') for c in body_parent.getchildren())
             bodies.append(body)
 
         # Get paperformat arguments set in the root html tag. They are prioritized over
@@ -396,8 +409,16 @@ class IrActionsReport(models.Model):
             if attribute[0].startswith('data-report-'):
                 specific_paperformat_args[attribute[0]] = attribute[1]
 
-        header = layout._render(dict(subst=True, body=lxml.html.tostring(header_node), base_url=base_url))
-        footer = layout._render(dict(subst=True, body=lxml.html.tostring(footer_node), base_url=base_url))
+        header = (layout_sections or layout)._render({
+            'subst': True,
+            'body': Markup(lxml.html.tostring(header_node, encoding='unicode')),
+            'base_url': base_url
+        })
+        footer = (layout_sections or layout)._render({
+            'subst': True,
+            'body': Markup(lxml.html.tostring(footer_node, encoding='unicode')),
+            'base_url': base_url
+        })
 
         return bodies, res_ids, header, footer, specific_paperformat_args
 
@@ -413,13 +434,14 @@ class IrActionsReport(models.Model):
         '''Execute wkhtmltopdf as a subprocess in order to convert html given in input into a pdf
         document.
 
-        :param bodies: The html bodies of the report, one per page.
-        :param header: The html header of the report containing all headers.
-        :param footer: The html footer of the report containing all footers.
+        :param list[str] bodies: The html bodies of the report, one per page.
+        :param str header: The html header of the report containing all headers.
+        :param str footer: The html footer of the report containing all footers.
         :param landscape: Force the pdf to be rendered under a landscape format.
         :param specific_paperformat_args: dict of prioritized paperformat arguments.
         :param set_viewport_size: Enable a viewport sized '1024x1280' or '1280x1024' depending of landscape arg.
-        :return: Content of the pdf as a string
+        :return: Content of the pdf as bytes
+        :rtype: bytes
         '''
         paperformat_id = self.get_paperformat()
 
@@ -435,13 +457,13 @@ class IrActionsReport(models.Model):
         if header:
             head_file_fd, head_file_path = tempfile.mkstemp(suffix='.html', prefix='report.header.tmp.')
             with closing(os.fdopen(head_file_fd, 'wb')) as head_file:
-                head_file.write(header)
+                head_file.write(header.encode())
             temporary_files.append(head_file_path)
             files_command_args.extend(['--header-html', head_file_path])
         if footer:
             foot_file_fd, foot_file_path = tempfile.mkstemp(suffix='.html', prefix='report.footer.tmp.')
             with closing(os.fdopen(foot_file_fd, 'wb')) as foot_file:
-                foot_file.write(footer)
+                foot_file.write(footer.encode())
             temporary_files.append(foot_file_path)
             files_command_args.extend(['--footer-html', foot_file_path])
 
@@ -450,7 +472,7 @@ class IrActionsReport(models.Model):
             prefix = '%s%d.' % ('report.body.tmp.', i)
             body_file_fd, body_file_path = tempfile.mkstemp(suffix='.html', prefix=prefix)
             with closing(os.fdopen(body_file_fd, 'wb')) as body_file:
-                body_file.write(body)
+                body_file.write(body.encode())
             paths.append(body_file_path)
             temporary_files.append(body_file_path)
 
@@ -500,39 +522,115 @@ class IrActionsReport(models.Model):
         return report_obj.with_context(context).sudo().search(conditions, limit=1)
 
     @api.model
-    def barcode(self, barcode_type, value, width=600, height=100, humanreadable=0, quiet=1, mask=None):
+    def get_barcode_check_digit(self, numeric_barcode):
+        """ Computes and returns the barcode check digit. The used algorithm
+        follows the GTIN specifications and can be used by all compatible
+        barcode nomenclature, like as EAN-8, EAN-12 (UPC-A) or EAN-13.
+
+        https://www.gs1.org/sites/default/files/docs/barcodes/GS1_General_Specifications.pdf
+        https://www.gs1.org/services/how-calculate-check-digit-manually
+
+        :param numeric_barcode: the barcode to verify/recompute the check digit
+        :type numeric_barcode: str
+        :return: the number corresponding to the right check digit
+        :rtype: int
+        """
+        # Multiply value of each position by
+        # N1  N2  N3  N4  N5  N6  N7  N8  N9  N10 N11 N12 N13 N14 N15 N16 N17 N18
+        # x3  X1  x3  x1  x3  x1  x3  x1  x3  x1  x3  x1  x3  x1  x3  x1  x3  CHECKSUM
+        oddsum = evensum = 0
+        code = numeric_barcode[-2::-1]  # Remove the check digit and reverse the barcode.
+        # The CHECKSUM digit is removed because it will be recomputed and it must not interfer with
+        # the computation. Also, the barcode is inverted, so the barcode length doesn't matter.
+        # Otherwise, the digits' group (even or odd) could be different according to the barcode length.
+        for i, digit in enumerate(code):
+            if i % 2 == 0:
+                evensum += int(digit)
+            else:
+                oddsum += int(digit)
+        total = evensum * 3 + oddsum
+        return (10 - total % 10) % 10
+
+    @api.model
+    def check_barcode_encoding(self, barcode, encoding):
+        """ Checks if the given barcode is correctly encoded.
+
+        :return: True if the barcode string is encoded with the provided encoding.
+        :rtype: bool
+        """
+        if encoding == "any":
+            return True
+        barcode_sizes = {
+            'ean8': 8,
+            'ean13': 13,
+            'upca': 12,
+        }
+        barcode_size = barcode_sizes[encoding]
+        return (encoding != 'ean13' or barcode[0] != '0') \
+               and len(barcode) == barcode_size \
+               and re.match(r"^\d+$", barcode) \
+               and self.get_barcode_check_digit(barcode) == int(barcode[-1])
+
+    @api.model
+    def barcode(self, barcode_type, value, **kwargs):
+        defaults = {
+            'width': (600, int),
+            'height': (100, int),
+            'humanreadable': (False, lambda x: bool(int(x))),
+            'quiet': (True, lambda x: bool(int(x))),
+            'mask': (None, lambda x: x),
+            'barBorder': (4, int),
+            # The QR code can have different layouts depending on the Error Correction Level
+            # See: https://en.wikipedia.org/wiki/QR_code#Error_correction
+            # Level 'L' – up to 7% damage   (default)
+            # Level 'M' – up to 15% damage  (i.e. required by l10n_ch QR bill)
+            # Level 'Q' – up to 25% damage
+            # Level 'H' – up to 30% damage
+            'barLevel': ('L', lambda x: x in ('L', 'M', 'Q', 'H') and x or 'L'),
+        }
+        kwargs = {k: validator(kwargs.get(k, v)) for k, (v, validator) in defaults.items()}
+        kwargs['humanReadable'] = kwargs.pop('humanreadable')
+
         if barcode_type == 'UPCA' and len(value) in (11, 12, 13):
             barcode_type = 'EAN13'
             if len(value) in (11, 12):
                 value = '0%s' % value
-        try:
-            width, height, humanreadable, quiet = int(width), int(height), bool(int(humanreadable)), bool(int(quiet))
+        elif barcode_type == 'auto':
+            symbology_guess = {8: 'EAN8', 13: 'EAN13'}
+            barcode_type = symbology_guess.get(len(value), 'Code128')
+        elif barcode_type == 'QR':
             # for `QR` type, `quiet` is not supported. And is simply ignored.
             # But we can use `barBorder` to get a similar behaviour.
-            bar_border = 4
-            if barcode_type == 'QR' and quiet:
-                bar_border = 0
+            if kwargs['quiet']:
+                kwargs['barBorder'] = 0
 
-            barcode = createBarcodeDrawing(
-                barcode_type, value=value, format='png', width=width, height=height,
-                humanReadable=humanreadable, quiet=quiet, barBorder=bar_border
-            )
+        if barcode_type in ('EAN8', 'EAN13') and not self.check_barcode_encoding(value, barcode_type.lower()):
+            # If the barcode does not respect the encoding specifications, convert its type into Code128.
+            # Otherwise, the report-lab method may return a barcode different from its value. For instance,
+            # if the barcode type is EAN-8 and the value 11111111, the report-lab method will take the first
+            # seven digits and will compute the check digit, which gives: 11111115 -> the barcode does not
+            # match the expected value.
+            barcode_type = 'Code128'
+
+        try:
+            barcode = createBarcodeDrawing(barcode_type, value=value, format='png', **kwargs)
 
             # If a mask is asked and it is available, call its function to
             # post-process the generated QR-code image
-            if mask:
+            if kwargs['mask']:
                 available_masks = self.get_available_barcode_masks()
-                mask_to_apply = available_masks.get(mask)
+                mask_to_apply = available_masks.get(kwargs['mask'])
                 if mask_to_apply:
-                    mask_to_apply(width, height, barcode)
+                    mask_to_apply(kwargs['width'], kwargs['height'], barcode)
 
             return barcode.asString('png')
         except (ValueError, AttributeError):
             if barcode_type == 'Code128':
                 raise ValueError("Cannot convert into barcode.")
+            elif barcode_type == 'QR':
+                raise ValueError("Cannot convert into QR code.")
             else:
-                return self.barcode('Code128', value, width=width, height=height,
-                    humanreadable=humanreadable, quiet=quiet)
+                return self.barcode('Code128', value, **kwargs)
 
     @api.model
     def get_available_barcode_masks(self):
@@ -552,6 +650,7 @@ class IrActionsReport(models.Model):
         render but embellish it with some variables/methods used in reports.
         :param values: additional methods/variables used in the rendering
         :returns: html representation of the template
+        :rtype: bytes
         """
         if values is None:
             values = {}
@@ -571,11 +670,11 @@ class IrActionsReport(models.Model):
             time=time,
             context_timestamp=lambda t: fields.Datetime.context_timestamp(self.with_context(tz=user.tz), t),
             user=user,
-            res_company=user.company_id,
+            res_company=self.env.company,
             website=website,
             web_base_url=self.env['ir.config_parameter'].sudo().get_param('web.base.url', default=''),
         )
-        return view_obj._render_template(template, values)
+        return view_obj._render_template(template, values).encode()
 
     def _post_pdf(self, save_in_attachment, pdf_content=None, res_ids=None):
         '''Merge the existing attachments by adding one by one the content of the attachments
@@ -676,11 +775,40 @@ class IrActionsReport(models.Model):
         if len(streams) == 1:
             result = streams[0].getvalue()
         else:
-            result = self._merge_pdfs(streams)
+            try:
+                result = self._merge_pdfs(streams)
+            except utils.PdfReadError:
+                raise UserError(_("One of the documents you are trying to merge is encrypted"))
 
         # We have to close the streams after PdfFileWriter's call to write()
         close_streams(streams)
         return result
+
+    def _get_unreadable_pdfs(self, streams):
+        unreadable_streams = []
+
+        for stream in streams:
+            writer = PdfFileWriter()
+            result_stream = io.BytesIO()
+            try:
+                reader = PdfFileReader(stream)
+                writer.appendPagesFromReader(reader)
+                writer.write(result_stream)
+            except utils.PdfReadError:
+                unreadable_streams.append(stream)
+
+        return unreadable_streams
+
+    def _raise_on_unreadable_pdfs(self, streams, stream_record):
+        unreadable_pdfs = self._get_unreadable_pdfs(streams)
+        if unreadable_pdfs:
+            records = [stream_record[s].name for s in unreadable_pdfs if s in stream_record]
+            raise UserError(_(
+                "Odoo is unable to merge the PDFs attached to the following records:\n"
+                "%s\n\n"
+                "Please exclude them from the selection to continue. It's possible to "
+                "still retrieve those PDFs by selecting each of the affected records "
+                "individually, which will avoid merging.") % "\n".join(records))
 
     def _merge_pdfs(self, streams):
         writer = PdfFileWriter()
@@ -693,17 +821,20 @@ class IrActionsReport(models.Model):
         return result_stream.getvalue()
 
     def _render_qweb_pdf(self, res_ids=None, data=None):
+        """
+        :rtype: bytes
+        """
         if not data:
             data = {}
         data.setdefault('report_type', 'pdf')
 
-        # access the report details with sudo() but evaluation context as current user
+        # access the report details with sudo() but evaluation context as sudo(False)
         self_sudo = self.sudo()
 
         # In case of test environment without enough workers to perform calls to wkhtmltopdf,
         # fallback to render_html.
         if (tools.config['test_enable'] or tools.config['test_file']) and not self.env.context.get('force_report_rendering'):
-            return self._render_qweb_html(res_ids, data=data)
+            return self_sudo._render_qweb_html(res_ids, data=data)
 
         # As the assets are generated during the same transaction as the rendering of the
         # templates calling them, there is a scenario where the assets are unreachable: when
@@ -725,14 +856,9 @@ class IrActionsReport(models.Model):
         # https://github.com/wkhtmltopdf/wkhtmltopdf/issues/2083
         context['debug'] = False
 
-        # The test cursor prevents the use of another environment while the current
-        # transaction is not finished, leading to a deadlock when the report requests
-        # an asset bundle during the execution of test scenarios. In this case, return
-        # the html version.
-        if isinstance(self.env.cr, TestCursor):
-            return self_sudo.with_context(context)._render_qweb_html(res_ids, data=data)[0]
-
         save_in_attachment = OrderedDict()
+        # Maps the streams in `save_in_attachment` back to the records they came from
+        stream_record = dict()
         if res_ids:
             # Dispatch the records by ones having an attachment and ones requesting a call to
             # wkhtmltopdf.
@@ -743,7 +869,9 @@ class IrActionsReport(models.Model):
                 for record_id in record_ids:
                     attachment = self_sudo.retrieve_attachment(record_id)
                     if attachment:
-                        save_in_attachment[record_id.id] = self_sudo._retrieve_stream_from_attachment(attachment)
+                        stream = self_sudo._retrieve_stream_from_attachment(attachment)
+                        save_in_attachment[record_id.id] = stream
+                        stream_record[stream] = record_id
                     if not self_sudo.attachment_use or not attachment:
                         wk_record_ids += record_id
             else:
@@ -755,6 +883,7 @@ class IrActionsReport(models.Model):
         # - The report is not fully present in attachments.
         if save_in_attachment and not res_ids:
             _logger.info('The PDF report has been generated from attachments.')
+            self._raise_on_unreadable_pdfs(save_in_attachment.values(), stream_record)
             return self_sudo._post_pdf(save_in_attachment), 'pdf'
 
         if self.get_wkhtmltopdf_state() == 'install':
@@ -765,9 +894,6 @@ class IrActionsReport(models.Model):
             raise UserError(_("Unable to find Wkhtmltopdf on this system. The PDF can not be created."))
 
         html = self_sudo.with_context(context)._render_qweb_html(res_ids, data=data)[0]
-
-        # Ensure the current document is utf-8 encoded.
-        html = html.decode('utf-8')
 
         bodies, html_ids, header, footer, specific_paperformat_args = self_sudo.with_context(context)._prepare_html(html)
 
@@ -784,53 +910,59 @@ class IrActionsReport(models.Model):
             set_viewport_size=context.get('set_viewport_size'),
         )
         if res_ids:
+            self._raise_on_unreadable_pdfs(save_in_attachment.values(), stream_record)
             _logger.info('The PDF report has been generated for model: %s, records %s.' % (self_sudo.model, str(res_ids)))
             return self_sudo._post_pdf(save_in_attachment, pdf_content=pdf_content, res_ids=html_ids), 'pdf'
         return pdf_content, 'pdf'
 
     @api.model
     def _render_qweb_text(self, docids, data=None):
+        """
+        :rtype: bytes
+        """
         if not data:
             data = {}
         data.setdefault('report_type', 'text')
+        data.setdefault('__keep_empty_lines', True)
         data = self._get_rendering_context(docids, data)
-        return self._render_template(self.sudo().report_name, data), 'text'
+        return self._render_template(self.report_name, data), 'text'
 
     @api.model
     def _render_qweb_html(self, docids, data=None):
         """This method generates and returns html version of a report.
+
+        :rtype: bytes
         """
         if not data:
             data = {}
         data.setdefault('report_type', 'html')
         data = self._get_rendering_context(docids, data)
-        return self._render_template(self.sudo().report_name, data), 'html'
+        return self._render_template(self.report_name, data), 'html'
 
-    @api.model
     def _get_rendering_context_model(self):
         report_model_name = 'report.%s' % self.report_name
         return self.env.get(report_model_name)
 
-    @api.model
     def _get_rendering_context(self, docids, data):
-        # access the report details with sudo() but evaluation context as current user
-        self_sudo = self.sudo()
-
         # If the report is using a custom model to render its html, we must use it.
         # Otherwise, fallback on the generic html rendering.
-        report_model = self_sudo._get_rendering_context_model()
+        report_model = self._get_rendering_context_model()
 
         data = data and dict(data) or {}
 
         if report_model is not None:
+            # _render_ may be executed in sudo but evaluation context as real user
+            report_model = report_model.sudo(False)
             data.update(report_model._get_report_values(docids, data=data))
         else:
-            docs = self.env[self_sudo.model].browse(docids)
+            # _render_ may be executed in sudo but evaluation context as real user
+            docs = self.env[self.model].sudo(False).browse(docids)
             data.update({
                 'doc_ids': docids,
-                'doc_model': self_sudo.model,
+                'doc_model': self.model,
                 'docs': docs,
             })
+        data['is_html_empty'] = is_html_empty
         return data
 
     def _render(self, res_ids, data=None):
@@ -844,7 +976,9 @@ class IrActionsReport(models.Model):
         """Return an action of type ir.actions.report.
 
         :param docids: id/ids/browse record of the records to print (if not used, pass an empty list)
-        :param report_name: Name of the template to generate an action for
+        :param data:
+        :param bool config:
+        :rtype: bytes
         """
         context = self.env.context
         if docids:

@@ -1,22 +1,10 @@
-odoo.define('mail/static/src/components/follower_subtype/follower_subtype.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 
-class FollowerSubtype extends Component {
-
-    /**
-     * @override
-     */
-    constructor(...args) {
-        super(...args);
-        useStore(props => {
-            const followerSubtype = this.env.models['mail.follower_subtype'].get(props.followerSubtypeLocalId);
-            return [followerSubtype ? followerSubtype.__state : undefined];
-        });
-    }
+export class FollowerSubtype extends Component {
 
     //--------------------------------------------------------------------------
     // Public
@@ -26,14 +14,14 @@ class FollowerSubtype extends Component {
      * @returns {mail.follower|undefined}
      */
     get follower() {
-        return this.env.models['mail.follower'].get(this.props.followerLocalId);
+        return this.messaging && this.messaging.models['mail.follower'].get(this.props.followerLocalId);
     }
 
     /**
      * @returns {mail.follower_subtype}
      */
     get followerSubtype() {
-        return this.env.models['mail.follower_subtype'].get(this.props.followerSubtypeLocalId);
+        return this.messaging && this.messaging.models['mail.follower_subtype'].get(this.props.followerSubtypeLocalId);
     }
 
     //--------------------------------------------------------------------------
@@ -64,6 +52,4 @@ Object.assign(FollowerSubtype, {
     template: 'mail.FollowerSubtype',
 });
 
-return FollowerSubtype;
-
-});
+registerMessagingComponent(FollowerSubtype);

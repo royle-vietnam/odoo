@@ -31,7 +31,7 @@ SELECT m.id                     AS id,
        Min(po.partner_id)       AS partner_id,
        Sum(pol.product_uom_qty) AS qty_total,
        Sum(CASE
-             WHEN pol.date_planned >= m.date THEN ml.qty_done
+             WHEN (pol.date_planned::date >= m.date::date) THEN ml.qty_done
              ELSE 0
            END)                 AS qty_on_time
 FROM   stock_move m
@@ -53,16 +53,30 @@ GROUP  BY m.id
 
     @api.model
     def read_group(self, domain, fields, groupby, offset=0, limit=None, orderby=False, lazy=True):
-        if 'on_time_rate' not in fields:
+        if all('on_time_rate' not in field for field in fields):
             res = super().read_group(domain, fields, groupby, offset=offset, limit=limit, orderby=orderby, lazy=lazy)
             return res
 
-        fields.remove('on_time_rate')
-        if 'qty_total' not in fields:
-            fields.append('qty_total')
-        if 'qty_on_time' not in fields:
-            fields.append('qty_on_time')
+        for field in fields:
+            if 'on_time_rate' not in field:
+                continue
+
+            fields.remove(field)
+
+            agg = field.split(':')[1:]
+            if agg and agg[0] != 'sum':
+                raise NotImplementedError('Aggregate functions other than \':sum\' are not allowed.')
+
+            qty_total = field.replace('on_time_rate', 'qty_total')
+            if qty_total not in fields:
+                fields.append(qty_total)
+            qty_on_time = field.replace('on_time_rate', 'qty_on_time')
+            if qty_on_time not in fields:
+                fields.append(qty_on_time)
+            break
+
         res = super().read_group(domain, fields, groupby, offset=offset, limit=limit, orderby=orderby, lazy=lazy)
+
         for group in res:
             if group['qty_total'] == 0:
                 on_time_rate = 100

@@ -147,7 +147,7 @@ li > p {
     @extend %o-double-container-no-padding;
 }
 #wrap {
-    > .container, > .container-fluid {
+    .container, .container-fluid {
         // BS3 used to do this on all containers so that margins and floats are
         // cleared inside containers. As lots of current odoo layouts may rely
         // on this for some alignments, this is restored (at least for a while)
@@ -180,7 +180,6 @@ li > p {
     border-bottom-width: $border-width;
     border-bottom-style: solid;
     border-bottom-color: $border-color;
-    line-height: 2.1rem;
 }
 .o_page_header {
     @extend %o-page-header;
@@ -289,7 +288,7 @@ img, .media_iframe_video, .o_image {
 // To be applied to all portal pages if bg-color is white (default).
 @if ($o-portal-use-default-colors) {
     #wrapwrap.o_portal {
-        @include o-bg-color($o-portal-bg-color);
+        @include o-bg-color($o-portal-bg-color, $with-extras: false);
     }
 }
 
@@ -395,6 +394,7 @@ img, .media_iframe_video, .o_image {
 .oe_attachments .o_image_small {
     height: 40px;
     width: 50px;
+    background-repeat: no-repeat;
 }
 
 form label {
@@ -469,6 +469,8 @@ form label {
 
     .o_portal_chatter_messages {
         margin-bottom: 15px;
+        overflow-wrap: break-word;
+        word-break: break-word;
 
         .o_portal_chatter_message {
             div.media-body > p:not(.o_portal_chatter_puslished_date):last-of-type {
@@ -544,7 +546,9 @@ form label {
 
 // Copyright
 .o_footer_copyright {
-
+    .o_footer_copyright_name {
+        vertical-align: middle;
+    }
     .js_language_selector {
         display: inline-block;
     }

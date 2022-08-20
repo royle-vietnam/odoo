@@ -61,7 +61,8 @@ class TestPartnerAssign(TransactionCase):
 
         # In order to test find nearest Partner functionality and assign to opportunity,
         # I Set Geo Lattitude and Longitude according to partner address.
-        partner_be.geo_localize()
+        # YTI Note: We should probably mock the call
+        partner_be.with_context(force_geo_localize=True).geo_localize()
 
         # I check Geo Latitude and Longitude of partner after set
         self.assertTrue(50 < partner_be.partner_latitude < 51, "Latitude is wrong: 50 < %s < 51" % partner_be.partner_latitude)
@@ -149,13 +150,9 @@ class TestPartnerLeadPortal(TestCrmCommon):
             'contact_name': 'Renaud Rutten',
         })
         opportunity = self.env['crm.lead'].browse(data['id'])
-        # TDE FIXME
-        # This test crashed depending on group_use_lead configuration as default team
-        # depends on a default_type that is not propagated but computed separately.
-        # Solving it require some cleaning in crm models, like removing onchanges / default to compute
-        # salesmanteam = self.env['crm.team']._get_default_team_id(user_id=self.user_portal.user_id.id)
+        salesmanteam = self.env['crm.team']._get_default_team_id(user_id=self.user_portal.user_id.id)
 
-        # self.assertEqual(opportunity.team_id, salesmanteam, 'The created opportunity should have the same team as the salesman default team of the opportunity creator.')
+        self.assertEqual(opportunity.team_id, salesmanteam, 'The created opportunity should have the same team as the salesman default team of the opportunity creator.')
         self.assertEqual(opportunity.partner_assigned_id, self.user_portal.partner_id, 'Assigned Partner of created opportunity is the (portal) creator.')
 
     def test_portal_mixin_url(self):

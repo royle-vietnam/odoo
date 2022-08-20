@@ -211,8 +211,7 @@ class Lang(models.Model):
 
     @tools.ormcache('self.code', 'monetary')
     def _data_get(self, monetary=False):
-        conv = locale.localeconv()
-        thousands_sep = self.thousands_sep or conv[monetary and 'mon_thousands_sep' or 'thousands_sep']
+        thousands_sep = self.thousands_sep or ''
         decimal_point = self.decimal_point
         grouping = self.grouping
         return grouping, thousands_sep, decimal_point
@@ -278,8 +277,10 @@ class Lang(models.Model):
         if 'code' in vals and any(code != vals['code'] for code in lang_codes):
             raise UserError(_("Language code cannot be modified."))
         if vals.get('active') == False:
-            if self.env['res.users'].search([('lang', 'in', lang_codes)]):
+            if self.env['res.users'].search_count([('lang', 'in', lang_codes)]):
                 raise UserError(_("Cannot deactivate a language that is currently used by users."))
+            if self.env['res.partner'].search_count([('lang', 'in', lang_codes)]):
+                raise UserError(_("Cannot deactivate a language that is currently used by contacts."))
             # delete linked ir.default specifying default partner's language
             self.env['ir.default'].discard_values('res.partner', 'lang', lang_codes)
 
@@ -288,7 +289,8 @@ class Lang(models.Model):
         self.clear_caches()
         return res
 
-    def unlink(self):
+    @api.ondelete(at_uninstall=True)
+    def _unlink_except_default_lang(self):
         for language in self:
             if language.code == 'en_US':
                 raise UserError(_("Base Language 'en_US' can not be deleted."))
@@ -297,6 +299,9 @@ class Lang(models.Model):
                 raise UserError(_("You cannot delete the language which is the user's preferred language."))
             if language.active:
                 raise UserError(_("You cannot delete the language which is Active!\nPlease de-activate the language first."))
+
+    def unlink(self):
+        for language in self:
             self.env['ir.translation'].search([('lang', '=', language.code)]).unlink()
         self.clear_caches()
         return super(Lang, self).unlink()

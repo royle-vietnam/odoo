@@ -6,6 +6,7 @@ from dateutil.relativedelta import relativedelta
 
 from odoo import fields, models, api, _
 from odoo.exceptions import ValidationError, UserError, RedirectWarning
+from odoo.tools.mail import is_html_empty
 from odoo.tools.misc import format_date
 from odoo.tools.float_utils import float_round, float_is_zero
 from odoo.tests.common import Form
@@ -52,6 +53,8 @@ class ResCompany(models.Model):
     default_cash_difference_income_account_id = fields.Many2one('account.account', string="Cash Difference Income Account")
     default_cash_difference_expense_account_id = fields.Many2one('account.account', string="Cash Difference Expense Account")
     account_journal_suspense_account_id = fields.Many2one('account.account', string='Journal Suspense Account')
+    account_journal_payment_debit_account_id = fields.Many2one('account.account', string='Journal Outstanding Receipts Account')
+    account_journal_payment_credit_account_id = fields.Many2one('account.account', string='Journal Outstanding Payments Account')
     transfer_account_code_prefix = fields.Char(string='Prefix of the transfer accounts')
     account_sale_tax_id = fields.Many2one('account.tax', string="Default Sale Tax")
     account_purchase_tax_id = fields.Many2one('account.tax', string="Default Purchase Tax")
@@ -76,9 +79,6 @@ class ResCompany(models.Model):
     property_stock_account_output_categ_id = fields.Many2one('account.account', string="Output Account for Stock Valuation")
     property_stock_valuation_account_id = fields.Many2one('account.account', string="Account Template for Stock Valuation")
     bank_journal_ids = fields.One2many('account.journal', 'company_id', domain=[('type', '=', 'bank')], string='Bank Journals')
-    tax_exigibility = fields.Boolean(string='Use Cash Basis')
-    account_tax_fiscal_country_id = fields.Many2one('res.country', string="Fiscal Country", compute='compute_account_tax_fiscal_country', store=True, readonly=False, help="The country to use the tax reports from for this company")
-
     incoterm_id = fields.Many2one('account.incoterms', string='Default incoterm',
         help='International Commercial Terms are a series of predefined commercial terms used in international transactions.')
 
@@ -96,6 +96,7 @@ class ResCompany(models.Model):
     account_setup_bank_data_state = fields.Selection(ONBOARDING_STEP_STATES, string="State of the onboarding bank data step", default='not_done')
     account_setup_fy_data_state = fields.Selection(ONBOARDING_STEP_STATES, string="State of the onboarding fiscal year step", default='not_done')
     account_setup_coa_state = fields.Selection(ONBOARDING_STEP_STATES, string="State of the onboarding charts of account step", default='not_done')
+    account_setup_taxes_state = fields.Selection(ONBOARDING_STEP_STATES, string="State of the onboarding Taxes step", default='not_done')
     account_onboarding_invoice_layout_state = fields.Selection(ONBOARDING_STEP_STATES, string="State of the onboarding invoice layout step", default='not_done')
     account_onboarding_create_invoice_state = fields.Selection(ONBOARDING_STEP_STATES, string="State of the onboarding create invoice step", default='not_done')
     account_onboarding_sale_tax_state = fields.Selection(ONBOARDING_STEP_STATES, string="State of the onboarding sale tax step", default='not_done')
@@ -103,7 +104,12 @@ class ResCompany(models.Model):
     # account dashboard onboarding
     account_invoice_onboarding_state = fields.Selection(DASHBOARD_ONBOARDING_STATES, string="State of the account invoice onboarding panel", default='not_done')
     account_dashboard_onboarding_state = fields.Selection(DASHBOARD_ONBOARDING_STATES, string="State of the account dashboard onboarding panel", default='not_done')
-    invoice_terms = fields.Text(string='Default Terms and Conditions', translate=True)
+    invoice_terms = fields.Html(string='Default Terms and Conditions', translate=True)
+    terms_type = fields.Selection([('plain', 'Add a Note'), ('html', 'Add a link to a Web Page')],
+                                  string='Terms & Conditions format', default='plain')
+    invoice_terms_html = fields.Html(string='Default Terms and Conditions as a Web page', translate=True,
+                                     compute='_compute_invoice_terms_html', store=True, readonly=False)
+
     account_setup_bill_state = fields.Selection(ONBOARDING_STEP_STATES, string="State of the onboarding bill step", default='not_done')
 
     # Needed in the Point of Sale
@@ -121,7 +127,24 @@ class ResCompany(models.Model):
     # Technical field to hide country specific fields in company form view
     country_code = fields.Char(related='country_id.code')
 
+    # Taxes
+    account_fiscal_country_id = fields.Many2one(
+        string="Fiscal Country",
+        comodel_name='res.country',
+        compute='compute_account_tax_fiscal_country',
+        store=True,
+        readonly=False,
+        help="The country to use the tax reports from for this company")
+
+    account_enabled_tax_country_ids = fields.Many2many(
+        string="l10n-used countries",
+        comodel_name='res.country',
+        compute='_compute_account_enabled_tax_country_ids',
+        help="Technical field containing the countries for which this company is using tax-related features"
+             "(hence the ones for which l10n modules need to show tax-related fields).")
+
     # Cash basis taxes
+    tax_exigibility = fields.Boolean(string='Use Cash Basis')
     tax_cash_basis_journal_id = fields.Many2one(
         comodel_name='account.journal',
         string="Cash Basis Journal")
@@ -152,7 +175,22 @@ class ResCompany(models.Model):
     @api.depends('country_id')
     def compute_account_tax_fiscal_country(self):
         for record in self:
-            record.account_tax_fiscal_country_id = record.country_id
+            record.account_fiscal_country_id = record.country_id
+
+    @api.depends('account_fiscal_country_id')
+    def _compute_account_enabled_tax_country_ids(self):
+        for record in self:
+            foreign_vat_fpos = self.env['account.fiscal.position'].search([('company_id', '=', record.id), ('foreign_vat', '!=', False)])
+            record.account_enabled_tax_country_ids = foreign_vat_fpos.country_id + record.account_fiscal_country_id
+
+    @api.depends('terms_type')
+    def _compute_invoice_terms_html(self):
+        term_template = self.env.ref("account.account_default_terms_and_conditions", False)
+        if not term_template:
+            return
+
+        for company in self.filtered(lambda company: is_html_empty(company.invoice_terms_html) and company.terms_type == 'html'):
+            company.invoice_terms_html = term_template._render({'company_name': company.name, 'company_country': company.country_id.name}, engine='ir.qweb')
 
     def get_and_update_account_invoice_onboarding_state(self):
         """ This method is called on the controller rendering method and ensures that the animations
@@ -182,10 +220,10 @@ class ResCompany(models.Model):
     def get_account_dashboard_onboarding_steps_states_names(self):
         """ Necessary to add/edit steps from other modules (account_winbooks_import in this case). """
         return [
-            'account_setup_bill_state',
             'account_setup_bank_data_state',
             'account_setup_fy_data_state',
             'account_setup_coa_state',
+            'account_setup_taxes_state',
         ]
 
     def get_new_account_code(self, current_code, old_prefix, new_prefix):
@@ -223,6 +261,7 @@ class ResCompany(models.Model):
                 ('company_id', 'in', self.ids),
                 ('is_reconciled', '=', False),
                 ('date', '<=', values['fiscalyear_lock_date']),
+                ('move_id.state', 'in', ('draft', 'posted')),
             ])
             if unreconciled_statement_lines:
                 error_msg = _("There are still unreconciled bank statement lines in the period you want to lock."
@@ -316,7 +355,7 @@ class ResCompany(models.Model):
             'res_model': 'account.account',
             'view_mode': 'tree',
             'limit': 99999999,
-            'search_view_id': self.env.ref('account.view_account_search').id,
+            'search_view_id': [self.env.ref('account.view_account_search').id],
             'views': [[view_id, 'list']],
             'domain': domain,
         }
@@ -441,6 +480,24 @@ class ResCompany(models.Model):
         action = self.env["ir.actions.actions"]._for_xml_id("account.action_open_account_onboarding_create_invoice")
         return action
 
+    @api.model
+    def action_open_taxes_onboarding(self):
+        """ Called by the 'Taxes' button of the setup bar."""
+
+        company = self.env.company
+        company.sudo().set_onboarding_step_done('account_setup_taxes_state')
+        view_id_list = self.env.ref('account.view_tax_tree').id
+        view_id_form = self.env.ref('account.view_tax_form').id
+
+        return {
+            'type': 'ir.actions.act_window',
+            'name': _('Taxes'),
+            'res_model': 'account.tax',
+            'target': 'current',
+            'views': [[view_id_list, 'list'], [view_id_form, 'form']],
+            'context': {'search_default_sale': True, 'search_default_purchase': True, 'active_test': False},
+        }
+
     def action_save_onboarding_invoice_layout(self):
         """ Set the onboarding step as done """
         if bool(self.external_report_layout_id):
@@ -538,3 +595,16 @@ class ResCompany(models.Model):
             results_by_journal['results'].append(rslt)
 
         return results_by_journal
+
+    def compute_fiscalyear_dates(self, current_date):
+        """
+        The role of this method is to provide a fallback when account_accounting is not installed.
+        As the fiscal year is irrelevant when account_accounting is not installed, this method returns the calendar year.
+        :param current_date: A datetime.date/datetime.datetime object.
+        :return: A dictionary containing:
+            * date_from
+            * date_to
+        """
+
+        return {'date_from': datetime(year=current_date.year, month=1, day=1).date(),
+                'date_to': datetime(year=current_date.year, month=12, day=31).date()}

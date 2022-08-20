@@ -2,13 +2,14 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from ast import literal_eval
+from collections import defaultdict
 import functools
 import itertools
 import logging
 import psycopg2
 import datetime
 
-from odoo import api, fields, models
+from odoo import api, fields, models, Command
 from odoo import SUPERUSER_ID, _
 from odoo.exceptions import ValidationError, UserError
 from odoo.tools import mute_logger
@@ -44,7 +45,7 @@ class MergePartnerAutomatic(models.TransientModel):
             if 'state' in fields:
                 res['state'] = 'selection'
             if 'partner_ids' in fields:
-                res['partner_ids'] = [(6, 0, active_ids)]
+                res['partner_ids'] = [Command.set(active_ids)]
             if 'dst_partner_id' in fields:
                 res['dst_partner_id'] = self._get_ordered_partner(active_ids)[-1].id
         return res
@@ -190,7 +191,7 @@ class MergePartnerAutomatic(models.TransientModel):
                 return
             records = Model.sudo().search([(field_model, '=', 'res.partner'), (field_id, '=', src.id)])
             try:
-                with mute_logger('odoo.sql_db'), self._cr.savepoint(), self.env.clear_upon_failure():
+                with mute_logger('odoo.sql_db'), self._cr.savepoint():
                     records.sudo().write({field_id: dst_partner.id})
                     records.flush()
             except psycopg2.Error:
@@ -204,11 +205,12 @@ class MergePartnerAutomatic(models.TransientModel):
             update_records('calendar', src=partner, field_model='model_id.model')
             update_records('ir.attachment', src=partner, field_model='res_model')
             update_records('mail.followers', src=partner, field_model='res_model')
+            update_records('mail.activity', src=partner, field_model='res_model')
             update_records('mail.message', src=partner)
             update_records('ir.model.data', src=partner)
 
-        records = self.env['ir.model.fields'].search([('ttype', '=', 'reference')])
-        for record in records.sudo():
+        records = self.env['ir.model.fields'].sudo().search([('ttype', '=', 'reference')])
+        for record in records:
             try:
                 Model = self.env[record.model]
                 field = Model._fields[record.name]
@@ -249,8 +251,10 @@ class MergePartnerAutomatic(models.TransientModel):
                 return item.id
             else:
                 return item
+
         # get all fields that are not computed or x2many
         values = dict()
+        values_by_company = defaultdict(dict)   # {company: vals}
         for column in model_fields:
             field = dst_partner._fields[column]
             if field.type not in ('many2many', 'one2many') and field.compute is None:
@@ -260,10 +264,21 @@ class MergePartnerAutomatic(models.TransientModel):
                             values[column] += write_serializer(item[column])
                         else:
                             values[column] = write_serializer(item[column])
+            elif field.company_dependent and column in summable_fields:
+                # sum the values of partners for each company; use sudo() to
+                # compute the sum on all companies, including forbidden ones
+                partners = (src_partners + dst_partner).sudo()
+                for company in self.env['res.company'].sudo().search([]):
+                    values_by_company[company][column] = sum(
+                        partners.with_company(company).mapped(column)
+                    )
+
         # remove fields that can not be updated (id and parent_id)
         values.pop('id', None)
         parent_id = values.pop('parent_id', None)
         dst_partner.write(values)
+        for company, vals in values_by_company.items():
+            dst_partner.with_company(company).sudo().write(vals)
         # try to update the parent_id
         if parent_id and parent_id != dst_partner.id:
             try:
@@ -315,7 +330,7 @@ class MergePartnerAutomatic(models.TransientModel):
         # Make the company of all related users consistent with destination partner company
         if dst_partner.company_id:
             partner_ids.mapped('user_ids').sudo().write({
-                'company_ids': [(4, dst_partner.company_id.id)],
+                'company_ids': [Command.link(dst_partner.company_id.id)],
                 'company_id': dst_partner.company_id.id
             })
 
@@ -451,7 +466,7 @@ class MergePartnerAutomatic(models.TransientModel):
             current_partner_ids = literal_eval(current_line.aggr_ids)
             values.update({
                 'current_line_id': current_line.id,
-                'partner_ids': [(6, 0, current_partner_ids)],
+                'partner_ids': [Command.set(current_partner_ids)],
                 'dst_partner_id': self._get_ordered_partner(current_partner_ids)[-1].id,
                 'state': 'selection',
             })
@@ -480,7 +495,7 @@ class MergePartnerAutomatic(models.TransientModel):
         model_mapping = self._compute_models()
 
         # group partner query
-        self._cr.execute(query)
+        self._cr.execute(query) # pylint: disable=sql-injection
 
         counter = 0
         for min_id, aggr_ids in self._cr.fetchall():

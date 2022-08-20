@@ -15,7 +15,7 @@
                             <PartnerImStatusIcon
                                 class="o_ThreadPreview_partnerImStatusIcon"
                                 t-att-class="{
-                                    'o-mobile': env.messaging.device.isMobile,
+                                    'o-mobile': messaging.device.isMobile,
                                     'o-muted': thread.localMessageUnreadCounter === 0,
                                 }"
                                 partnerLocalId="thread.correspondent.localId"
@@ -24,8 +24,8 @@
                     </div>
                 </div>
                 <div class="o_ThreadPreview_content">
-                    <div class="o_ThreadPreview_header">
-                        <span class="o_ThreadPreview_name" t-att-class="{ 'o-mobile': env.messaging.device.isMobile, 'o-muted': thread.localMessageUnreadCounter === 0 }">
+                    <div class="o_ThreadPreview_header align-items-baseline">
+                        <span class="o_ThreadPreview_name text-truncate" t-att-class="{ 'o-mobile': messaging.device.isMobile, 'o-muted': thread.localMessageUnreadCounter === 0 }">
                             <t t-esc="thread.displayName"/>
                         </span>
                         <t t-if="thread.localMessageUnreadCounter > 0">
@@ -33,15 +33,18 @@
                                 (<t t-esc="thread.localMessageUnreadCounter"/>)
                             </span>
                         </t>
+                        <t t-if="thread.rtcSessions.length > 0">
+                            <span class="o_ThreadPreview_callIndicator fa fa-volume-up mx-2" t-att-class="{ 'o-isCalling': thread.rtc }"/>
+                        </t>
                         <span class="o-autogrow"/>
-                        <t t-if="thread.lastMessage">
+                        <t t-if="thread.lastMessage and thread.lastMessage.date">
                             <span class="o_ThreadPreview_date" t-att-class="{ 'o-muted': thread.localMessageUnreadCounter === 0 }">
                                 <t t-esc="thread.lastMessage.date.fromNow()"/>
                             </span>
                         </t>
                     </div>
                     <div class="o_ThreadPreview_core">
-                        <span class="o_ThreadPreview_coreItem o_ThreadPreview_inlineText" t-att-class="{ 'o-empty': inlineLastMessageBody.length === 0 }">
+                        <span class="o_ThreadPreview_coreItem o_ThreadPreview_inlineText text-truncate" t-att-class="{ 'o-empty': inlineLastMessageBody.length === 0 }">
                             <t t-if="thread.lastMessage and thread.lastMessage.author">
                                 <MessageAuthorPrefix
                                     messageLocalId="thread.lastMessage.localId"

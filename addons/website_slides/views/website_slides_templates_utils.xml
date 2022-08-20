@@ -31,7 +31,7 @@
             Share
         </h5>
         <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-            <span>&amp;times;</span>
+            <span>×</span>
         </button>
     </div>
 </template>
@@ -59,7 +59,7 @@
 
 <!-- Website edit page -->
 <template id="slide_edit_options" inherit_id="website.user_navbar" name="Edit Slide Options">
-    <xpath expr="//li[@id='edit-page-menu']" position="after">
+    <xpath expr="//div[@id='edit-page-menu']" position="after">
         <t t-if="main_object._name == 'slide.slide'" t-set="action" t-value="'website_slides.slide_slide_action'"/>
     </xpath>
 </template>
@@ -70,15 +70,14 @@
         <attribute name="name"/>
         <attribute name="t-att-data-module-id"/>
         <attribute name="t-att-data-module-shortdesc"/>
-        <attribute name="groups">website_slides.group_website_slides_officer</attribute>
+        <attribute name="t-if">env.user.has_group('website_slides.group_website_slides_officer')</attribute>
     </xpath>
 </template>
 
 <template id="join_course_link" name="Join Course Link">
-    <a class="o_wslides_js_course_join_link" href="#"
+    <a class="o_wslides_js_course_join_link" href="#" t-att-data-channel-enroll="slide.channel_id.enroll"
        t-att-data-channel-id="slide.channel_id.id">
-        Join Course
-    </a> to download resources
+        Join Course</a> to download resources
 </template>
 
 </data></odoo>

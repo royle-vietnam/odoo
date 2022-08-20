@@ -20,6 +20,7 @@ var KanbanRenderer = require('web.KanbanRenderer');
 var KanbanView = require('web.KanbanView');
 var SampleServer = require('web.SampleServer');
 var view_registry = require('web.view_registry');
+const session = require('web.session');
 
 var QWeb = core.qweb;
 
@@ -63,7 +64,7 @@ var PurchaseListDashboardRenderer = ListRenderer.extend({
         e.preventDefault();
         var $action = $(e.currentTarget);
         this.trigger_up('dashboard_open_action', {
-            action_name: "purchase.dashboard_open_action_list",
+            action_name: "purchase.purchase_action_dashboard_list",
             action_context: $action.attr('context'),
         });
     },
@@ -113,6 +114,7 @@ var PurchaseListDashboardModel = ListModel.extend({
         var dashboard_def = this._rpc({
             model: 'purchase.order',
             method: 'retrieve_dashboard',
+            context: session.user_context,
         });
         return Promise.all([super_def, dashboard_def]).then(function(results) {
             var id = results[0];
@@ -166,7 +168,8 @@ var PurchaseKanbanDashboardRenderer = KanbanRenderer.extend({
             var purchase_dashboard = QWeb.render('purchase.PurchaseDashboard', {
                 values: values,
             });
-            self.$el.prepend(purchase_dashboard);
+            self.$el.parent().find(".o_purchase_dashboard").remove();
+            self.$el.before(purchase_dashboard);
         });
     },
 
@@ -228,6 +231,7 @@ var PurchaseKanbanDashboardModel = KanbanModel.extend({
         var dashboard_def = this._rpc({
             model: 'purchase.order',
             method: 'retrieve_dashboard',
+            context: session.user_context,
         });
         return Promise.all([super_def, dashboard_def]).then(function(results) {
             var id = results[0];

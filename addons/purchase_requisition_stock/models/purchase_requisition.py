@@ -10,7 +10,7 @@ class PurchaseRequisition(models.Model):
     def _get_picking_in(self):
         pick_in = self.env.ref('stock.picking_type_in', raise_if_not_found=False)
         company = self.env.company
-        if not pick_in or pick_in.sudo().warehouse_id.company_id.id != company.id:
+        if not pick_in or not pick_in.sudo().active or pick_in.sudo().warehouse_id.company_id.id != company.id:
             pick_in = self.env['stock.picking.type'].search(
                 [('warehouse_id.company_id', '=', company.id), ('code', '=', 'incoming')],
                 limit=1,
@@ -19,6 +19,7 @@ class PurchaseRequisition(models.Model):
 
     warehouse_id = fields.Many2one('stock.warehouse', string='Warehouse', domain="[('company_id', '=', company_id)]")
     picking_type_id = fields.Many2one('stock.picking.type', 'Operation Type', required=True, default=_get_picking_in, domain="['|',('warehouse_id', '=', False), ('warehouse_id.company_id', '=', company_id)]")
+    procurement_group_id = fields.Many2one('procurement.group', 'Procurement Group')
 
     def _prepare_tender_values(self, product_id, product_qty, product_uom, location_id, name, origin, company_id, values):
         return {
@@ -26,6 +27,7 @@ class PurchaseRequisition(models.Model):
             'date_end': values['date_planned'],
             'user_id': False,
             'warehouse_id': values.get('warehouse_id') and values['warehouse_id'].id or False,
+            'procurement_group_id': values.get('group_id') and values['group_id'].id or False,
             'company_id': company_id.id,
             'line_ids': [(0, 0, {
                 'product_id': product_id.id,

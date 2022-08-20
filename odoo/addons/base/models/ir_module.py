@@ -15,6 +15,7 @@ import threading
 import zipfile
 
 import requests
+import werkzeug.urls
 
 from docutils import nodes
 from docutils.core import publish_string
@@ -65,7 +66,7 @@ def assert_log_admin_access(method):
     def check_and_log(method, self, *args, **kwargs):
         user = self.env.user
         origin = request.httprequest.remote_addr if request else 'n/a'
-        log_data = (method.__name__, self.sudo().mapped('name'), user.login, user.id, origin)
+        log_data = (method.__name__, self.sudo().mapped('display_name'), user.login, user.id, origin)
         if not self.env.is_admin():
             _logger.warning('DENY access to module.%s on %s to user %s ID #%s via %s', *log_data)
             raise AccessDenied()
@@ -147,6 +148,7 @@ STATES = [
     ('to remove', 'To be removed'),
     ('to install', 'To be installed'),
 ]
+
 
 class Module(models.Model):
     _name = "ir.module.module"
@@ -312,12 +314,13 @@ class Module(models.Model):
         for module in self:
             module.has_iap = bool(module.id) and 'iap' in module.upstream_dependencies(exclude_states=('',)).mapped('name')
 
-    def unlink(self):
-        if not self:
-            return True
+    @api.ondelete(at_uninstall=False)
+    def _unlink_except_installed(self):
         for module in self:
             if module.state in ('installed', 'to upgrade', 'to remove', 'to install'):
                 raise UserError(_('You are trying to remove a module that is installed or will be installed.'))
+
+    def unlink(self):
         self.clear_caches()
         return super(Module, self).unlink()
 
@@ -377,6 +380,10 @@ class Module(models.Model):
         demo = False
 
         for module in self:
+            if module.state not in states_to_update:
+                demo = demo or module.demo
+                continue
+
             # determine dependency modules to update/others
             update_mods, ready_mods = self.browse(), self.browse()
             for dep in module.dependencies_id:
@@ -392,9 +399,9 @@ class Module(models.Model):
             module_demo = module.demo or update_demo or any(mod.demo for mod in ready_mods)
             demo = demo or module_demo
 
-            # check dependencies and update module itself
-            self.check_external_dependencies(module.name, newstate)
             if module.state in states_to_update:
+                # check dependencies and update module itself
+                self.check_external_dependencies(module.name, newstate)
                 module.write({'state': newstate, 'demo': module_demo})
 
         return demo
@@ -571,7 +578,7 @@ class Module(models.Model):
         }
 
     def _button_immediate_function(self, function):
-        if getattr(threading.currentThread(), 'testing', False):
+        if getattr(threading.current_thread(), 'testing', False):
             raise RuntimeError(
                 "Module operations inside tests are not transactional and thus forbidden.\n"
                 "If you really need to perform module operations to test a specific behavior, it "
@@ -590,18 +597,18 @@ class Module(models.Model):
         function(self)
 
         self._cr.commit()
-        api.Environment.reset()
-        modules.registry.Registry.new(self._cr.dbname, update_module=True)
-
+        registry = modules.registry.Registry.new(self._cr.dbname, update_module=True)
         self._cr.commit()
-        env = api.Environment(self._cr, self._uid, self._context)
+        self._cr.reset()
+        assert self.env.registry is registry
+
         # pylint: disable=next-method-called
-        config = env['ir.module.module'].next() or {}
+        config = self.env['ir.module.module'].next() or {}
         if config.get('type') not in ('ir.actions.act_window_close',):
             return config
 
         # reload the client; open the first available root menu
-        menu = env['ir.ui.menu'].search([('parent_id', '=', False)])[:1]
+        menu = self.env['ir.ui.menu'].search([('parent_id', '=', False)])[:1]
         return {
             'type': 'ir.actions.client',
             'tag': 'reload',
@@ -656,25 +663,44 @@ class Module(models.Model):
 
     @assert_log_admin_access
     def button_upgrade(self):
+        if not self:
+            return
         Dependency = self.env['ir.module.module.dependency']
         self.update_list()
 
         todo = list(self)
+        if 'base' in self.mapped('name'):
+            # If an installed module is only present in the dependency graph through
+            # a new, uninstalled dependency, it will not have been selected yet.
+            # An update of 'base' should also update these modules, and as a consequence,
+            # install the new dependency.
+            todo.extend(self.search([
+                ('state', '=', 'installed'),
+                ('name', '!=', 'studio_customization'),
+                ('id', 'not in', self.ids),
+            ]))
         i = 0
         while i < len(todo):
             module = todo[i]
             i += 1
             if module.state not in ('installed', 'to upgrade'):
                 raise UserError(_("Can not upgrade module '%s'. It is not installed.") % (module.name,))
-            self.check_external_dependencies(module.name, 'to upgrade')
+            if self.get_module_info(module.name).get("installable", True):
+                self.check_external_dependencies(module.name, 'to upgrade')
             for dep in Dependency.search([('name', '=', module.name)]):
-                if dep.module_id.state == 'installed' and dep.module_id not in todo:
+                if (
+                    dep.module_id.state == 'installed'
+                    and dep.module_id not in todo
+                    and dep.module_id.name != 'studio_customization'
+                ):
                     todo.append(dep.module_id)
 
         self.browse(module.id for module in todo).write({'state': 'to upgrade'})
 
         to_install = []
         for module in todo:
+            if not self.get_module_info(module.name).get("installable", True):
+                continue
             for dep in module.dependencies_id:
                 if dep.state == 'unknown':
                     raise UserError(_('You try to upgrade the module %s that depends on the module: %s.\nBut this module is not available in your system.') % (module.name, dep.name,))
@@ -782,7 +808,7 @@ class Module(models.Model):
             _logger.warning(msg)
             raise UserError(msg)
 
-        apps_server = urls.url_parse(self.get_apps_server())
+        apps_server = werkzeug.urls.url_parse(self.get_apps_server())
 
         OPENERP = odoo.release.product_name.lower()
         tmp = tempfile.mkdtemp()
@@ -793,7 +819,7 @@ class Module(models.Model):
                 if not url:
                     continue    # nothing to download, local version is already the last one
 
-                up = urls.url_parse(url)
+                up = werkzeug.urls.url_parse(url)
                 if up.scheme != apps_server.scheme or up.netloc != apps_server.netloc:
                     raise AccessDenied()
 
@@ -954,7 +980,6 @@ class Module(models.Model):
                     [('id', 'not in', excluded_category_ids)],
                 ])
 
-            Module = self.env['ir.module.module']
             records = self.env['ir.module.category'].search_read(domain, ['display_name'], order="sequence")
 
             values_range = OrderedDict()
@@ -967,7 +992,7 @@ class Module(models.Model):
                         kwargs.get('filter_domain', []),
                         [('category_id', 'child_of', record_id), ('category_id', 'not in', excluded_category_ids)]
                     ])
-                    record['__count'] = Module.search_count(model_domain)
+                    record['__count'] = self.env['ir.module.module'].search_count(model_domain)
                 values_range[record_id] = record
 
             return {

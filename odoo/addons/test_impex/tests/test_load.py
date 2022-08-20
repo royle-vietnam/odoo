@@ -40,8 +40,13 @@ class ImporterCase(common.TransactionCase):
         super(ImporterCase, self).setUp()
         self.model = self.env[self.model_name]
         self.env['ir.model.data'].clear_caches()
+        self.cr.cache.clear()
 
     def import_(self, fields, rows, context=None):
+        context = context or {}
+        context.update({
+            'import_file': True
+        })
         return self.model.with_context(context or {}).load(fields, rows)
 
     def read(self, fields=('value',), domain=(), context=None):
@@ -168,20 +173,23 @@ class test_boolean_field(ImporterCase):
         self.assertEqual([False] * len(falses), values(self.read()))
 
     def test_trues(self):
+        # Since importing wrong boolean values is now returning error, import should not return any ids if an error is raised.
         trues = [['None'], ['nil'], ['()'], ['f'], ['#f'],
                   # Problem: OpenOffice (and probably excel) output localized booleans
                   ['VRAI'], ['ok'], ['true'], ['yes'], ['1'], ]
         result = self.import_(['value'], trues)
-        self.assertEqual(len(result['ids']), 10)
-        self.assertEqual(result['messages'], [
-            message(u"Unknown value '%s' for boolean field 'Value', assuming 'yes'" % v[0],
-                    moreinfo=u"Use '1' for yes and '0' for no",
-                    type='warning', from_=i, to_=i, record=i)
-            for i, v in enumerate(trues)
-            if v[0] not in ('true', 'yes', '1')
-        ])
+        self.assertEqual(result['ids'], False)
+        self.assertEqual(result['messages'], [{
+            'rows': {'from': i, 'to': i}, 'type': 'error', 'record': i, 'field': 'value',
+            'message': "Unknown value '%s' for boolean field 'Value'" % v[0],
+            'moreinfo': "Use '1' for yes and '0' for no", 'field_name': 'Value'
+        } for i, v in enumerate(trues) if v[0] not in ('true', 'yes', '1')])
+
+        # Only correct boolean values are accepted.
+        result = self.import_(['value'], [['1'], ['yes'], ['true']])
+        self.assertEqual(len(result['ids']), 3)
         self.assertEqual(
-            [True] * 10,
+            [True] * 3,
             values(self.read()))
 
 
@@ -264,6 +272,7 @@ class test_integer_field(ImporterCase):
         result = self.import_(['value'], [['zorglub']])
         self.assertIs(result['ids'], False)
         self.assertEqual(result['messages'], [{
+            'field_name': 'Value',
             'type': 'error',
             'rows': {'from': 0, 'to': 0},
             'record': 0,
@@ -335,7 +344,7 @@ class test_float_field(ImporterCase):
         result = self.import_(['value'], [['foobar']])
         self.assertIs(result['ids'], False)
         self.assertEqual(result['messages'], [
-            message(u"'foobar' does not seem to be a number for field 'Value'")])
+            message(u"'foobar' does not seem to be a number for field 'Value'", field_name='Value')])
 
 class test_string_field(ImporterCase):
     model_name = 'export.string.bounded'
@@ -479,13 +488,14 @@ class test_selection(ImporterCase):
         self.assertIs(result['ids'], False)
         self.assertEqual(result['messages'], [message(
             u"Value 'Baz' not found in selection field 'Value'",
-            moreinfo="Foo Bar Qux 4".split())])
+            moreinfo="Foo Bar Qux 4".split(), field_name='Value', field_path=['value'])])
 
         result = self.import_(['value'], [['42']])
         self.assertIs(result['ids'], False)
         self.assertEqual(result['messages'], [message(
             u"Value '42' not found in selection field 'Value'",
-            moreinfo="Foo Bar Qux 4".split())])
+            moreinfo="Foo Bar Qux 4".split(),
+            field_name='Value', field_path=['value'])])
 
 
 class test_selection_with_default(ImporterCase):
@@ -626,7 +636,7 @@ class test_m2o(ImporterCase):
         result = self.import_(['value'], [[name2]])
         self.assertEqual(
             result['messages'],
-            [message(u"Found multiple matches for field 'Value' (2 matches)",
+            [message(u"Found multiple matches for value 'export.integer:42' in field 'Value' (2 matches)",
                      type='warning')])
         self.assertEqual(len(result['ids']), 1)
         self.assertEqual([
@@ -650,7 +660,8 @@ class test_m2o(ImporterCase):
         self.assertEqual(result['messages'], [
             message(u"No matching record found for name '%s' in field 'Value'" % id,
                     from_=index, to_=index, record=index,
-                    moreinfo=moreaction(res_model='export.integer'))
+                    moreinfo=moreaction(res_model='export.integer'), field_name='Value', field_path=['value'],
+                    field_type='name', value=id)
             for index, id in enumerate([record1.id, record2.id, record1.id])])
         self.assertIs(result['ids'], False)
 
@@ -661,7 +672,8 @@ class test_m2o(ImporterCase):
         self.assertEqual(result['messages'], [
             message(u"Invalid database id 'foo' for the field 'Value'",
                     moreinfo=moreaction(res_model='ir.model.data',
-                                        domain=[('model','=','export.integer')]))
+                                        domain=[('model', '=', 'export.integer')]),
+                    field_name='Value', field_path=['value', '.id'])
         ])
         self.assertIs(result['ids'], False)
 
@@ -680,21 +692,25 @@ class test_m2o(ImporterCase):
         self.assertEqual(result['messages'], [message(
             u"No matching record found for name 'nameisnoexist:3' "
             u"in field 'Value'", moreinfo=moreaction(
-                res_model='export.integer'))])
+                res_model='export.integer'),
+            field_name='Value', field_path=['value'], field_type='name', value='nameisnoexist:3'
+        )])
         self.assertIs(result['ids'], False)
 
         result = self.import_(['value/id'], [['noxidhere']])
         self.assertEqual(result['messages'], [message(
             u"No matching record found for external id 'noxidhere' "
             u"in field 'Value'", moreinfo=moreaction(
-                res_model='ir.model.data', domain=[('model','=','export.integer')]))])
+                res_model='ir.model.data', domain=[('model', '=', 'export.integer')]),
+            field_name='Value', field_path=['value', 'id'], field_type="external id", value="noxidhere")])
         self.assertIs(result['ids'], False)
 
         result = self.import_(['value/.id'], [['66']])
         self.assertEqual(result['messages'], [message(
             u"No matching record found for database id '66' "
             u"in field 'Value'", moreinfo=moreaction(
-                res_model='ir.model.data', domain=[('model','=','export.integer')]))])
+                res_model='ir.model.data', domain=[('model', '=', 'export.integer')]),
+            field_name='Value', field_path=['value', '.id'], field_type="database id", value="66")])
         self.assertIs(result['ids'], False)
 
     def test_fail_multiple(self):
@@ -711,7 +727,8 @@ class test_m2o(ImporterCase):
         self.assertEqual(result['messages'], [message(
             u"No matching record found for name '101' "
             u"in field 'Value'", moreinfo=moreaction(
-                res_model='export.integer'))])
+                res_model='export.integer'),
+            field_name='Value', field_path=['value'], field_type='name', value=101)])
         self.assertIs(result['ids'], False)
         context = {
             'name_create_enabled_fields': {'value': True},
@@ -720,6 +737,20 @@ class test_m2o(ImporterCase):
         self.assertFalse(result['messages'])
         self.assertEqual(len(result['ids']), 1)
 
+class TestInvalidStrings(ImporterCase):
+    model_name = 'export.m2o.str'
+
+    @mute_logger('odoo.sql_db')
+    def test_fail_unpaired_surrogate(self):
+        result = self.import_(['child_id'], [['\uddff']])
+        self.assertTrue(result['messages'])
+        self.assertIn('surrogates', result['messages'][0]['message'])
+
+    @mute_logger('odoo.sql_db')
+    def test_fail_nul(self):
+        result = self.import_(['child_id'], [['\x00']])
+        self.assertTrue(result['messages'])
+        self.assertIn('NUL', result['messages'][0]['message'])
 
 class test_m2m(ImporterCase):
     model_name = 'export.many2many'
@@ -757,7 +788,8 @@ class test_m2m(ImporterCase):
         self.assertEqual(result['messages'], [message(
             u"No matching record found for database id '42' in field "
             u"'Value'", moreinfo=moreaction(
-                res_model='ir.model.data', domain=[('model','=','export.many2many.other')]))])
+                res_model='ir.model.data', domain=[('model', '=', 'export.many2many.other')]),
+            field_name='Value', field_path=['value', '.id'], field_type="database id", value='42')])
         self.assertIs(result['ids'], False)
 
     def test_xids(self):
@@ -783,7 +815,8 @@ class test_m2m(ImporterCase):
         self.assertEqual(result['messages'], [message(
             u"No matching record found for external id 'noxidforthat' in field"
             u" 'Value'", moreinfo=moreaction(
-                res_model='ir.model.data', domain=[('model','=','export.many2many.other')]))])
+                res_model='ir.model.data', domain=[('model', '=', 'export.many2many.other')]),
+            field_name='Value', field_path=['value', 'id'], field_type='external id', value='noxidforthat')])
         self.assertIs(result['ids'], False)
 
     def test_names(self):
@@ -811,7 +844,8 @@ class test_m2m(ImporterCase):
         self.assertEqual(result['messages'], [message(
             u"No matching record found for name 'wherethem2mhavenonames' in "
             u"field 'Value'", moreinfo=moreaction(
-                res_model='export.many2many.other'))])
+                res_model='export.many2many.other'),
+            field_name='Value', field_path=['value'], field_type="name", value='wherethem2mhavenonames')])
         self.assertIs(result['ids'], False)
 
     def test_import_to_existing(self):
@@ -844,8 +878,9 @@ class test_o2m(ImporterCase):
             ['const', 'value'],
             [['5', s]])
         self.assertEqual(result['messages'], [message(
-            u"No matching record found for name '%s' in field 'Value'" % s,
-            moreinfo=moreaction(res_model='export.one2many.child'))])
+            u"No matching record found for name '%s' in field 'Value'" % s[:50],
+            moreinfo=moreaction(res_model='export.one2many.child'),
+            field_name='Value', field_path=['value'], field_type='name', value=s[:50])])
         self.assertIs(result['ids'], False)
 
     def test_single(self):
@@ -906,8 +941,8 @@ class test_o2m(ImporterCase):
         result = self.import_(['value/parent_id'], [['noxidforthat']])
         self.assertEqual(result['messages'], [message(
             u"No matching record found for name 'noxidforthat' in field 'Value/Parent'",
-            moreinfo=moreaction(res_model='export.one2many')
-            )])
+            moreinfo=moreaction(res_model='export.one2many'),
+            field_name='Value', field_path=['value', 'parent_id'], field_type='name', value='noxidforthat')])
         self.assertIs(result['ids'], False)
 
     def test_link_inline(self):
@@ -998,7 +1033,8 @@ class test_o2m(ImporterCase):
         self.assertEqual(result['messages'], [message(
             u"No matching record found for name '101' "
             u"in field 'Value/M2O'", moreinfo=moreaction(
-                res_model='export.integer'))])
+                res_model='export.integer'),
+            field_name='Value', field_path=['value', 'm2o'], field_type='name', value=101)])
         self.assertEqual(result['ids'], False)
         context = {
             'name_create_enabled_fields': {'value/m2o': True},
@@ -1116,13 +1152,14 @@ class test_realworld(SavepointCaseWithUserDemo):
     def test_o2m_subfields_fail_by_implicit_id(self):
         self.env['ir.model.data'].clear_caches()
         Model = self.env['export.one2many.recursive']
-        result = Model.load(
+        result = Model.with_context(import_file=True).load(
             ['child/child1/parent_id'],
             [['5'],],
         )
         self.assertEqual(result['messages'], [message(
             u"No matching record found for name '5' in field 'Child/Child1/Parent'", field='child',
-            moreinfo=moreaction(res_model='export.one2many.multiple'))])
+            moreinfo=moreaction(res_model='export.one2many.multiple'),
+            field_name='Child', field_path=['child', 'child1', 'parent_id'], field_type='name', value='5')])
         self.assertIs(result['ids'], False)
 
 
@@ -1144,7 +1181,7 @@ class test_date(ImporterCase):
         self.assertEqual(result['messages'], [
             message(u"'not really a date' does not seem to be a valid date "
                     u"for field 'Value'",
-                    moreinfo=u"Use the format '2012-12-31'")])
+                    moreinfo=u"Use the format '2012-12-31'", field_name='Value', field_path=['value'])])
         self.assertIs(result['ids'], False)
 
 
@@ -1166,7 +1203,7 @@ class test_datetime(ImporterCase):
         self.assertEqual(result['messages'], [
             message(u"'not really a datetime' does not seem to be a valid "
                     u"datetime for field 'Value'",
-                    moreinfo=u"Use the format '2012-12-31 23:59:59'")])
+                    moreinfo=u"Use the format '2012-12-31 23:59:59'", field_name='Value', field_path=['value'])])
         self.assertIs(result['ids'], False)
 
     def test_checktz1(self):

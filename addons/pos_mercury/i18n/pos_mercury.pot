@@ -4,10 +4,10 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: Odoo Server saas~13.5\n"
+"Project-Id-Version: Odoo Server 15.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2020-09-01 07:28+0000\n"
-"PO-Revision-Date: 2020-09-01 07:28+0000\n"
+"POT-Creation-Date: 2021-11-16 13:18+0000\n"
+"PO-Revision-Date: 2021-11-16 13:18+0000\n"
 "Last-Translator: \n"
 "Language-Team: \n"
 "MIME-Version: 1.0\n"
@@ -54,6 +54,13 @@ msgstr ""
 #: code:addons/pos_mercury/static/src/xml/OrderReceipt.xml:0
 #, python-format
 msgid "CARDHOLDER WILL PAY CARD ISSUER"
+msgstr ""
+
+#. module: pos_mercury
+#. openerp-web
+#: code:addons/pos_mercury/static/src/js/PaymentTransactionPopup.js:0
+#, python-format
+msgid "Cancel"
 msgstr ""
 
 #. module: pos_mercury
@@ -123,12 +130,8 @@ msgid ""
 msgstr ""
 
 #. module: pos_mercury
-#: model:ir.model.fields,field_description:pos_mercury.field_barcode_rule__display_name
 #: model:ir.model.fields,field_description:pos_mercury.field_pos_mercury_configuration__display_name
 #: model:ir.model.fields,field_description:pos_mercury.field_pos_mercury_mercury_transaction__display_name
-#: model:ir.model.fields,field_description:pos_mercury.field_pos_order__display_name
-#: model:ir.model.fields,field_description:pos_mercury.field_pos_payment__display_name
-#: model:ir.model.fields,field_description:pos_mercury.field_pos_payment_method__display_name
 msgid "Display Name"
 msgstr ""
 
@@ -155,12 +158,8 @@ msgid "Handling transaction..."
 msgstr ""
 
 #. module: pos_mercury
-#: model:ir.model.fields,field_description:pos_mercury.field_barcode_rule__id
 #: model:ir.model.fields,field_description:pos_mercury.field_pos_mercury_configuration__id
 #: model:ir.model.fields,field_description:pos_mercury.field_pos_mercury_mercury_transaction__id
-#: model:ir.model.fields,field_description:pos_mercury.field_pos_order__id
-#: model:ir.model.fields,field_description:pos_mercury.field_pos_payment__id
-#: model:ir.model.fields,field_description:pos_mercury.field_pos_payment_method__id
 msgid "ID"
 msgstr ""
 
@@ -182,12 +181,8 @@ msgid "Invoice number from Vantiv Pay"
 msgstr ""
 
 #. module: pos_mercury
-#: model:ir.model.fields,field_description:pos_mercury.field_barcode_rule____last_update
 #: model:ir.model.fields,field_description:pos_mercury.field_pos_mercury_configuration____last_update
 #: model:ir.model.fields,field_description:pos_mercury.field_pos_mercury_mercury_transaction____last_update
-#: model:ir.model.fields,field_description:pos_mercury.field_pos_order____last_update
-#: model:ir.model.fields,field_description:pos_mercury.field_pos_payment____last_update
-#: model:ir.model.fields,field_description:pos_mercury.field_pos_payment_method____last_update
 msgid "Last Modified on"
 msgstr ""
 
@@ -255,6 +250,20 @@ msgstr ""
 #: code:addons/pos_mercury/static/src/js/PaymentScreen.js:0
 #, python-format
 msgid "Odoo error while processing transaction."
+msgstr ""
+
+#. module: pos_mercury
+#. openerp-web
+#: code:addons/pos_mercury/static/src/js/PaymentTransactionPopup.js:0
+#, python-format
+msgid "Ok"
+msgstr ""
+
+#. module: pos_mercury
+#. openerp-web
+#: code:addons/pos_mercury/static/src/js/PaymentTransactionPopup.js:0
+#, python-format
+msgid "Online Payment"
 msgstr ""
 
 #. module: pos_mercury

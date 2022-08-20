@@ -6,6 +6,7 @@ const dom = require('web.dom');
 var publicWidget = require('web.public.widget');
 var time = require('web.time');
 var portalComposer = require('portal.composer');
+const {Markup} = require('web.utils');
 
 var qweb = core.qweb;
 var _t = core._t;
@@ -33,26 +34,7 @@ var PortalChatter = publicWidget.Widget.extend({
         this.options = {};
         this._super.apply(this, arguments);
 
-        // underscorize the camelcased option keys
-        _.each(options, function (val, key) {
-            self.options[_.str.underscored(key)] = val;
-        });
-        // set default options
-        this.options = _.defaults(this.options, {
-            'allow_composer': true,
-            'display_composer': false,
-            'csrf_token': odoo.csrf_token,
-            'message_count': 0,
-            'pager_step': 10,
-            'pager_scope': 5,
-            'pager_start': 1,
-            'is_user_public': true,
-            'is_user_employee': false,
-            'is_user_publisher': false,
-            'hash': false,
-            'pid': false,
-            'domain': [],
-        });
+        this._setOptions(options);
 
         this.set('messages', []);
         this.set('message_count', this.options['message_count']);
@@ -84,18 +66,12 @@ var PortalChatter = publicWidget.Widget.extend({
         // set options and parameters
         this.set('message_count', this.options['message_count']);
         this.set('messages', this.preprocessMessages(this.result['messages']));
+        // bind bus event: this (portal.chatter) and 'portal.rating.composer' in portal_rating
+        // are separate and sibling widgets, this event is to be triggered from portal.rating.composer,
+        // hence bus event is bound to achieve usage of the event in another widget.
+        core.bus.on('reload_chatter_content', this, this._reloadChatterContent);
 
-
-        var defs = [];
-        defs.push(this._super.apply(this, arguments));
-
-        // instanciate and insert composer widget
-        if (this.options['display_composer']) {
-            this._composer = new portalComposer.PortalComposer(this, this.options);
-            defs.push(this._composer.replace(this.$('.o_portal_chatter_composer')));
-        }
-
-        return Promise.all(defs);
+        return Promise.all([this._super.apply(this, arguments), this._reloadComposer()]);
     },
 
     //--------------------------------------------------------------------------
@@ -117,18 +93,20 @@ var PortalChatter = publicWidget.Widget.extend({
         }).then(function (result) {
             self.set('messages', self.preprocessMessages(result['messages']));
             self.set('message_count', result['message_count']);
+            return result;
         });
     },
     /**
      * Update the messages format
      *
-     * @param {Array<Object>}
+     * @param {Array<Object>} messages
      * @returns {Array}
      */
-    preprocessMessages: function (messages) {
+    preprocessMessages(messages) {
         _.each(messages, function (m) {
             m['author_avatar_url'] = _.str.sprintf('/web/image/%s/%s/author_avatar/50x50', 'mail.message', m.id);
             m['published_date_str'] = _.str.sprintf(_t('Published on %s'), moment(time.str_to_datetime(m.date)).format('MMMM Do YYYY, h:mm:ss a'));
+            m['body'] = Markup(m.body);
         });
         return messages;
     },
@@ -137,6 +115,64 @@ var PortalChatter = publicWidget.Widget.extend({
     // Private
     //--------------------------------------------------------------------------
 
+    /**
+     * Set options
+     *
+     * @param {Array<string>} options: new options to set
+     */
+    _setOptions: function (options) {
+        // underscorize the camelcased option keys
+        const defaultOptions = Object.assign({
+            'allow_composer': true,
+            'display_composer': false,
+            'csrf_token': odoo.csrf_token,
+            'message_count': 0,
+            'pager_step': 10,
+            'pager_scope': 5,
+            'pager_start': 1,
+            'is_user_public': true,
+            'is_user_employee': false,
+            'is_user_publisher': false,
+            'hash': false,
+            'pid': false,
+            'domain': [],
+            'two_columns': false,
+        }, this.options || {});
+
+        this.options = Object.entries(options).reduce(
+            (acc, [key, value]) => {
+                acc[_.str.underscored(key)] = value;
+                return acc;
+            },
+            defaultOptions);
+    },
+
+    /**
+     * Reloads chatter and message count after posting message
+     *
+     * @private
+     */
+    _reloadChatterContent: function (data) {
+        this.messageFetch();
+        this._reloadComposer();
+    },
+    _createComposerWidget: function () {
+        return new portalComposer.PortalComposer(this, this.options);
+    },
+    /**
+     * Destroy current composer widget and initialize and insert new widget
+     *
+     * @private
+     */
+    _reloadComposer: async function () {
+        if (this._composer) {
+            this._composer.destroy();
+        }
+        if (this.options.display_composer) {
+            this._composer = this._createComposerWidget();
+            await this._composer.appendTo(this.$('.o_portal_chatter_composer'));
+        }
+    },
     /**
      * @private
      * @returns {Deferred}

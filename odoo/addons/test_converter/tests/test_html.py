@@ -167,6 +167,7 @@ class TestCurrencyExport(TestExport):
 
 
 class TestTextExport(TestBasicExport):
+    maxDiff = None
     def test_text(self):
         converter = self.get_converter('text')
 
@@ -198,7 +199,7 @@ class TestTextExport(TestBasicExport):
         """)
         self.assertEqual(value, """<br>
         fgdkls;hjas;lj &lt;b&gt;fdslkj&lt;/b&gt; d;lasjfa lkdja &lt;a href=http://spam.com&gt;lfks&lt;/a&gt;<br>
-        fldkjsfhs &lt;i style=&quot;color: red&quot;&gt;&lt;a href=&quot;http://spamspam.com&quot;&gt;fldskjh&lt;/a&gt;&lt;/i&gt;<br>
+        fldkjsfhs &lt;i style=&#34;color: red&#34;&gt;&lt;a href=&#34;http://spamspam.com&#34;&gt;fldskjh&lt;/a&gt;&lt;/i&gt;<br>
         """)
 
 
@@ -244,7 +245,7 @@ class TestSelectionExport(TestBasicExport):
     def test_selection(self):
         converter = self.get_converter('selection_str')
         value = converter('C')
-        self.assertEqual(value, u"Qu'est-ce qu'il fout ce maudit pancake, tabernacle ?")
+        self.assertEqual(value, u"Qu&#39;est-ce qu&#39;il fout ce maudit pancake, tabernacle ?")
 
 
 class TestHTMLExport(TestBasicExport):
@@ -331,6 +332,11 @@ class TestDurationExport(TestBasicExport):
 
         result = converter(72, {'unit': 'second'}, {'lang': 'fr_FR'})
         self.assertEqual(result, u"1 minute 12 secondes")
+
+    def test_negative_digital(self):
+        converter = self.get_converter('float', 'duration')
+        result = converter(-90, {'unit': 'minute', 'round': 'minute', 'digital': True}, {'lang': 'fr_FR'})
+        self.assertEqual(result, u'-01:30')
 
 
 class TestRelativeDatetime(TestBasicExport):

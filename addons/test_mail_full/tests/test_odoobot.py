@@ -63,14 +63,14 @@ class TestOdoobot(TestMailCommon, TestRecipients):
             sender=self.odoobot,
             answer=("help",)
         )
-        channel.execute_command(command="help")
+        channel.execute_command_help()
         self.assertNextMessage(
             last_message,  # no message will be post with command help, use last odoobot message instead
             sender=self.odoobot,
             answer=("@OdooBot",)
         )
         kwargs['body'] = ''
-        kwargs['partner_ids'] = [self.env['ir.model.data'].xmlid_to_res_id("base.partner_root")]
+        kwargs['partner_ids'] = [self.env['ir.model.data']._xmlid_to_res_id("base.partner_root")]
         self.assertNextMessage(
             channel.message_post(**kwargs),
             sender=self.odoobot,

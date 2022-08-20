@@ -1,10 +1,8 @@
-odoo.define('calendar.CalendarRenderer', function (require) {
-"use strict";
+/** @odoo-module alias=calendar.CalendarRenderer **/
 
-const CalendarRenderer = require('web.CalendarRenderer');
-const CalendarPopover = require('web.CalendarPopover');
-const session = require('web.session');
-
+import CalendarRenderer from 'web.CalendarRenderer';
+import CalendarPopover from 'web.CalendarPopover';
+import session from 'web.session';
 
 const AttendeeCalendarPopover = CalendarPopover.extend({
     template: 'Calendar.attendee.status.popover',
@@ -35,6 +33,12 @@ const AttendeeCalendarPopover = CalendarPopover.extend({
     /**
      * @return {boolean}
      */
+    isCurrentPartnerOrganizer() {
+        return this.event.extendedProps.record.partner_id[0] === session.partner_id;
+    },
+    /**
+     * @return {boolean}
+     */
     isCurrentPartnerAttendee() {
         return this.event.extendedProps.record.partner_ids.includes(session.partner_id);
     },
@@ -43,7 +47,7 @@ const AttendeeCalendarPopover = CalendarPopover.extend({
      * @return {boolean}
      */
     isEventDeletable() {
-        return this._super() && (this._isEventPrivate() ? this.isCurrentPartnerAttendee() : true);
+        return this._super() && this.isCurrentPartnerAttendee();
     },
     /**
      * @override
@@ -58,6 +62,16 @@ const AttendeeCalendarPopover = CalendarPopover.extend({
      */
     isEventEditable() {
         return this._isEventPrivate() ? this.isCurrentPartnerAttendee() : this._super();
+    },
+    /**
+     * Check if we are a partner and if we are the only attendee.
+     * This avoid to display attendee answer dropdown for single user attendees
+     * @return {boolean}
+     */
+    displayAttendeeAnswerChoice() {
+        const isCurrentpartner = (currentValue) => currentValue === session.partner_id;
+        const onlyAttendee =  this.event.extendedProps.record.partner_ids.every(isCurrentpartner);
+        return this.isCurrentPartnerAttendee() && this.event.extendedProps.record.is_current_partner && !onlyAttendee;
     },
 
     //--------------------------------------------------------------------------
@@ -82,27 +96,44 @@ const AttendeeCalendarPopover = CalendarPopover.extend({
      */
     _onClickAttendeeStatus: function (ev) {
         ev.preventDefault();
-        var self = this;
-        var selectedStatus = $(ev.currentTarget).attr('data-action');
-        this._rpc({
-            model: 'calendar.event',
-            method: 'change_attendee_status',
-            args: [parseInt(this.event.id), selectedStatus],
-        }).then(function () {
-            self.event.extendedProps.record.attendee_status = selectedStatus;  // FIXEME: Maybe we have to reload view
-            self.$('.o-calendar-attendee-status-text').text(self.statusInfo[selectedStatus].text);
-            self.$('.o-calendar-attendee-status-icon').removeClass(_.values(self.statusColors).join(' ')).addClass(self.statusInfo[selectedStatus].color);
-        });
+        const selectedStatus = $(ev.currentTarget).attr('data-action');
+        this.trigger_up('AttendeeStatus', {id: parseInt(this.event.id), record: this.event.extendedProps.record,
+        selectedStatus: selectedStatus});
     },
 });
 
 
 const AttendeeCalendarRenderer = CalendarRenderer.extend({
+    template: 'calendar.CalendarView',
+
 	config: _.extend({}, CalendarRenderer.prototype.config, {
-		CalendarPopover: AttendeeCalendarPopover,
-	}),
+        CalendarPopover: AttendeeCalendarPopover,
+        eventTemplate: 'Calendar.calendar-box',
+    }),
+    /**
+     * Add the attendee-id attribute in order to distinct the events when there are
+     * several attendees in the event.
+     * @override
+     */
+    _addEventAttributes: function (element, event) {
+        this._super(...arguments);
+        element.attr('data-attendee-id', event.extendedProps.attendee_id);
+    },
+    /**
+     * If an attendee_id has been set on the event, we check also the attendee-id attribute
+     * to select the good event on which the CSS class will be applied.
+     * @override
+     */
+    _computeEventSelector: function (info) {
+        let selector = this._super(...arguments);
+        if (info.event.extendedProps.attendee_id) {
+            selector += `[data-attendee-id=${info.event.extendedProps.attendee_id}]`;
+        }
+        return selector;
+    },
 });
 
-return AttendeeCalendarRenderer
-
-});
+export default {
+    AttendeeCalendarRenderer: AttendeeCalendarRenderer,
+    AttendeeCalendarPopover: AttendeeCalendarPopover,
+};

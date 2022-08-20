@@ -11,7 +11,7 @@ class TestStockCommon(common.TestProductCommon):
         Move = self.env['stock.move'].with_user(self.user_stock_manager)
         # simulate create + onchange
         move = Move.new({'product_id': product.id, 'location_id': src_location.id, 'location_dest_id': dst_location.id})
-        move.onchange_product_id()
+        move._onchange_product_id()
         move_values = move._convert_to_write(move._cache)
         move_values.update(**values)
         return Move.create(move_values)
@@ -53,5 +53,5 @@ class TestStockCommon(common.TestProductCommon):
         })
 
         # Existing data
-        cls.existing_inventories = cls.env['stock.inventory'].search([])
+        cls.existing_inventories = cls.env['stock.quant'].search([('inventory_quantity', '!=', 0.0)])
         cls.existing_quants = cls.env['stock.quant'].search([])

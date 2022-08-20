@@ -27,21 +27,27 @@ odoo.define('point_of_sale.ReceiptScreen', function (require) {
                 // We are doing this because we want the receipt screen to be
                 // displayed regardless of what happen to the handleAutoPrint
                 // call.
-                setTimeout(async () => await this.handleAutoPrint(), 0);
+                setTimeout(async () => {
+                    let images = this.orderReceipt.el.getElementsByTagName('img');
+                    for(let image of images) {
+                        await image.decode();
+                    }
+                    await this.handleAutoPrint();
+                }, 0);
             }
             async onSendEmail() {
                 if (!is_email(this.orderUiState.inputEmail)) {
                     this.orderUiState.emailSuccessful = false;
-                    this.orderUiState.emailNotice = 'Invalid email.';
+                    this.orderUiState.emailNotice = this.env._t('Invalid email.');
                     return;
                 }
                 try {
                     await this._sendReceiptToCustomer();
                     this.orderUiState.emailSuccessful = true;
-                    this.orderUiState.emailNotice = 'Email sent.'
+                    this.orderUiState.emailNotice = this.env._t('Email sent.');
                 } catch (error) {
                     this.orderUiState.emailSuccessful = false;
-                    this.orderUiState.emailNotice = 'Sending email failed. Please try again.'
+                    this.orderUiState.emailNotice = this.env._t('Sending email failed. Please try again.');
                 }
             }
             get orderAmountPlusTip() {
@@ -63,6 +69,9 @@ odoo.define('point_of_sale.ReceiptScreen', function (require) {
             get nextScreen() {
                 return { name: 'ProductScreen' };
             }
+            whenClosing() {
+                this.orderDone();
+            }
             /**
              * This function is called outside the rendering call stack. This way,
              * we don't block the displaying of ReceiptScreen when it is mounted; additionally,
@@ -72,7 +81,7 @@ odoo.define('point_of_sale.ReceiptScreen', function (require) {
                 if (this._shouldAutoPrint()) {
                     await this.printReceipt();
                     if (this.currentOrder._printed && this._shouldCloseImmediately()) {
-                        this.orderDone();
+                        this.whenClosing();
                     }
                 }
             }
@@ -80,6 +89,9 @@ odoo.define('point_of_sale.ReceiptScreen', function (require) {
                 this.currentOrder.finalize();
                 const { name, props } = this.nextScreen;
                 this.showScreen(name, props);
+                if (this.env.pos.config.iface_customer_facing_display) {
+                    this.env.pos.send_current_order_to_customer_facing_display();
+                }
             }
             async printReceipt() {
                 const isPrinted = await this._printReceipt();
@@ -95,7 +107,7 @@ odoo.define('point_of_sale.ReceiptScreen', function (require) {
                 return this.env.pos.proxy.printer && this.env.pos.config.iface_print_skip_screen && invoiced_finalized;
             }
             async _sendReceiptToCustomer() {
-                const printer = new Printer();
+                const printer = new Printer(null, this.env.pos);
                 const receiptString = this.orderReceipt.comp.el.outerHTML;
                 const ticketImage = await printer.htmlToImg(receiptString);
                 const order = this.currentOrder;

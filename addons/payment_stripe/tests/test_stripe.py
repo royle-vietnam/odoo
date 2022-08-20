@@ -1,256 +1,67 @@
-# -*- coding: utf-8 -*-
-import odoo
-from odoo import fields
-from odoo.exceptions import ValidationError
-from odoo.addons.payment.tests.common import PaymentAcquirerCommon
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
+
 from unittest.mock import patch
-from . import stripe_mocks
-from ..models.payment import STRIPE_SIGNATURE_AGE_TOLERANCE
+
+from odoo.tests import tagged
 from odoo.tools import mute_logger
 
-
-class StripeCommon(PaymentAcquirerCommon):
-
-    @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
-        cls.stripe = cls.env.ref('payment.payment_acquirer_stripe')
-        cls.stripe.write({
-            'stripe_secret_key': 'sk_test_KJtHgNwt2KS3xM7QJPr4O5E8',
-            'stripe_publishable_key': 'pk_test_QSPnimmb4ZhtkEy3Uhdm4S6J',
-            'stripe_webhook_secret': 'whsec_vG1fL6CMUouQ7cObF2VJprLVXT5jBLxB',
-            'state': 'test',
-        })
-        cls.token = cls.env['payment.token'].create({
-            'name': 'Test Card',
-            'acquirer_id': cls.stripe.id,
-            'acquirer_ref': 'cus_G27S7FqQ2w3fuH',
-            'stripe_payment_method': 'pm_1FW3DdAlCFm536g8eQoSCejY',
-            'partner_id': cls.buyer.id,
-            'verified': True,
-        })
+from odoo.addons.payment_stripe.controllers.onboarding import OnboardingController
+from odoo.addons.payment_stripe.const import WEBHOOK_HANDLED_EVENTS
+from .common import StripeCommon
 
 
-@odoo.tests.tagged('post_install', '-at_install', '-standard', 'external')
+@tagged('post_install', '-at_install')
 class StripeTest(StripeCommon):
 
-    def run(self, result=None):
-        with mute_logger('odoo.addons.payment.models.payment_acquirer', 'odoo.addons.payment_stripe.models.payment'):
-            StripeCommon.run(self, result)
+    def test_processing_values(self):
+        dummy_session_id = 'cs_test_sbTG0yGwTszAqFUP8Ulecr1bUwEyQEo29M8taYvdP7UA6Qr37qX6uA6w'
+        tx = self.create_transaction(flow='redirect') # We don't really care what the flow is here.
 
-    def test_10_stripe_s2s(self):
-        self.assertEqual(self.stripe.state, 'test', 'test without test environment')
-        # Create transaction
-        tx = self.env['payment.transaction'].create({
-            'reference': 'stripe_test_10_%s' % fields.datetime.now().strftime('%Y%m%d_%H%M%S'),
-            'currency_id': self.currency_euro.id,
-            'acquirer_id': self.stripe.id,
-            'partner_id': self.buyer_id,
-            'payment_token_id': self.token.id,
-            'type': 'server2server',
-            'amount': 115.0
-        })
-        tx.with_context(off_session=True).stripe_s2s_do_transaction()
+        # Ensure no external API call is done, we only want to check the processing values logic
+        def mock_stripe_create_checkout_session(self):
+            return {'id': dummy_session_id}
+        with patch.object(
+            type(self.env['payment.transaction']),
+            '_stripe_create_checkout_session',
+            mock_stripe_create_checkout_session,
+        ), mute_logger('odoo.addons.payment.models.payment_transaction'):
+            processing_values = tx._get_processing_values()
 
-        # Check state
-        self.assertEqual(tx.state, 'done', 'Stripe: Transcation has been discarded.')
+        self.assertEqual(processing_values['publishable_key'], self.stripe.stripe_publishable_key)
+        self.assertEqual(processing_values['session_id'], dummy_session_id)
 
-    def test_20_stripe_form_render(self):
-        self.assertEqual(self.stripe.state, 'test', 'test without test environment')
+    def test_onboarding_action_redirect_to_url(self):
+        """ Test that the action generate and return an URL when the acquirer is disabled. """
+        with patch.object(
+            type(self.env['payment.acquirer']), '_stripe_fetch_or_create_connected_account',
+            return_value={'id': 'dummy'},
+        ), patch.object(
+            type(self.env['payment.acquirer']), '_stripe_create_account_link',
+            return_value='https://dummy.url',
+        ):
+            onboarding_url = self.stripe.action_stripe_connect_account()
+        self.assertEqual(onboarding_url['url'], 'https://dummy.url')
 
-        # ----------------------------------------
-        # Test: button direct rendering
-        # ----------------------------------------
+    def test_only_create_webhook_if_not_already_done(self):
+        """ Test that a webhook is created only if the webhook secret is not already set. """
+        self.stripe.stripe_webhook_secret = False
+        with patch.object(type(self.env['payment.acquirer']), '_stripe_make_request') as mock:
+            self.stripe.action_stripe_create_webhook()
+            self.assertEqual(mock.call_count, 1)
 
-        # render the button
-        self.stripe.render('SO404', 320.0, self.currency_euro.id, values=self.buyer_values).decode('utf-8')
+    def test_do_not_create_webhook_if_already_done(self):
+        """ Test that no webhook is created if the webhook secret is already set. """
+        self.stripe.stripe_webhook_secret = 'dummy'
+        with patch.object(type(self.env['payment.acquirer']), '_stripe_make_request') as mock:
+            self.stripe.action_stripe_create_webhook()
+            self.assertEqual(mock.call_count, 0)
 
-    def test_30_stripe_form_management(self):
-        self.assertEqual(self.stripe.state, 'test', 'test without test environment')
-        ref = 'stripe_test_30_%s' % fields.datetime.now().strftime('%Y%m%d_%H%M%S')
-        tx = self.env['payment.transaction'].create({
-            'amount': 4700.0,
-            'acquirer_id': self.stripe.id,
-            'currency_id': self.currency_euro.id,
-            'reference': ref,
-            'partner_name': 'Norbert Buyer',
-            'partner_country_id': self.country_france.id,
-            'payment_token_id': self.token.id,
-        })
-        res = tx.with_context(off_session=True)._stripe_create_payment_intent()
-        tx.stripe_payment_intent = res.get('payment_intent')
-
-        # typical data posted by Stripe after client has successfully paid
-        stripe_post_data = {'reference': ref}
-        # validate it
-        tx.form_feedback(stripe_post_data, 'stripe')
-        self.assertEqual(tx.state, 'done', 'Stripe: validation did not put tx into done state')
-        self.assertEqual(tx.acquirer_reference, stripe_post_data.get('id'), 'Stripe: validation did not update tx id')
-
-    def test_add_available_payment_method_types(self):
-        tx_values = {
-            'billing_partner_country': self.env.ref('base.be'),
-            'currency': self.env.ref('base.EUR'),
-            'type': 'form'
-        }
-        stripe_session_data = {}
-
-        self.stripe._add_available_payment_method_types(stripe_session_data, tx_values)
-
-        actual = {pmt for key, pmt in stripe_session_data.items() if key.startswith('payment_method_types')}
-        self.assertEqual({'card', 'bancontact'}, actual)
-
-    def test_add_available_payment_method_types_recurrent(self):
-        tx_values = {
-            'billing_partner_country': self.env.ref('base.be'),
-            'currency': self.env.ref('base.EUR'),
-            'type': 'form_save'
-        }
-        stripe_session_data = {}
-
-        self.stripe._add_available_payment_method_types(stripe_session_data, tx_values)
-
-        actual = {pmt for key, pmt in stripe_session_data.items() if key.startswith('payment_method_types')}
-        self.assertEqual({'card'}, actual)
-
-    def test_discarded_webhook(self):
-        with self.assertRaises(ValidationError):
-            self.env['payment.acquirer']._handle_stripe_webhook(dict(type='payment.intent.succeeded'))
-
-    def test_handle_checkout_webhook_no_secret(self):
-        self.stripe.stripe_webhook_secret = None
-
-        with self.assertRaises(ValidationError):
-            self.env['payment.acquirer']._handle_stripe_webhook(dict(type='checkout.session.completed'))
-
-    @patch('odoo.addons.payment_stripe.models.payment.request')
-    @patch('odoo.addons.payment_stripe.models.payment.datetime')
-    def test_handle_checkout_webhook(self, dt, request):
-        # pass signature verification
-        dt.utcnow.return_value.timestamp.return_value = 1591264652
-        request.httprequest.headers = {'Stripe-Signature': stripe_mocks.checkout_session_signature}
-        request.httprequest.data = stripe_mocks.checkout_session_body
-        # test setup
-        tx = self.env['payment.transaction'].create({
-            'reference': 'tx_ref_test_handle_checkout_webhook',
-            'currency_id': self.currency_euro.id,
-            'acquirer_id': self.stripe.id,
-            'partner_id': self.buyer_id,
-            'payment_token_id': self.token.id,
-            'type': 'server2server',
-            'amount': 30
-        })
-        res = tx.with_context(off_session=True)._stripe_create_payment_intent()
-        tx.stripe_payment_intent = res.get('payment_intent')
-        stripe_object = stripe_mocks.checkout_session_object
-
-        actual = self.stripe._handle_checkout_webhook(stripe_object)
-
-        self.assertTrue(actual)
-
-    @patch('odoo.addons.payment_stripe.models.payment.request')
-    @patch('odoo.addons.payment_stripe.models.payment.datetime')
-    def test_handle_checkout_webhook_wrong_amount(self, dt, request):
-        # pass signature verification
-        dt.utcnow.return_value.timestamp.return_value = 1591264652
-        request.httprequest.headers = {'Stripe-Signature': stripe_mocks.checkout_session_signature}
-        request.httprequest.data = stripe_mocks.checkout_session_body
-        # test setup
-        bad_tx = self.env['payment.transaction'].create({
-            'reference': 'tx_ref_test_handle_checkout_webhook_wrong_amount',
-            'currency_id': self.currency_euro.id,
-            'acquirer_id': self.stripe.id,
-            'partner_id': self.buyer_id,
-            'payment_token_id': self.token.id,
-            'type': 'server2server',
-            'amount': 10
-        })
-        wrong_amount_stripe_payment_intent = bad_tx.with_context(off_session=True)._stripe_create_payment_intent()
-        tx = self.env['payment.transaction'].create({
-            'reference': 'tx_ref_test_handle_checkout_webhook',
-            'currency_id': self.currency_euro.id,
-            'acquirer_id': self.stripe.id,
-            'partner_id': self.buyer_id,
-            'payment_token_id': self.token.id,
-            'type': 'server2server',
-            'amount': 30
-        })
-        tx.stripe_payment_intent = wrong_amount_stripe_payment_intent.get('payment_intent')
-        stripe_object = stripe_mocks.checkout_session_object
-
-        actual = self.env['payment.acquirer']._handle_checkout_webhook(stripe_object)
-
-        self.assertFalse(actual)
-
-    def test_handle_checkout_webhook_no_odoo_tx(self):
-        stripe_object = stripe_mocks.checkout_session_object
-
-        actual = self.stripe._handle_checkout_webhook(stripe_object)
-
-        self.assertFalse(actual)
-
-    @patch('odoo.addons.payment_stripe.models.payment.request')
-    @patch('odoo.addons.payment_stripe.models.payment.datetime')
-    def test_handle_checkout_webhook_no_stripe_tx(self, dt, request):
-        # pass signature verification
-        dt.utcnow.return_value.timestamp.return_value = 1591264652
-        request.httprequest.headers = {'Stripe-Signature': stripe_mocks.checkout_session_signature}
-        request.httprequest.data = stripe_mocks.checkout_session_body
-        # test setup
-        self.env['payment.transaction'].create({
-            'reference': 'tx_ref_test_handle_checkout_webhook',
-            'currency_id': self.currency_euro.id,
-            'acquirer_id': self.stripe.id,
-            'partner_id': self.buyer_id,
-            'payment_token_id': self.token.id,
-            'type': 'server2server',
-            'amount': 30
-        })
-        stripe_object = stripe_mocks.checkout_session_object
-
-        with self.assertRaises(ValidationError):
-            self.stripe._handle_checkout_webhook(stripe_object)
-
-    @patch('odoo.addons.payment_stripe.models.payment.request')
-    @patch('odoo.addons.payment_stripe.models.payment.datetime')
-    def test_verify_stripe_signature(self, dt, request):
-        dt.utcnow.return_value.timestamp.return_value = 1591264652
-        request.httprequest.headers = {'Stripe-Signature': stripe_mocks.checkout_session_signature}
-        request.httprequest.data = stripe_mocks.checkout_session_body
-
-        actual = self.stripe._verify_stripe_signature()
-
-        self.assertTrue(actual)
-
-    @patch('odoo.addons.payment_stripe.models.payment.request')
-    @patch('odoo.addons.payment_stripe.models.payment.datetime')
-    def test_verify_stripe_signature_tampered_body(self, dt, request):
-        dt.utcnow.return_value.timestamp.return_value = 1591264652
-        request.httprequest.headers = {'Stripe-Signature': stripe_mocks.checkout_session_signature}
-        request.httprequest.data = stripe_mocks.checkout_session_body.replace(b'1500', b'10')
-
-        with self.assertRaises(ValidationError):
-            self.stripe._verify_stripe_signature()
-
-    @patch('odoo.addons.payment_stripe.models.payment.request')
-    @patch('odoo.addons.payment_stripe.models.payment.datetime')
-    def test_verify_stripe_signature_wrong_secret(self, dt, request):
-        dt.utcnow.return_value.timestamp.return_value = 1591264652
-        request.httprequest.headers = {'Stripe-Signature': stripe_mocks.checkout_session_signature}
-        request.httprequest.data = stripe_mocks.checkout_session_body
-        self.stripe.write({
-            'stripe_webhook_secret': 'whsec_vG1fL6CMUouQ7cObF2VJprL_TAMPERED',
-        })
-
-        with self.assertRaises(ValidationError):
-            self.stripe._verify_stripe_signature()
-
-    @patch('odoo.addons.payment_stripe.models.payment.request')
-    @patch('odoo.addons.payment_stripe.models.payment.datetime')
-    def test_verify_stripe_signature_too_old(self, dt, request):
-        dt.utcnow.return_value.timestamp.return_value = 1591264652 + STRIPE_SIGNATURE_AGE_TOLERANCE + 1
-        request.httprequest.headers = {'Stripe-Signature': stripe_mocks.checkout_session_signature}
-        request.httprequest.data = stripe_mocks.checkout_session_body
-
-        with self.assertRaises(ValidationError):
-            self.stripe._verify_stripe_signature()
+    def test_create_account_link_pass_required_parameters(self):
+        """ Test that the generation of an account link includes all the required parameters. """
+        with patch.object(
+            type(self.env['payment.acquirer']), '_stripe_make_proxy_request',
+            return_value={'url': 'https://dummy.url'},
+        ) as mock:
+            self.stripe._stripe_create_account_link('dummy', 'dummy')
+            for payload_param in ('account', 'return_url', 'refresh_url', 'type'):
+                self.assertIn(payload_param, mock.call_args.kwargs['payload'].keys())

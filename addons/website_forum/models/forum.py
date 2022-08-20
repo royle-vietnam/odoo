@@ -9,9 +9,9 @@ from datetime import datetime
 
 from odoo import api, fields, models, tools, SUPERUSER_ID, _
 from odoo.exceptions import UserError, ValidationError, AccessError
-from odoo.tools import misc
+from odoo.tools import misc, sql
 from odoo.tools.translate import html_translate
-from odoo.addons.http_routing.models.ir_http import slug
+from odoo.addons.http_routing.models.ir_http import slug, unslug
 
 _logger = logging.getLogger(__name__)
 
@@ -19,7 +19,13 @@ _logger = logging.getLogger(__name__)
 class Forum(models.Model):
     _name = 'forum.forum'
     _description = 'Forum'
-    _inherit = ['mail.thread', 'image.mixin', 'website.seo.metadata', 'website.multi.mixin']
+    _inherit = [
+        'mail.thread',
+        'image.mixin',
+        'website.seo.metadata',
+        'website.multi.mixin',
+        'website.searchable.mixin',
+    ]
     _order = "sequence"
 
     # description and use
@@ -34,7 +40,7 @@ class Forum(models.Model):
         ('public', 'Public'),
         ('connected', 'Signed In'),
         ('private', 'Some users')],
-        help="Public: Forum is pubic\nSigned In: Forum is visible for signed in users\nSome users: Forum and their content are hidden for non members of selected group",
+        help="Public: Forum is public\nSigned In: Forum is visible for signed in users\nSome users: Forum and their content are hidden for non members of selected group",
         default='public')
     authorized_group_id = fields.Many2one('res.groups', 'Authorized Group')
     menu_id = fields.Many2one('website.menu', 'Menu', copy=False)
@@ -61,7 +67,9 @@ class Forum(models.Model):
                                 </div>
                             </div>
                         </div>
-                    </section>""")
+                    </section>""",
+        sanitize_attributes=False,
+        sanitize_form=False)
     default_order = fields.Selection([
         ('create_date desc', 'Newest'),
         ('write_date desc', 'Last Updated'),
@@ -151,7 +159,7 @@ class Forum(models.Model):
             self.update(default_stats)
             return
 
-        result = dict.fromkeys(self.ids, default_stats)
+        result = {cid: dict(default_stats) for cid in self.ids}
         read_group_res = self.env['forum.post'].read_group(
             [('forum_id', 'in', self.ids), ('state', 'in', ('active', 'close')), ('parent_id', '=', False)],
             ['forum_id', 'views', 'child_count', 'favourite_count'],
@@ -178,13 +186,17 @@ class Forum(models.Model):
             forum.count_flagged_posts = self.env['forum.post'].search_count(domain)
 
     def _set_default_faq(self):
-        self.faq = self.env['ir.ui.view']._render_template('website_forum.faq_accordion', {"forum": self}).decode('utf-8')
+        for forum in self:
+            forum.faq = self.env['ir.ui.view']._render_template('website_forum.faq_accordion', {"forum": forum})
 
-    @api.model
-    def create(self, values):
-        res = super(Forum, self.with_context(mail_create_nolog=True, mail_create_nosubscribe=True)).create(values)
-        res._set_default_faq()  # will trigger a write and call update_website_count
-        return res
+    @api.model_create_multi
+    def create(self, vals_list):
+        forums = super(
+            Forum,
+            self.with_context(mail_create_nolog=True, mail_create_nosubscribe=True)
+        ).create(vals_list)
+        forums._set_default_faq()  # will trigger a write and call update_website_count
+        return forums
 
     def write(self, vals):
         if 'privacy' in vals:
@@ -214,7 +226,7 @@ class Forum(models.Model):
         self._update_website_count()
         return super(Forum, self).unlink()
 
-    @api.model
+    @api.model  # TODO: Remove me, this is not an `api.model` method
     def _tag_to_write_vals(self, tags=''):
         Tag = self.env['forum.tag']
         post_tags = []
@@ -223,7 +235,7 @@ class Forum(models.Model):
         for tag in (tag for tag in tags.split(',') if tag):
             if tag.startswith('_'):  # it's a new tag
                 # check that not already created meanwhile or maybe excluded by the limit on the search
-                tag_ids = Tag.search([('name', '=', tag[1:])])
+                tag_ids = Tag.search([('name', '=', tag[1:]), ('forum_id', '=', self.id)])
                 if tag_ids:
                     existing_keep.append(int(tag_ids[0]))
                 else:
@@ -256,12 +268,45 @@ class Forum(models.Model):
         for website in self.env['website'].sudo().search([]):
             website.forums_count = self.env['forum.forum'].sudo().search_count(website.website_domain())
 
+    @api.model
+    def _search_get_detail(self, website, order, options):
+        with_description = options['displayDescription']
+        search_fields = ['name']
+        fetch_fields = ['id', 'name']
+        mapping = {
+            'name': {'name': 'name', 'type': 'text', 'match': True},
+            'website_url': {'name': 'website_url', 'type': 'text', 'truncate': False},
+        }
+        if with_description:
+            search_fields.append('description')
+            fetch_fields.append('description')
+            mapping['description'] = {'name': 'description', 'type': 'text', 'match': True}
+        return {
+            'model': 'forum.forum',
+            'base_domain': [website.website_domain()],
+            'search_fields': search_fields,
+            'fetch_fields': fetch_fields,
+            'mapping': mapping,
+            'icon': 'fa-comments-o',
+            'order': 'name desc, id desc' if 'name desc' in order else 'name asc, id desc',
+        }
+
+    def _search_render_results(self, fetch_fields, mapping, icon, limit):
+        results_data = super()._search_render_results(fetch_fields, mapping, icon, limit)
+        for forum, data in zip(self, results_data):
+            data['website_url'] = forum._compute_website_url()
+        return results_data
+
 
 class Post(models.Model):
 
     _name = 'forum.post'
     _description = 'Forum Post'
-    _inherit = ['mail.thread', 'website.seo.metadata']
+    _inherit = [
+        'mail.thread',
+        'website.seo.metadata',
+        'website.searchable.mixin',
+    ]
     _order = "is_correct DESC, vote_count DESC, write_date DESC"
 
     name = fields.Char('Title')
@@ -270,7 +315,7 @@ class Post(models.Model):
     plain_content = fields.Text('Plain Content', compute='_get_plain_content', store=True)
     tag_ids = fields.Many2many('forum.tag', 'forum_tag_rel', 'forum_id', 'forum_tag_id', string='Tags')
     state = fields.Selection([('active', 'Active'), ('pending', 'Waiting Validation'), ('close', 'Closed'), ('offensive', 'Offensive'), ('flagged', 'Flagged')], string='Status', default='active')
-    views = fields.Integer('Views', default=0, readonly=True)
+    views = fields.Integer('Views', default=0, readonly=True, copy=False)
     active = fields.Boolean('Active', default=True)
     website_message_ids = fields.One2many(domain=lambda self: [('model', '=', self._name), ('message_type', 'in', ['email', 'comment'])])
     website_id = fields.Many2one(related='forum_id.website_id', readonly=True)
@@ -310,9 +355,9 @@ class Post(models.Model):
     moderator_id = fields.Many2one('res.users', string='Reviewed by', readonly=True)
 
     # closing
-    closed_reason_id = fields.Many2one('forum.post.reason', string='Reason')
-    closed_uid = fields.Many2one('res.users', string='Closed by', index=True, readonly=True)
-    closed_date = fields.Datetime('Closed on', readonly=True)
+    closed_reason_id = fields.Many2one('forum.post.reason', string='Reason', copy=False)
+    closed_uid = fields.Many2one('res.users', string='Closed by', index=True, readonly=True, copy=False)
+    closed_date = fields.Datetime('Closed on', readonly=True, copy=False)
 
     # karma calculation and access
     karma_accept = fields.Integer('Convert comment to answer', compute='_get_post_karma_rights', compute_sudo=False)
@@ -466,7 +511,7 @@ class Post(models.Model):
                 match = re.escape(match)  # replace parenthesis or special char in regex
                 content = re.sub(match, match[:3] + 'rel="nofollow" ' + match[3:], content)
 
-        if self.env.user.karma <= forum.karma_editor:
+        if self.env.user.karma < forum.karma_editor:
             filter_regexp = r'(<img.*?>)|(<a[^>]*?href[^>]*?>)|(<[a-z|A-Z]+[^>]*style\s*=\s*[\'"][^\'"]*\s*background[^:]*:[^url;]*url)'
             content_match = re.search(filter_regexp, content, re.I)
             if content_match:
@@ -583,13 +628,13 @@ class Post(models.Model):
                     'website_forum.forum_post_template_new_answer',
                     subject=_('Re: %s', post.parent_id.name),
                     partner_ids=[(4, p.id) for p in tag_partners],
-                    subtype_id=self.env['ir.model.data'].xmlid_to_res_id('website_forum.mt_answer_new'))
+                    subtype_id=self.env['ir.model.data']._xmlid_to_res_id('website_forum.mt_answer_new'))
             elif post.state == 'active' and not post.parent_id:
                 post.message_post_with_view(
                     'website_forum.forum_post_template_new_question',
                     subject=post.name,
                     partner_ids=[(4, p.id) for p in tag_partners],
-                    subtype_id=self.env['ir.model.data'].xmlid_to_res_id('website_forum.mt_question_new'))
+                    subtype_id=self.env['ir.model.data']._xmlid_to_res_id('website_forum.mt_question_new'))
             elif post.state == 'pending' and not post.parent_id:
                 # TDE FIXME: in master, you should probably use a subtype;
                 # however here we remove subtype but set partner_ids
@@ -600,7 +645,7 @@ class Post(models.Model):
                     'website_forum.forum_post_template_validation',
                     subject=post.name,
                     partner_ids=partners.ids,
-                    subtype_id=self.env['ir.model.data'].xmlid_to_res_id('mail.mt_note'))
+                    subtype_id=self.env['ir.model.data']._xmlid_to_res_id('mail.mt_note'))
         return True
 
     def reopen(self):
@@ -724,10 +769,13 @@ class Post(models.Model):
         _logger.info('User %s marked as spams (in batch): %s' % (self.env.uid, spams))
         return spams.mark_as_offensive(reason_id)
 
-    def unlink(self):
+    @api.ondelete(at_uninstall=False)
+    def _unlink_if_enough_karma(self):
         for post in self:
             if not post.can_unlink:
                 raise AccessError(_('%d karma required to unlink a post.', post.karma_unlink))
+
+    def unlink(self):
         # if unlinking an answer with accepted answer: remove provided karma
         for post in self:
             if post.is_correct:
@@ -856,10 +904,9 @@ class Post(models.Model):
             result.append(comment.unlink())
         return result
 
-    def set_viewed(self):
+    def _set_viewed(self):
         self.ensure_one()
-        self._cr.execute("""UPDATE forum_post SET views = views+1 WHERE views = %s and id = %s""", (self.views, self.id,))
-        return True
+        return sql.increment_field_skiplock(self, 'views')
 
     def get_access_action(self, access_uid=None):
         """ Instead of the classic form view, redirect to the post on the website directly """
@@ -872,9 +919,9 @@ class Post(models.Model):
             'res_id': self.id,
         }
 
-    def _notify_get_groups(self):
+    def _notify_get_groups(self, msg_vals=None):
         """ Add access button to everyone if the document is active. """
-        groups = super(Post, self)._notify_get_groups()
+        groups = super(Post, self)._notify_get_groups(msg_vals=msg_vals)
 
         if self.state == 'active':
             for group_name, group_method, group_data in groups:
@@ -926,6 +973,75 @@ class Post(models.Model):
             'target': 'self',
             'url': self._compute_website_url(),
         }
+
+    @api.model
+    def _search_get_detail(self, website, order, options):
+        with_description = options['displayDescription']
+        with_date = options['displayDetail']
+        search_fields = ['name']
+        fetch_fields = ['id', 'name']
+        mapping = {
+            'name': {'name': 'name', 'type': 'text', 'match': True},
+            'website_url': {'name': 'website_url', 'type': 'text', 'truncate': False},
+        }
+
+        domain = website.website_domain()
+        domain += [('parent_id', '=', False), ('state', '=', 'active'), ('can_view', '=', True)]
+        forum = options.get('forum')
+        if forum:
+            domain += [('forum_id', '=', unslug(forum)[1])]
+        tags = options.get('tag')
+        if tags:
+            domain += [('tag_ids', 'in', [unslug(tag)[1] for tag in tags.split(',')])]
+        filters = options.get('filters')
+        if filters == 'unanswered':
+            domain += [('child_ids', '=', False)]
+        elif filters == 'solved':
+            domain += [('has_validated_answer', '=', True)]
+        elif filters == 'unsolved':
+            domain += [('has_validated_answer', '=', False)]
+        user = self.env.user
+        my = options.get('my')
+        if my == 'mine':
+            domain += [('create_uid', '=', user.id)]
+        elif my == 'followed':
+            domain += [('message_partner_ids', '=', user.partner_id.id)]
+        elif my == 'tagged':
+            domain += [('tag_ids.message_partner_ids', '=', user.partner_id.id)]
+        elif my == 'favourites':
+            domain += [('favourite_ids', '=', user.id)]
+
+        # 'sorting' from the form's "Order by" overrides order during auto-completion
+        order = options.get('sorting', order)
+        if 'is_published' in order:
+            parts = [part for part in order.split(',') if 'is_published' not in part]
+            order = ','.join(parts)
+
+        if with_description:
+            search_fields.append('content')
+            fetch_fields.append('content')
+            mapping['description'] = {'name': 'content', 'type': 'text', 'html': True, 'match': True}
+        if with_date:
+            fetch_fields.append('write_date')
+            mapping['detail'] = {'name': 'date', 'type': 'html'}
+        return {
+            'model': 'forum.post',
+            'base_domain': [domain],
+            'search_fields': search_fields,
+            'fetch_fields': fetch_fields,
+            'mapping': mapping,
+            'icon': 'fa-comment-o',
+            'order': order,
+        }
+
+    def _search_render_results(self, fetch_fields, mapping, icon, limit):
+        with_date = 'detail' in mapping
+        results_data = super()._search_render_results(fetch_fields, mapping, icon, limit)
+        for post, data in zip(self, results_data):
+            data['website_url'] = post._compute_website_url()
+            if with_date:
+                data['date'] = self.env['ir.qweb.field.date'].record_to_html(post, 'write_date', {})
+        return results_data
 
 
 class PostReason(models.Model):

@@ -1,12 +1,17 @@
-odoo.define('mail/static/src/components/chatter_container/chatter_container.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    Chatter: require('mail/static/src/components/chatter/chatter.js'),
-};
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
+import { clear } from '@mail/model/model_field_command';
 
 const { Component } = owl;
+
+const getChatterNextTemporaryId = (function () {
+    let tmpId = 0;
+    return () => {
+        tmpId += 1;
+        return tmpId;
+    };
+})();
 
 /**
  * This component abstracts chatter component to its parent, so that it can be
@@ -16,7 +21,7 @@ const { Component } = owl;
  * may attempt to create a chatter before messaging has been initialized, so
  * this component delays the mounting of chatter until it becomes initialized.
  */
-class ChatterContainer extends Component {
+export class ChatterContainer extends Component {
 
     /**
      * @override
@@ -24,25 +29,21 @@ class ChatterContainer extends Component {
     constructor(...args) {
         super(...args);
         this.chatter = undefined;
-        this._wasMessagingInitialized = false;
-        useStore(props => {
-            const isMessagingInitialized = this.env.isMessagingInitialized();
-            if (!this._wasMessagingInitialized && isMessagingInitialized) {
-                this._wasMessagingInitialized = true;
-                this.chatter = this.env.models['mail.chatter'].create(props);
-            }
-            return { isMessagingInitialized };
-        });
+        this.chatterId = getChatterNextTemporaryId();
+        this._insertFromProps(this.props);
     }
 
-    mounted() {
-        this._update();
+    /**
+     * @override
+     */
+    willUpdateProps(nextProps) {
+        this._insertFromProps(nextProps);
+        return super.willUpdateProps(...arguments);
     }
 
-    patched() {
-        this._update();
-    }
-
+    /**
+     * @override
+     */
     destroy() {
         super.destroy();
         if (this.chatter) {
@@ -57,24 +58,59 @@ class ChatterContainer extends Component {
     /**
      * @private
      */
-    _update() {
-        if (this.chatter) {
-            this.chatter.update(this.props);
+    async _insertFromProps(props) {
+        const messaging = await this.env.services.messaging.get();
+        if (this.__owl__.status === 5 /* destroyed */) {
+            return;
         }
+        const values = { id: this.chatterId, ...props };
+        if (values.threadId === undefined) {
+            values.threadId = clear();
+        }
+        this.chatter = messaging.models['mail.chatter'].insert(values);
+        this.chatter.refresh();
+        this.render();
     }
 
 }
 
 Object.assign(ChatterContainer, {
-    components,
-    /**
-     * No props validation because this component simply forwards props to
-     * chatter record as its data.
-     */
+    props: {
+        hasActivities: {
+            type: Boolean,
+            optional: true,
+        },
+        hasExternalBorder: {
+            type: Boolean,
+            optional: true,
+        },
+        hasFollowers: {
+            type: Boolean,
+            optional: true,
+        },
+        hasMessageList: {
+            type: Boolean,
+            optional: true,
+        },
+        hasMessageListScrollAdjust: {
+            type: Boolean,
+            optional: true,
+        },
+        hasTopbarCloseButton: {
+            type: Boolean,
+            optional: true,
+        },
+        isAttachmentBoxVisibleInitially: {
+            type: Boolean,
+            optional: true,
+        },
+        threadId: {
+            type: Number,
+            optional: true,
+        },
+        threadModel: String,
+    },
     template: 'mail.ChatterContainer',
 });
 
-
-return ChatterContainer;
-
-});
+registerMessagingComponent(ChatterContainer);

@@ -17,13 +17,16 @@
                     <attribute name="optional">hide</attribute>
                 </xpath>
                 <xpath expr="//field[@name='min_qty']" position="attributes">
-                    <attribute name="optional">hide</attribute>
+                    <attribute name="optional">show</attribute>
                 </xpath>
                 <xpath expr="//field[@name='name']" position="attributes">
                     <attribute name="readonly">0</attribute>
                 </xpath>
                 <xpath expr="//field[@name='product_id']" position="attributes">
                     <attribute name="readonly">0</attribute>
+                </xpath>
+                <xpath expr="//field[@name='delay']" position="attributes">
+                    <attribute name="optional">show</attribute>
                 </xpath>
             </field>
         </record>
@@ -37,8 +40,8 @@
                     <attribute name="invisible">0</attribute>
                 </xpath>
                 <group name="purchase" position="before">
-                    <field name="seller_ids" context="{'default_product_tmpl_id':context.get('product_tmpl_id',active_id), 'product_template_invisible_variant': True, 'tree_view_ref':'purchase.product_supplierinfo_tree_view2'}" nolabel="1" attrs="{'invisible': [('product_variant_count','&gt;',1)]}"/>
-                    <field name="variant_seller_ids" context="{'default_product_tmpl_id': context.get('product_tmpl_id', active_id), 'tree_view_ref':'purchase.product_supplierinfo_tree_view2'}" nolabel="1" attrs="{'invisible': [('product_variant_count','&lt;=',1)]}"/>
+                    <field name="seller_ids" context="{'default_product_tmpl_id':context.get('product_tmpl_id',active_id), 'product_template_invisible_variant': True, 'tree_view_ref':'purchase.product_supplierinfo_tree_view2'}" nolabel="1" attrs="{'invisible': [('product_variant_count','&gt;',1)], 'readonly': [('product_variant_count','&gt;',1)]}"/>
+                    <field name="variant_seller_ids" context="{'default_product_tmpl_id': context.get('product_tmpl_id', active_id), 'tree_view_ref':'purchase.product_supplierinfo_tree_view2'}" nolabel="1" attrs="{'invisible': [('product_variant_count','&lt;=',1)], 'readonly': [('product_variant_count','&lt;=',1)]}"/>
                 </group>
                 <group name="bill" position="attributes">
                     <attribute name="groups">purchase.group_purchase_manager</attribute>
@@ -47,14 +50,16 @@
                     <field name="purchase_method" widget="radio"/>
                 </group>
                 <page name="purchase" position="inside">
-                    <group string="Purchase Description">
-                       <field name="description_purchase" nolabel="1"
-                            placeholder="This note is added to purchase orders."/>
-                    </group>
-                    <group string="Warning when Purchasing this Product" groups="purchase.group_warning_purchase">
-                        <field name="purchase_line_warn" nolabel="1"/>
-                        <field name="purchase_line_warn_msg" colspan="3" nolabel="1"
+                    <group>
+                        <group string="Purchase Description">
+                           <field name="description_purchase" nolabel="1"
+                                placeholder="This note is added to purchase orders."/>
+                        </group>
+                        <group string="Warning when Purchasing this Product" groups="purchase.group_warning_purchase">
+                            <field name="purchase_line_warn" nolabel="1"/>
+                            <field name="purchase_line_warn_msg" colspan="3" nolabel="1"
                                 attrs="{'required':[('purchase_line_warn','!=','no-message')],'readonly':[('purchase_line_warn','=','no-message')], 'invisible':[('purchase_line_warn','=','no-message')]}"/>
+                        </group>
                     </group>
                 </page>
             </field>
@@ -93,7 +98,7 @@
             <field name="arch" type="xml">
                 <div name="button_box" position="inside">
                     <button class="oe_stat_button" name="action_view_po"
-                        type="object" icon="fa-shopping-cart" attrs="{'invisible': [('purchase_ok', '=', False)]}" help="Purchased in the last 365 days">
+                        type="object" icon="fa-credit-card" attrs="{'invisible': [('purchase_ok', '=', False)]}" help="Purchased in the last 365 days">
                         <div class="o_field_widget o_stat_info">
                             <span class="o_stat_value">
                                 <field name="purchased_product_qty" widget="statinfo" nolabel="1" class="mr4"/>
@@ -125,7 +130,7 @@
             <field name="arch" type="xml">
                 <div name="button_box" position="inside">
                     <button class="oe_stat_button" name="action_view_po"
-                        type="object" icon="fa-shopping-cart" attrs="{'invisible': [('purchase_ok', '=', False)]}" help="Purchased in the last 365 days">
+                        type="object" icon="fa-credit-card" attrs="{'invisible': [('purchase_ok', '=', False)]}" help="Purchased in the last 365 days">
                         <div class="o_field_widget o_stat_info">
                             <span class="o_stat_value">
                                 <field name="purchased_product_qty" widget="statinfo" nolabel="1" class="mr4"/>

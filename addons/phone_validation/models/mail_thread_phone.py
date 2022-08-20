@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+import re
+
 from odoo import api, fields, models, _
 from odoo.addons.phone_validation.tools import phone_validation
 from odoo.exceptions import AccessError, UserError
@@ -42,8 +44,56 @@ class PhoneMixin(models.AbstractModel):
         string='Blacklisted Phone Is Mobile', compute="_compute_blacklisted", compute_sudo=True, store=False, groups="base.group_user",
         help="Indicates if a blacklisted sanitized phone number is a mobile number. Helps distinguish which number is blacklisted \
             when there is both a mobile and phone field in a model.")
+    phone_mobile_search = fields.Char("Phone/Mobile", store=False, search='_search_phone_mobile_search')
 
-    @api.depends(lambda self: self._phone_get_number_fields())
+    def _search_phone_mobile_search(self, operator, value):
+        value = value.strip()
+        if len(value) < 3:
+            raise UserError(_('Please enter at least 3 characters when searching a Phone/Mobile number.'))
+
+        pattern = r'[\s\\./\(\)\-]'
+        if value.startswith('+') or value.startswith('00'):
+            # searching on +32485112233 should also finds 0032485112233 (and vice versa)
+            # we therefore remove it from input value and search for both of them in db
+            query = f"""
+                SELECT model.id
+                FROM {self._table} model
+                WHERE
+                    model.phone IS NOT NULL AND (
+                        REGEXP_REPLACE(model.phone, %s, '', 'g') ILIKE %s OR
+                        REGEXP_REPLACE(model.phone, %s, '', 'g') ILIKE %s
+                    ) OR
+                    model.mobile IS NOT NULL AND (
+                        REGEXP_REPLACE(model.mobile, %s, '', 'g') ILIKE %s OR
+                        REGEXP_REPLACE(model.mobile, %s, '', 'g') ILIKE %s
+                    );
+            """
+            term = re.sub(pattern, '', value[1 if value.startswith('+') else 2:]) + '%'
+            self._cr.execute(query, (
+                pattern, '00' + term,
+                pattern, '+' + term,
+                pattern, '00' + term,
+                pattern, '+' + term
+            ))
+        else:
+            query = f"""
+                SELECT model.id
+                FROM {self._table} model
+                WHERE
+                    REGEXP_REPLACE(model.phone, %s, '', 'g') ILIKE %s OR
+                    REGEXP_REPLACE(model.mobile, %s, '', 'g') ILIKE %s;
+            """
+            term = '%' + re.sub(pattern, '', value) + '%'
+            self._cr.execute(query, (
+                pattern, term,
+                pattern, term
+            ))
+        res = self._cr.fetchall()
+        if not res:
+            return [(0, '=', 1)]
+        return [('id', 'in', [r[0] for r in res])]
+
+    @api.depends(lambda self: self._phone_get_sanitize_triggers())
     def _compute_phone_sanitized(self):
         self._assert_phone_field()
         number_fields = self._phone_get_number_fields()
@@ -63,15 +113,18 @@ class PhoneMixin(models.AbstractModel):
         number_fields = self._phone_get_number_fields()
         for record in self:
             record.phone_sanitized_blacklisted = record.phone_sanitized in blacklist
+            mobile_blacklisted = phone_blacklisted = False
             # This is a bit of a hack. Assume that any "mobile" numbers will have the word 'mobile'
             # in them due to varying field names and assume all others are just "phone" numbers.
             # Note that the limitation of only having 1 phone_sanitized value means that a phone/mobile number
             # may not be calculated as blacklisted even though it is if both field values exist in a model.
             for number_field in number_fields:
                 if 'mobile' in number_field:
-                    record.mobile_blacklisted = record.phone_sanitized_blacklisted and record.phone_get_sanitized_number(number_fname=number_field) == record.phone_sanitized
+                    mobile_blacklisted = record.phone_sanitized_blacklisted and record.phone_get_sanitized_number(number_fname=number_field) == record.phone_sanitized
                 else:
-                    record.phone_blacklisted = record.phone_sanitized_blacklisted and record.phone_get_sanitized_number(number_fname=number_field) == record.phone_sanitized
+                    phone_blacklisted = record.phone_sanitized_blacklisted and record.phone_get_sanitized_number(number_fname=number_field) == record.phone_sanitized
+            record.mobile_blacklisted = mobile_blacklisted
+            record.phone_blacklisted = phone_blacklisted
 
     @api.model
     def _search_phone_sanitized_blacklisted(self, operator, value):
@@ -109,6 +162,11 @@ class PhoneMixin(models.AbstractModel):
             raise UserError(_('Invalid primary phone field on model %s', self._name))
         if not any(fname in self and self._fields[fname].type == 'char' for fname in self._phone_get_number_fields()):
             raise UserError(_('Invalid primary phone field on model %s', self._name))
+
+    def _phone_get_sanitize_triggers(self):
+        """ Tool method to get all triggers for sanitize """
+        res = [self._phone_get_country_field()] if self._phone_get_country_field() else []
+        return res + self._phone_get_number_fields()
 
     def _phone_get_number_fields(self):
         """ This method returns the fields to use to find the number to use to

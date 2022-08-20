@@ -1,27 +1,28 @@
 odoo.define("website_sale.tour_shop", function (require) {
     "use strict";
 
-    var core = require("web.core");
-    var _t = core._t;
+    const {_t} = require("web.core");
+    const {Markup} = require('web.utils');
 
     // return the steps, used for backend and frontend
 
     return [{
-        trigger: "#new-content-menu > a",
+        trigger: "body:has(#o_new_content_menu_choices.o_hidden) #new-content-menu > a",
         content: _t("Let's create your first product."),
         extra_trigger: ".js_sale",
+        consumeVisibleOnly: true,
         position: "bottom",
     }, {
         trigger: "a[data-action=new_product]",
-        content: _t("Select <b>New Product</b> to create it and manage its properties to boost your sales."),
+        content: Markup(_t("Select <b>New Product</b> to create it and manage its properties to boost your sales.")),
         position: "bottom",
     }, {
         trigger: ".modal-dialog #editor_new_product input[type=text]",
         content: _t("Enter a name for your new product"),
-        position: "right",
+        position: "left",
     }, {
         trigger: ".modal-footer button.btn-primary.btn-continue",
-        content: _t("Click on <em>Continue</em> to create the product."),
+        content: Markup(_t("Click on <em>Continue</em> to create the product.")),
         position: "right",
     }, {
         trigger: ".product_price .oe_currency_value:visible",
@@ -44,6 +45,7 @@ odoo.define("website_sale.tour_shop", function (require) {
         run: function (actions) {
             actions.auto(".modal-footer .btn-secondary");
         },
+        auto: true,
     }, {
         trigger: "button.o_we_add_snippet_btn",
         auto: true,
@@ -55,7 +57,7 @@ odoo.define("website_sale.tour_shop", function (require) {
         run: "drag_and_drop",
     }, {
         trigger: "button[data-action=save]",
-        content: _t("Once you click on <b>Save</b>, your product is updated."),
+        content: Markup(_t("Once you click on <b>Save</b>, your product is updated.")),
         position: "bottom",
     }, {
         trigger: ".js_publish_management .js_publish_btn .css_publish",
@@ -71,5 +73,6 @@ odoo.define("website_sale.tour_shop", function (require) {
         content: _t("Open your website app here."),
         extra_trigger: ".o_apps,#oe_applications",
         position: "bottom",
+        timeout: 30000, // ~ 10 secondes to be redirected, due to slow assets generation
     }];
 });

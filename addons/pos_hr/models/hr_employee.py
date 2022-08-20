@@ -22,8 +22,9 @@ class HrEmployee(models.Model):
             e['pin'] = hashlib.sha1(e['pin'].encode('utf8')).hexdigest() if e['pin'] else False
         return employees_data
 
-    def unlink(self):
-        configs_with_employees = self.env['pos.config'].search([('module_pos_hr', '=', 'True')]).filtered(lambda c: c.current_session_id)
+    @api.ondelete(at_uninstall=False)
+    def _unlink_except_active_pos_session(self):
+        configs_with_employees = self.env['pos.config'].sudo().search([('module_pos_hr', '=', 'True')]).filtered(lambda c: c.current_session_id)
         configs_with_all_employees = configs_with_employees.filtered(lambda c: not c.employee_ids)
         configs_with_specific_employees = configs_with_employees.filtered(lambda c: c.employee_ids & self)
         if configs_with_all_employees or configs_with_specific_employees:
@@ -34,4 +35,3 @@ class HrEmployee(models.Model):
                     error_msg += _("Employee: %s - PoS Config(s): %s \n") % (employee.name, ', '.join(config.name for config in config_ids))
 
             raise UserError(error_msg)
-        return super(HrEmployee, self).unlink()

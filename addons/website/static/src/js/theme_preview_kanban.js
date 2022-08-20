@@ -14,18 +14,25 @@ var ThemePreviewKanbanController = KanbanController.extend(ThemePreviewControlle
      */
     start: async function () {
         await this._super(...arguments);
+
+        // hide pager
         this.el.classList.add('o_view_kanban_theme_preview_controller');
+
+        // update breacrumb
         const websiteLink = Object.assign(document.createElement('a'), {
-            className: 'btn btn-secondary ml-3',
+            className: 'btn btn-secondary ml-3 text-black-75',
             href: '/',
             innerHTML: '<i class="fa fa-close"></i>',
         });
-        const smallBreadcumb = Object.assign(document.createElement('small'), {
-            className: 'mx-2 text-muted',
-            innerHTML: _lt("Don't worry, you can switch later."),
-        });
-        this._controlPanelWrapper.el.querySelector('.o_cp_top').appendChild(websiteLink);
-        this._controlPanelWrapper.el.querySelector('div.o_cp_top_left li').appendChild(smallBreadcumb);
+        if (!this.initialState.context.module) { // not coming from res.config.settings
+            const smallBreadcumb = Object.assign(document.createElement('small'), {
+                className: 'mx-2 text-muted',
+                innerHTML: _lt("Don't worry, you can switch later."),
+            });
+            this._controlPanelWrapper.el.querySelector('.o_cp_top li').appendChild(smallBreadcumb);
+            this._controlPanelWrapper.el.querySelector('.o_cp_top').appendChild(websiteLink);
+        }
+        this._controlPanelWrapper.el.querySelector('.o_cp_top .breadcrumb li.active').classList.add('text-black-75');
     },
     /**
      * Called when user click on any button in kanban view.
@@ -44,7 +51,7 @@ var ThemePreviewKanbanController = KanbanController.extend(ThemePreviewControlle
 });
 
 var ThemePreviewKanbanView = KanbanView.extend({
-    searchMenuTypes: [],
+    withSearchBar: false,  // hide searchBar
 
     config: _.extend({}, KanbanView.prototype.config, {
         Controller: ThemePreviewKanbanController,

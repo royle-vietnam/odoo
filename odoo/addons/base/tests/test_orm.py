@@ -3,9 +3,12 @@
 
 from collections import defaultdict
 
+import psycopg2
+
 from odoo.exceptions import AccessError, MissingError
 from odoo.tests.common import TransactionCase
 from odoo.tools import mute_logger
+from odoo import Command
 
 
 class TestORM(TransactionCase):
@@ -14,9 +17,9 @@ class TestORM(TransactionCase):
     @mute_logger('odoo.models')
     def test_access_deleted_records(self):
         """ Verify that accessing deleted records works as expected """
-        p1 = self.env['res.partner'].create({'name': 'W'})
-        p2 = self.env['res.partner'].create({'name': 'Y'})
-        p1.unlink()
+        c1 = self.env['res.partner.category'].create({'name': 'W'})
+        c2 = self.env['res.partner.category'].create({'name': 'Y'})
+        c1.unlink()
 
         # read() is expected to skip deleted records because our API is not
         # transactional for a sequence of search()->read() performed from the
@@ -26,14 +29,14 @@ class TestORM(TransactionCase):
         user = self.env['res.users'].create({
             'name': 'test user',
             'login': 'test2',
-            'groups_id': [(6, 0, [self.ref('base.group_user')])],
+            'groups_id': [Command.set([self.ref('base.group_user')])],
         })
-        ps = (p1 + p2).with_user(user)
-        self.assertEqual([{'id': p2.id, 'name': 'Y'}], ps.read(['name']), "read() should skip deleted records")
-        self.assertEqual([], ps[0].read(['name']), "read() should skip deleted records")
+        cs = (c1 + c2).with_user(user)
+        self.assertEqual([{'id': c2.id, 'name': 'Y'}], cs.read(['name']), "read() should skip deleted records")
+        self.assertEqual([], cs[0].read(['name']), "read() should skip deleted records")
 
         # Deleting an already deleted record should be simply ignored
-        self.assertTrue(p1.unlink(), "Re-deleting should be a no-op")
+        self.assertTrue(c1.unlink(), "Re-deleting should be a no-op")
 
     @mute_logger('odoo.models')
     def test_access_partial_deletion(self):
@@ -61,7 +64,7 @@ class TestORM(TransactionCase):
         user = self.env['res.users'].create({
             'name': 'test user',
             'login': 'test2',
-            'groups_id': [(6, 0, [self.ref('base.group_user')])],
+            'groups_id': [Command.set([self.ref('base.group_user')])],
         })
 
         partner_model = self.env['ir.model'].search([('model','=','res.partner')])
@@ -136,6 +139,7 @@ class TestORM(TransactionCase):
         self.assertEqual(len(found), 1)
         self.assertTrue(field in list(found[0]) for field in ['id', 'name', 'display_name', 'email'])
 
+    @mute_logger('odoo.sql_db')
     def test_exists(self):
         partner = self.env['res.partner']
 
@@ -144,9 +148,18 @@ class TestORM(TransactionCase):
         self.assertTrue(recs)
         self.assertEqual(recs.exists(), recs)
 
+        # check that new records exist by convention
+        recs = partner.new({})
+        self.assertTrue(recs.exists())
+
         # check that there is no record with id 0
         recs = partner.browse([0])
         self.assertFalse(recs.exists())
+
+        # check that there is no record with string id
+        recs = partner.browse('xxx')
+        with self.assertRaises(psycopg2.DataError):
+            recs.exists()
 
     def test_groupby_date(self):
         partners_data = dict(
@@ -216,14 +229,14 @@ class TestORM(TransactionCase):
         user = self.env['res.users'].create({
             'name': 'test',
             'login': 'test_m2m_store_trigger',
-            'groups_id': [(6, 0, [])],
+            'groups_id': [Command.set([])],
         })
         self.assertTrue(user.share)
 
-        group_user.write({'users': [(4, user.id)]})
+        group_user.write({'users': [Command.link(user.id)]})
         self.assertFalse(user.share)
 
-        group_user.write({'users': [(3, user.id)]})
+        group_user.write({'users': [Command.unlink(user.id)]})
         self.assertTrue(user.share)
 
     @mute_logger('odoo.models')
@@ -232,7 +245,7 @@ class TestORM(TransactionCase):
         user = self.env['res.users'].create({
             'name': 'Justine Bridou',
             'login': 'saucisson',
-            'groups_id': [(6, 0, [self.ref('base.group_partner_manager')])],
+            'groups_id': [Command.set([self.ref('base.group_partner_manager')])],
         })
         p1 = self.env['res.partner'].with_user(user).create({'name': 'Zorro'})
         self.env['ir.property'].with_user(user)._set_multi("ref", "res.partner", {p1.id: "Nain poilu"})
@@ -272,16 +285,16 @@ class TestORM(TransactionCase):
         vals_list = [{
             'name': 'Foo',
             'state_ids': [
-                (0, 0, {'name': 'North Foo', 'code': 'NF'}),
-                (0, 0, {'name': 'South Foo', 'code': 'SF'}),
-                (0, 0, {'name': 'West Foo', 'code': 'WF'}),
-                (0, 0, {'name': 'East Foo', 'code': 'EF'}),
+                Command.create({'name': 'North Foo', 'code': 'NF'}),
+                Command.create({'name': 'South Foo', 'code': 'SF'}),
+                Command.create({'name': 'West Foo', 'code': 'WF'}),
+                Command.create({'name': 'East Foo', 'code': 'EF'}),
             ],
         }, {
             'name': 'Bar',
             'state_ids': [
-                (0, 0, {'name': 'North Bar', 'code': 'NB'}),
-                (0, 0, {'name': 'South Bar', 'code': 'SB'}),
+                Command.create({'name': 'North Bar', 'code': 'NB'}),
+                Command.create({'name': 'South Bar', 'code': 'SB'}),
             ],
         }]
         foo, bar = self.env['res.country'].create(vals_list)

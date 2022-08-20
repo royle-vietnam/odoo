@@ -70,17 +70,6 @@ def xmlrpc_handle_exception_string(e):
 
     return xmlrpclib.dumps(fault, allow_none=None, encoding=None)
 
-def _patch_xmlrpc_marshaller():
-    # By default, in xmlrpc, bytes are converted to xmlrpclib.Binary object.
-    # Historically, odoo is sending binary as base64 string.
-    # In python 3, base64.b64{de,en}code() methods now works on bytes.
-    # Convert them to str to have a consistent behavior between python 2 and python 3.
-    # TODO? Create a `/xmlrpc/3` route prefix that respect the standard and uses xmlrpclib.Binary.
-    def dump_bytes(marshaller, value, write):
-        marshaller.dump_unicode(odoo.tools.ustr(value), write)
-
-    xmlrpclib.Marshaller.dispatch[bytes] = dump_bytes
-
 def application_unproxied(environ, start_response):
     """ WSGI entry point."""
     # cleanup db/uid trackers - they're set at HTTP dispatch in
@@ -95,10 +84,9 @@ def application_unproxied(environ, start_response):
     if hasattr(threading.current_thread(), 'url'):
         del threading.current_thread().url
 
-    with odoo.api.Environment.manage():
-        result = odoo.http.root(environ, start_response)
-        if result is not None:
-            return result
+    result = odoo.http.root(environ, start_response)
+    if result is not None:
+        return result
 
     # We never returned from the loop.
     return werkzeug.exceptions.NotFound("No handler found.\n")(environ, start_response)

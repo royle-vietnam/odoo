@@ -3,7 +3,9 @@ odoo.define('web_unsplash.image_widgets', function (require) {
 
 var core = require('web.core');
 var UnsplashAPI = require('unsplash.api');
+const {UploadProgressToast} = require('@web_editor/js/wysiwyg/widgets/upload_progress_toast');
 var widgetsMedia = require('wysiwyg.widgets.media');
+const {_t} = require('web.core');
 
 var unsplashAPI = null;
 
@@ -80,17 +82,26 @@ widgetsMedia.ImageWidget.include({
      */
     _save: async function () {
         const _super = this._super;
-        if (Object.keys(this._unsplash.selectedImages).length) {
+        const selectedImages = this._unsplash.selectedImages;
+        const imagesCount = Object.keys(selectedImages).length;
+        if (imagesCount) {
             this.saved = true;
-            const images = await this._rpc({
+            await this._setUpProgressToast([{
+                name: imagesCount > 1 ?
+                    _.str.sprintf(_t("Uploading %s '%s' images."), imagesCount, this._unsplash.query) :
+                    _.str.sprintf(_t("Uploading '%s' image."), this._unsplash.query),
+                size: null,
+            }]);
+            const images = await this.uploader.rpcShowProgress({
                 route: '/web_unsplash/attachment/add',
                 params: {
-                    unsplashurls: this._unsplash.selectedImages,
+                    unsplashurls: selectedImages,
                     res_model: this.options.res_model,
                     res_id: this.options.res_id,
                     query: this._unsplash.query,
                 },
-            });
+            }, 0);
+            this.uploader.close(3000);
             this.attachments.push(...images);
             this.selectedAttachments.push(...images);
         }

@@ -47,10 +47,11 @@ class CouponProgram(models.Model):
         default='on_current_order', string="Applicability")
     coupon_ids = fields.One2many('coupon.coupon', 'program_id', string="Generated Coupons", copy=False)
     coupon_count = fields.Integer(compute='_compute_coupon_count')
-    company_id = fields.Many2one('res.company', string="Company", default=lambda self: self.env.company)
+    company_id = fields.Many2one('res.company', string="Company", required=True, default=lambda self: self.env.company)
     currency_id = fields.Many2one(string="Currency", related='company_id.currency_id', readonly=True)
     validity_duration = fields.Integer(default=30,
         help="Validity duration for a coupon after its generation")
+    total_order_count = fields.Integer("Total Order Count", compute="_compute_total_order_count")
 
     @api.constrains('promo_code')
     def _check_promo_code_constraint(self):
@@ -86,15 +87,8 @@ class CouponProgram(models.Model):
     def create(self, vals):
         program = super(CouponProgram, self).create(vals)
         if not vals.get('discount_line_product_id', False):
-            discount_line_product_id = self.env['product.product'].create({
-                'name': program.reward_id.display_name,
-                'type': 'service',
-                'taxes_id': False,
-                'supplier_taxes_id': False,
-                'sale_ok': False,
-                'purchase_ok': False,
-                'lst_price': 0, #Do not set a high value to avoid issue with coupon code
-            })
+            values = program._get_discount_product_values()
+            discount_line_product_id = self.env['product.product'].create(values)
             program.write({'discount_line_product_id': discount_line_product_id.id})
         return program
 
@@ -108,9 +102,12 @@ class CouponProgram(models.Model):
             self.mapped('discount_line_product_id').write({'name': self[0].reward_id.display_name})
         return res
 
-    def unlink(self):
+    @api.ondelete(at_uninstall=False)
+    def _unlink_except_active(self):
         if self.filtered('active'):
             raise UserError(_('You can not delete a program in active state'))
+
+    def unlink(self):
         # get reference to rule and reward
         rule = self.rule_id
         reward = self.reward_id
@@ -133,14 +130,44 @@ class CouponProgram(models.Model):
         return self.currency_id._convert(self[field], currency_to, self.company_id, fields.Date.today())
 
     def _is_valid_partner(self, partner):
-        if self.rule_partners_domain:
+        if self.rule_partners_domain and self.rule_partners_domain != '[]':
             domain = ast.literal_eval(self.rule_partners_domain) + [('id', '=', partner.id)]
             return bool(self.env['res.partner'].search_count(domain))
         else:
             return True
 
     def _get_valid_products(self, products):
-        if self.rule_products_domain:
+        """Get valid products for the program.
+
+        :param products: records of product.product
+        :return: valid products recordset
+        """
+        if self.rule_products_domain and self.rule_products_domain != "[]":
             domain = ast.literal_eval(self.rule_products_domain)
             return products.filtered_domain(domain)
         return products
+
+    def _generate_coupons(self, partner_id):
+        '''Generate coupons that can be used in the next order for the given partner_id.'''
+        generated_coupons = self.env['coupon.coupon']
+        for program in self:
+            generated_coupons |= self.env['coupon.coupon'].create({
+                'program_id': program.id,
+                'partner_id': partner_id,
+            })
+        return generated_coupons
+
+    def _compute_total_order_count(self):
+        for program in self:
+            program.total_order_count = 0
+
+    def _get_discount_product_values(self):
+        return {
+            'name': self.reward_id.display_name,
+            'type': 'service',
+            'taxes_id': False,
+            'supplier_taxes_id': False,
+            'sale_ok': False,
+            'purchase_ok': False,
+            'lst_price': 0, #Do not set a high value to avoid issue with coupon code
+        }

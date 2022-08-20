@@ -279,6 +279,94 @@ class TestCalendar(TestResourceCommon):
 
         leave.unlink()
 
+        # leave without calendar, should count for anyone in the company
+        leave = self.env['resource.calendar.leaves'].create({
+            'name': 'small leave',
+            'resource_id': False,
+            'date_from': datetime_str(2018, 4, 3, 9, 0, 0, tzinfo=self.patel.tz),
+            'date_to': datetime_str(2018, 4, 3, 12, 0, 0, tzinfo=self.patel.tz),
+        })
+
+        hours = self.calendar_patel.get_work_hours_count(
+            datetime_tz(2018, 4, 2, 0, 0, 0, tzinfo=self.patel.tz),
+            datetime_tz(2018, 4, 6, 23, 59, 59, tzinfo=self.patel.tz),
+        )
+        self.assertEqual(hours, 32)
+
+        # 2 weeks calendar with date_from and date_to to check work_hours
+        self.calendar_jules.write({
+            "attendance_ids": [
+                (5, 0, 0),
+                (0, 0, {
+                    "name": "Monday (morning)",
+                    "day_period": "morning",
+                    "dayofweek": "0",
+                    "week_type": "0",
+                    "hour_from": 8.0,
+                    "hour_to": 12.0,
+                    "date_from": "2022-01-01",
+                    "date_to": "2022-01-16"}),
+                (0, 0, {
+                    "name": "Monday (morning)",
+                    "day_period": "morning",
+                    "dayofweek": "0",
+                    "week_type": "0",
+                    "hour_from": 8.0,
+                    "hour_to": 12.0,
+                    "date_from": "2022-01-17"}),
+                (0, 0, {
+                    "name": "Monday (afternoon)",
+                    "day_period": "afternoon",
+                    "dayofweek": "0",
+                    "week_type": "0",
+                    "hour_from": 16.0,
+                    "hour_to": 20.0,
+                    "date_from": "2022-01-17"}),
+                (0, 0, {
+                    "name": "Monday (morning)",
+                    "day_period": "morning",
+                    "dayofweek": "0",
+                    "week_type": "1",
+                    "hour_from": 8.0,
+                    "hour_to": 12.0,
+                    "date_from": "2022-01-01",
+                    "date_to": "2022-01-16"}),
+                (0, 0, {
+                    "name": "Monday (afternoon)",
+                    "day_period": "afternoon",
+                    "dayofweek": "0",
+                    "week_type": "1",
+                    "hour_from": 16.0,
+                    "hour_to": 20.0,
+                    "date_from": "2022-01-01",
+                    "date_to": "2022-01-16"}),
+                (0, 0, {
+                    "name": "Monday (morning)",
+                    "day_period": "morning",
+                    "dayofweek": "0",
+                    "week_type": "1",
+                    "hour_from": 8.0,
+                    "hour_to": 12.0,
+                    "date_from": "2022-01-17"}),
+                (0, 0, {
+                    "name": "Monday (afternoon)",
+                    "day_period": "afternoon",
+                    "dayofweek": "0",
+                    "week_type": "1",
+                    "hour_from": 16.0,
+                    "hour_to": 20.0,
+                    "date_from": "2022-01-17"})]})
+        hours = self.calendar_jules.get_work_hours_count(
+            datetime_tz(2022, 1, 10, 0, 0, 0, tzinfo=self.jules.tz),
+            datetime_tz(2022, 1, 10, 23, 59, 59, tzinfo=self.jules.tz),
+        )
+        self.assertEqual(hours, 4)
+        hours = self.calendar_jules.get_work_hours_count(
+            datetime_tz(2022, 1, 17, 0, 0, 0, tzinfo=self.jules.tz),
+            datetime_tz(2022, 1, 17, 23, 59, 59, tzinfo=self.jules.tz),
+        )
+        self.assertEqual(hours, 8)
+
     def test_calendar_working_hours_count(self):
         calendar = self.env.ref('resource.resource_calendar_std_35h')
         calendar.tz = 'UTC'
@@ -490,6 +578,32 @@ class TestResMixin(TestResourceCommon):
             None,
             datetime_tz(2020, 4, 3, 13, 0, 0, tzinfo=self.john.tz),
         ))
+
+        # It should find the start and end within the search range
+        result = self.paul._adjust_to_calendar(
+            datetime_tz(2020, 4, 2, 2, 0, 0, tzinfo='UTC'),
+            datetime_tz(2020, 4, 3, 1, 59, 59, tzinfo='UTC'),
+        )
+
+        self.assertEqual(result[self.paul], (
+            datetime_tz(2020, 4, 2, 4, 0, tzinfo='UTC'),
+            datetime_tz(2020, 4, 2, 18, 0, tzinfo='UTC')
+        ), "It should have found the start and end of the shift on the same day on April 2nd, 2020")
+
+    def test_adjust_calendar_timezone_before(self):
+        # Calendar:
+        # Every day 8-16
+        self.jean.tz = 'Japan'
+        self.calendar_jean.tz = 'Europe/Brussels'
+
+        result = self.jean._adjust_to_calendar(
+            datetime_tz(2020, 4, 1, 0, 0, 0, tzinfo='Japan'),
+            datetime_tz(2020, 4, 1, 23, 59, 59, tzinfo='Japan'),
+        )
+        self.assertEqual(result[self.jean], (
+            datetime_tz(2020, 4, 1, 8, 0, 0, tzinfo='Japan'),
+            datetime_tz(2020, 4, 1, 16, 0, 0, tzinfo='Japan'),
+        ), "It should have found a starting time the 1st")
 
     def test_adjust_calendar_timezone_after(self):
         # Calendar:

@@ -21,8 +21,9 @@ import passlib.context
 import pytz
 from lxml import etree
 from lxml.builder import E
+from psycopg2 import sql
 
-from odoo import api, fields, models, tools, SUPERUSER_ID, _
+from odoo import api, fields, models, tools, SUPERUSER_ID, _, Command
 from odoo.addons.base.models.ir_model import MODULE_UNINSTALL_FLAG
 from odoo.exceptions import AccessDenied, AccessError, UserError, ValidationError
 from odoo.http import request
@@ -56,7 +57,7 @@ def name_boolean_group(id):
     return 'in_group_' + str(id)
 
 def name_selection_groups(ids):
-    return 'sel_groups_' + '_'.join(str(it) for it in ids)
+    return 'sel_groups_' + '_'.join(str(it) for it in sorted(ids))
 
 def is_boolean_group(name):
     return name.startswith('in_group_')
@@ -78,11 +79,11 @@ def parse_m2m(commands):
     ids = []
     for command in commands:
         if isinstance(command, (tuple, list)):
-            if command[0] in (1, 4):
+            if command[0] in (Command.UPDATE, Command.LINK):
                 ids.append(command[1])
-            elif command[0] == 5:
+            elif command[0] == Command.CLEAR:
                 ids = []
-            elif command[0] == 6:
+            elif command[0] == Command.SET:
                 ids = list(command[2])
         else:
             ids.append(command)
@@ -225,7 +226,6 @@ class Groups(models.Model):
         # DLE P139
         if self.ids:
             self.env['ir.model.access'].call_cache_clearing_methods()
-            self.env['res.users'].has_group.clear_cache(self.env['res.users'])
         return super(Groups, self).write(vals)
 
 
@@ -261,27 +261,30 @@ class Users(models.Model):
     _inherits = {'res.partner': 'partner_id'}
     _order = 'name, login'
 
-    # User can write on a few of his own fields (but not his groups for example)
-    SELF_WRITEABLE_FIELDS = ['signature', 'action_id', 'company_id', 'email', 'name', 'image_1920', 'lang', 'tz']
-    # User can read a few of his own fields
-    SELF_READABLE_FIELDS = ['signature', 'company_id', 'login', 'email', 'name', 'image_1920', 'image_1024', 'image_512', 'image_256', 'image_128', 'lang', 'tz', 'tz_offset', 'groups_id', 'partner_id', '__last_update', 'action_id']
+    @property
+    def SELF_READABLE_FIELDS(self):
+        """ The list of fields a user can read on their own user record.
+        In order to add fields, please override this property on model extensions.
+        """
+        return [
+            'signature', 'company_id', 'login', 'email', 'name', 'image_1920',
+            'image_1024', 'image_512', 'image_256', 'image_128', 'lang', 'tz',
+            'tz_offset', 'groups_id', 'partner_id', '__last_update', 'action_id',
+            'avatar_1920', 'avatar_1024', 'avatar_512', 'avatar_256', 'avatar_128',
+        ]
+
+    @property
+    def SELF_WRITEABLE_FIELDS(self):
+        """ The list of fields a user can write on their own user record.
+        In order to add fields, please override this property on model extensions.
+        """
+        return ['signature', 'action_id', 'company_id', 'email', 'name', 'image_1920', 'lang', 'tz']
 
     def _default_groups(self):
-        default_user_id = self.env['ir.model.data'].xmlid_to_res_id('base.default_user', raise_if_not_found=False)
+        default_user_id = self.env['ir.model.data']._xmlid_to_res_id('base.default_user', raise_if_not_found=False)
         return self.env['res.users'].browse(default_user_id).sudo().groups_id if default_user_id else []
 
-    @api.model
-    def _get_default_image(self):
-        """ Get a default image when the user is created without image
-
-            Inspired to _get_default_image method in
-            https://github.com/odoo/odoo/blob/11.0/odoo/addons/base/res/res_partner.py
-        """
-        image_path = get_module_resource('base', 'static/img', 'avatar.png')
-        image = base64.b64encode(open(image_path, 'rb').read())
-        return image_process(image, colorize=True)
-
-    partner_id = fields.Many2one('res.partner', required=True, ondelete='restrict', auto_join=True,
+    partner_id = fields.Many2one('res.partner', required=True, ondelete='restrict', auto_join=True, index=True,
         string='Related Partner', help='Partner-related data of the user')
     login = fields.Char(required=True, help="Used to log into the system")
     password = fields.Char(
@@ -325,7 +328,6 @@ class Users(models.Model):
                                  compute='_compute_accesses_count', compute_sudo=True)
     groups_count = fields.Integer('# Groups', help='Number of groups that apply to the current user',
                                   compute='_compute_accesses_count', compute_sudo=True)
-    image_1920 = fields.Image(related='partner_id.image_1920', inherited=True, readonly=False, default=_get_default_image)
 
     _sql_constraints = [
         ('login_key', 'UNIQUE (login)',  'You can not have two users with the same login !')
@@ -413,7 +415,7 @@ class Users(models.Model):
 
     @api.depends('groups_id')
     def _compute_share(self):
-        user_group_id = self.env['ir.model.data'].xmlid_to_res_id('base.group_user')
+        user_group_id = self.env['ir.model.data']._xmlid_to_res_id('base.group_user')
         internal_users = self.filtered_domain([('groups_id', 'in', [user_group_id])])
         internal_users.share = False
         (self - internal_users).share = True
@@ -458,8 +460,14 @@ class Users(models.Model):
 
     @api.constrains('company_id', 'company_ids')
     def _check_company(self):
-        if any(user.company_id not in user.company_ids for user in self):
-            raise ValidationError(_('The chosen company is not in the allowed companies for this user'))
+        for user in self:
+            if user.company_id not in user.company_ids:
+                raise ValidationError(
+                    _('Company %(company_name)s is not in the allowed companies for user %(user_name)s (%(company_allowed)s).',
+                      company_name=user.company_id.name,
+                      user_name=user.name,
+                      company_allowed=', '.join(user.mapped('company_ids.name')))
+                )
 
     @api.constrains('action_id')
     def _check_action_id(self):
@@ -513,8 +521,9 @@ class Users(models.Model):
 
     def read(self, fields=None, load='_classic_read'):
         if fields and self == self.env.user:
+            readable = self.SELF_READABLE_FIELDS
             for key in fields:
-                if not (key in self.SELF_READABLE_FIELDS or key.startswith('context_')):
+                if not (key in readable or key.startswith('context_')):
                     break
             else:
                 # safe fields only, so we read as super-user to bypass access rights
@@ -559,8 +568,9 @@ class Users(models.Model):
                 if not user.active and not user.partner_id.active:
                     user.partner_id.toggle_active()
         if self == self.env.user:
+            writeable = self.SELF_WRITEABLE_FIELDS
             for key in list(values):
-                if not (key in self.SELF_WRITEABLE_FIELDS or key.startswith('context_')):
+                if not (key in writeable or key.startswith('context_')):
                     break
             else:
                 if 'company_id' in values:
@@ -581,7 +591,7 @@ class Users(models.Model):
             # This is unlikely in a business code to change the company of a user and then do business stuff
             # but in case it happens this is handled.
             # e.g. `account_test_savepoint.py` `setup_company_data`, triggered by `test_account_invoice_report.py`
-            for env in list(self.env.envs):
+            for env in list(self.env.transaction.envs):
                 if env.user in self:
                     lazy_property.reset_all(env)
 
@@ -604,11 +614,11 @@ class Users(models.Model):
 
         return res
 
-    def unlink(self):
+    @api.ondelete(at_uninstall=True)
+    def _unlink_except_superuser(self):
         if SUPERUSER_ID in self.ids:
             raise UserError(_('You can not remove the admin user as it is used internally for resources created by Odoo (updates, module installation, ...)'))
         self.clear_caches()
-        return super(Users, self).unlink()
 
     @api.model
     def _name_search(self, name, args=None, operator='ilike', limit=100, name_get_uid=None):
@@ -806,8 +816,10 @@ class Users(models.Model):
     def has_group(self, group_ext_id):
         # use singleton's id if called on a non-empty recordset, otherwise
         # context uid
-        uid = self.id or self._uid
-        return self.with_user(uid)._has_group(group_ext_id)
+        uid = self.id
+        if uid and uid != self._uid:
+            self = self.with_user(uid)
+        return self._has_group(group_ext_id)
 
     @api.model
     @tools.ormcache('self._uid', 'group_ext_id')
@@ -826,8 +838,29 @@ class Users(models.Model):
                             (SELECT res_id FROM ir_model_data WHERE module=%s AND name=%s)""",
                          (self._uid, module, ext_id))
         return bool(self._cr.fetchone())
-    # for a few places explicitly clearing the has_group cache
-    has_group.clear_cache = _has_group.clear_cache
+
+    def _action_show(self):
+        """If self is a singleton, directly access the form view. If it is a recordset, open a tree view"""
+        view_id = self.env.ref('base.view_users_form').id
+        action = {
+            'type': 'ir.actions.act_window',
+            'res_model': 'res.users',
+            'context': {'create': False},
+        }
+        if len(self) > 1:
+            action.update({
+                'name': _('Users'),
+                'view_mode': 'list,form',
+                'views': [[None, 'list'], [view_id, 'form']],
+                'domain': [('id', 'in', self.ids)],
+            })
+        else:
+            action.update({
+                'view_mode': 'form',
+                'views': [[view_id, 'form']],
+                'res_id': self.id,
+            })
+        return action
 
     def action_show_groups(self):
         self.ensure_one()
@@ -948,7 +981,7 @@ class Users(models.Model):
                     "and *might* be a proxy. If your Odoo is behind a proxy, "
                     "it may be mis-configured. Check that you are running "
                     "Odoo in Proxy Mode and that the proxy is properly configured, see "
-                    "https://www.odoo.com/documentation/13.0/setup/deploy.html#https for details.",
+                    "https://www.odoo.com/documentation/15.0/administration/install/deploy.html#https for details.",
                     source
                 )
             raise AccessDenied(_("Too many login failures, please wait a bit before trying again."))
@@ -992,11 +1025,9 @@ class Users(models.Model):
         if hasattr(self, 'check_credentials'):
             _logger.warning("The check_credentials method of res.users has been renamed _check_credentials. One of your installed modules defines one, but it will not be called anymore.")
 
-    def _get_placeholder_filename(self, field=None):
-        image_fields = ['image_%s' % size for size in [1920, 1024, 512, 256, 128]]
-        if field in image_fields and not self:
-            return 'base/static/img/user-slash.png'
-        return super()._get_placeholder_filename(field=field)
+    def _mfa_type(self):
+        """ If an MFA method is enabled, returns its type as a string. """
+        return
 
     def _mfa_url(self):
         """ If an MFA method is enabled, returns the URL for its second step. """
@@ -1015,7 +1046,7 @@ class GroupsImplied(models.Model):
     implied_ids = fields.Many2many('res.groups', 'res_groups_implied_rel', 'gid', 'hid',
         string='Inherits', help='Users of this group automatically inherit those groups')
     trans_implied_ids = fields.Many2many('res.groups', string='Transitively inherits',
-        compute='_compute_trans_implied')
+        compute='_compute_trans_implied', recursive=True)
 
     @api.depends('implied_ids.trans_implied_ids')
     def _compute_trans_implied(self):
@@ -1063,6 +1094,23 @@ class GroupsImplied(models.Model):
             self._check_one_user_type()
         return res
 
+    def _apply_group(self, implied_group):
+        """ Add the given group to the groups implied by the current group
+        :param implied_group: the implied group to add
+        """
+        groups = self.filtered(lambda g: implied_group not in g.implied_ids)
+        groups.write({'implied_ids': [Command.link(implied_group.id)]})
+
+    def _remove_group(self, implied_group):
+        """ Remove the given group from the implied groups of the current group
+        :param implied_group: the implied group to remove
+        """
+        groups = self.filtered(lambda g: implied_group in g.implied_ids)
+        if groups:
+            groups.write({'implied_ids': [Command.unlink(implied_group.id)]})
+            if groups.users:
+                implied_group.write({'users': [Command.unlink(user.id) for user in groups.users]})
+
 class UsersImplied(models.Model):
     _inherit = 'res.users'
 
@@ -1078,19 +1126,23 @@ class UsersImplied(models.Model):
         return super(UsersImplied, self).create(vals_list)
 
     def write(self, values):
+        if not values.get('groups_id'):
+            return super(UsersImplied, self).write(values)
         users_before = self.filtered(lambda u: u.has_group('base.group_user'))
         res = super(UsersImplied, self).write(values)
-        if values.get('groups_id'):
-            # add implied groups for all users
-            for user in self:
-                if not user.has_group('base.group_user') and user in users_before:
-                    # if we demoted a user, we strip him of all its previous privileges
-                    # (but we should not do it if we are simply adding a technical group to a portal user)
-                    vals = {'groups_id': [(5, 0, 0)] + values['groups_id']}
-                    super(UsersImplied, user).write(vals)
-                gs = set(concat(g.trans_implied_ids for g in user.groups_id))
-                vals = {'groups_id': [(4, g.id) for g in gs]}
-                super(UsersImplied, user).write(vals)
+        demoted_users = users_before.filtered(lambda u: not u.has_group('base.group_user'))
+        if demoted_users:
+            # demoted users are restricted to the assigned groups only
+            vals = {'groups_id': [Command.clear()] + values['groups_id']}
+            super(UsersImplied, demoted_users).write(vals)
+        # add implied groups for all users (in batches)
+        users_batch = defaultdict(self.browse)
+        for user in self:
+            users_batch[user.groups_id] += user
+        for groups, users in users_batch.items():
+            gs = set(concat(g.trans_implied_ids for g in groups))
+            vals = {'groups_id': [Command.link(g.id) for g in gs]}
+            super(UsersImplied, users).write(vals)
         return res
 
 #
@@ -1319,14 +1371,14 @@ class UsersView(models.Model):
         for values in vals_list:
             new_vals_list.append(self._remove_reified_groups(values))
         users = super(UsersView, self).create(new_vals_list)
-        group_multi_company_id = self.env['ir.model.data'].xmlid_to_res_id(
+        group_multi_company_id = self.env['ir.model.data']._xmlid_to_res_id(
             'base.group_multi_company', raise_if_not_found=False)
         if group_multi_company_id:
             for user in users:
                 if len(user.company_ids) <= 1 and group_multi_company_id in user.groups_id.ids:
-                    user.write({'groups_id': [(3, group_multi_company_id)]})
+                    user.write({'groups_id': [Command.unlink(group_multi_company_id)]})
                 elif len(user.company_ids) > 1 and group_multi_company_id not in user.groups_id.ids:
-                    user.write({'groups_id': [(4, group_multi_company_id)]})
+                    user.write({'groups_id': [Command.link(group_multi_company_id)]})
         return users
 
     def write(self, values):
@@ -1338,9 +1390,9 @@ class UsersView(models.Model):
         if group_multi_company:
             for user in self:
                 if len(user.company_ids) <= 1 and user.id in group_multi_company.users.ids:
-                    user.write({'groups_id': [(3, group_multi_company.id)]})
+                    user.write({'groups_id': [Command.unlink(group_multi_company.id)]})
                 elif len(user.company_ids) > 1 and user.id not in group_multi_company.users.ids:
-                    user.write({'groups_id': [(4, group_multi_company.id)]})
+                    user.write({'groups_id': [Command.link(group_multi_company.id)]})
         return res
 
     @api.model
@@ -1350,9 +1402,9 @@ class UsersView(models.Model):
         group_multi_company = self.env.ref('base.group_multi_company', False)
         if group_multi_company and 'company_ids' in values:
             if len(user.company_ids) <= 1 and user.id in group_multi_company.users.ids:
-                user.update({'groups_id': [(3, group_multi_company.id)]})
+                user.update({'groups_id': [Command.unlink(group_multi_company.id)]})
             elif len(user.company_ids) > 1 and user.id not in group_multi_company.users.ids:
-                user.update({'groups_id': [(4, group_multi_company.id)]})
+                user.update({'groups_id': [Command.link(group_multi_company.id)]})
         return user
 
     def _remove_reified_groups(self, values):
@@ -1421,6 +1473,13 @@ class UsersView(models.Model):
                     values.pop('groups_id', None)
         return res
 
+    @api.model
+    def read_group(self, domain, fields, groupby, offset=0, limit=None, orderby=False, lazy=True):
+        if fields:
+            # ignore reified fields
+            fields = [fname for fname in fields if not is_reified_group(fname)]
+        return super().read_group(domain, fields, groupby, offset=offset, limit=limit, orderby=orderby, lazy=lazy)
+
     def _add_reified_groups(self, fields, values):
         """ add the given reified group fields into `values` """
         gids = set(parse_m2m(values.get('groups_id') or []))
@@ -1428,7 +1487,12 @@ class UsersView(models.Model):
             if is_boolean_group(f):
                 values[f] = get_boolean_group(f) in gids
             elif is_selection_groups(f):
-                selected = [gid for gid in get_selection_groups(f) if gid in gids]
+                # determine selection groups, in order
+                sel_groups = self.env['res.groups'].sudo().browse(get_selection_groups(f))
+                sel_order = {g: len(g.trans_implied_ids & sel_groups) for g in sel_groups}
+                sel_groups = sel_groups.sorted(key=sel_order.get)
+                # determine which ones are in gids
+                selected = [gid for gid in sel_groups.ids if gid in gids]
                 # if 'Internal User' is in the group, this is the "User Type" group
                 # and we need to show 'Internal User' selected, not Public/Portal.
                 if self.env.ref('base.group_user').id in selected:
@@ -1490,7 +1554,11 @@ class CheckIdentity(models.TransientModel):
 
     def run_check(self):
         assert request, "This method can only be accessed over HTTP"
-        self.create_uid._check_credentials(self.password, {'interactive': True})
+        try:
+            self.create_uid._check_credentials(self.password, {'interactive': True})
+        except AccessDenied:
+            raise UserError(_("Incorrect Password, try again or click on Forgot Password to reset your password."))
+
         self.password = False
 
         request.session['identity-check-last'] = time.time()
@@ -1509,7 +1577,7 @@ class ChangePasswordWizard(models.TransientModel):
     def _default_user_ids(self):
         user_ids = self._context.get('active_model') == 'res.users' and self._context.get('active_ids') or []
         return [
-            (0, 0, {'user_id': user.id, 'user_login': user.login})
+            Command.create({'user_id': user.id, 'user_login': user.login})
             for user in self.env['res.users'].browse(user_ids)
         ]
 
@@ -1556,19 +1624,27 @@ class APIKeysUser(models.Model):
 
     api_key_ids = fields.One2many('res.users.apikeys', 'user_id', string="API Keys")
 
-    def __init__(self, pool, cr):
-        init_res = super().__init__(pool, cr)
-        # duplicate list to avoid modifying the original reference
-        type(self).SELF_WRITEABLE_FIELDS = self.SELF_WRITEABLE_FIELDS + ['api_key_ids']
-        type(self).SELF_READABLE_FIELDS = self.SELF_READABLE_FIELDS + ['api_key_ids']
-        return init_res
+    @property
+    def SELF_READABLE_FIELDS(self):
+        return super().SELF_READABLE_FIELDS + ['api_key_ids']
+
+    @property
+    def SELF_WRITEABLE_FIELDS(self):
+        return super().SELF_WRITEABLE_FIELDS + ['api_key_ids']
 
     def _rpc_api_keys_only(self):
         """ To be overridden if RPC access needs to be restricted to API keys, e.g. for 2FA """
         return False
 
     def _check_credentials(self, password, user_agent_env):
-        if user_agent_env['interactive']:
+        user_agent_env = user_agent_env or {}
+        if user_agent_env.get('interactive', True):
+            if 'interactive' not in user_agent_env:
+                _logger.warning(
+                    "_check_credentials without 'interactive' env key, assuming interactive login. \
+                    Check calls and overrides to ensure the 'interactive' key is properly set in \
+                    all _check_credentials environments"
+                )
             return super()._check_credentials(password, user_agent_env)
 
         if not self.env.user._rpc_api_keys_only():
@@ -1603,8 +1679,8 @@ class APIKeys(models.Model):
     create_date = fields.Datetime("Creation Date", readonly=True)
 
     def init(self):
-        # pylint: disable=sql-injection
-        self.env.cr.execute("""
+        table = sql.Identifier(self._table)
+        self.env.cr.execute(sql.SQL("""
         CREATE TABLE IF NOT EXISTS {table} (
             id serial primary key,
             name varchar not null,
@@ -1613,12 +1689,31 @@ class APIKeys(models.Model):
             index varchar({index_size}) not null CHECK (char_length(index) = {index_size}),
             key varchar not null,
             create_date timestamp without time zone DEFAULT (now() at time zone 'utc')
-        );
-        CREATE INDEX ON {table} (user_id, index);
-        """.format(table=self._table, index_size=INDEX_SIZE))
+        )
+        """).format(table=table, index_size=sql.Placeholder('index_size')), {
+            'index_size': INDEX_SIZE
+        })
+
+        index_name = self._table + "_user_id_index_idx"
+        if len(index_name) > 63:
+            # unique determinist index name
+            index_name = self._table[:50] + "_idx_" + sha256(self._table.encode()).hexdigest()[:8]
+        self.env.cr.execute(sql.SQL("""
+        CREATE INDEX IF NOT EXISTS {index_name} ON {table} (user_id, index);
+        """).format(
+            table=table,
+            index_name=sql.Identifier(index_name)
+        ))
 
     @check_identity
     def remove(self):
+        return self._remove()
+
+    def _remove(self):
+        """Use the remove() method to remove an API Key. This method implement logic,
+        but won't check the identity (mainly used to remove trusted devices)"""
+        if not self:
+            return {'type': 'ir.actions.act_window_close'}
         if self.env.is_system() or self.mapped('user_id') == self.env.user:
             ip = request.httprequest.environ['REMOTE_ADDR'] if request else 'n/a'
             _logger.info("API key(s) removed: scope: <%s> for '%s' (#%s) from %s",
@@ -1630,7 +1725,12 @@ class APIKeys(models.Model):
     def _check_credentials(self, *, scope, key):
         assert scope, "scope is required"
         index = key[:INDEX_SIZE]
-        self.env.cr.execute('SELECT user_id, key FROM res_users_apikeys WHERE index = %s AND (scope IS NULL OR scope = %s)', [index, scope])
+        self.env.cr.execute('''
+            SELECT user_id, key
+            FROM {} INNER JOIN res_users u ON (u.id = user_id)
+            WHERE u.active and index = %s AND (scope IS NULL OR scope = %s)
+        '''.format(self._table),
+        [index, scope])
         for user_id, current_key in self.env.cr.fetchall():
             if KEY_CRYPT_CONTEXT.verify(key, current_key):
                 return user_id
@@ -1645,15 +1745,15 @@ class APIKeys(models.Model):
         # no need to clear the LRU when *adding* a key, only when removing
         k = binascii.hexlify(os.urandom(API_KEY_SIZE)).decode()
         self.env.cr.execute("""
-        INSERT INTO res_users_apikeys (name, user_id, scope, key, index)
+        INSERT INTO {table} (name, user_id, scope, key, index)
         VALUES (%s, %s, %s, %s, %s)
         RETURNING id
-        """,
+        """.format(table=self._table),
         [name, self.env.user.id, scope, hash_api_key(k), k[:INDEX_SIZE]])
 
         ip = request.httprequest.environ['REMOTE_ADDR'] if request else 'n/a'
-        _logger.info("API key generated: scope: <%s> for '%s' (#%s) from %s",
-            scope, self.env.user.login, self.env.uid, ip)
+        _logger.info("%s generated: scope: <%s> for '%s' (#%s) from %s",
+            self._description, scope, self.env.user.login, self.env.uid, ip)
 
         return k
 
@@ -1665,8 +1765,7 @@ class APIKeyDescription(models.TransientModel):
     @check_identity
     def make_key(self):
         # only create keys for users who can delete their keys
-        if not self.user_has_groups('base.group_user'):
-            raise AccessError(_("Only internal users can create API keys"))
+        self.check_access_make_key()
 
         description = self.sudo()
         k = self.env['res.users.apikeys']._generate(None, self.sudo().name)
@@ -1683,7 +1782,13 @@ class APIKeyDescription(models.TransientModel):
             }
         }
 
+    def check_access_make_key(self):
+        if not self.user_has_groups('base.group_user'):
+            raise AccessError(_("Only internal users can create API keys"))
+
 class APIKeyShow(models.AbstractModel):
     _name = _description = 'res.users.apikeys.show'
 
+    # the field 'id' is necessary for the onchange that returns the value of 'key'
+    id = fields.Id()
     key = fields.Char(readonly=True)

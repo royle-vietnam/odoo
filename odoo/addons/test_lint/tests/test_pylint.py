@@ -7,7 +7,6 @@ try:
 except ImportError:
     pylint = None
 import subprocess
-from distutils.version import LooseVersion
 import os
 from os.path import join
 import sys
@@ -28,10 +27,12 @@ class TestPyLint(TransactionCase):
         'undefined-variable',
         'eval-used',
         'unreachable',
+        'function-redefined',
 
         # custom checkers
         'sql-injection',
         'gettext-variable',
+        'raise-unlink-override',
     ]
 
     BAD_FUNCTIONS = [
@@ -51,10 +52,10 @@ class TestPyLint(TransactionCase):
     def test_pylint(self):
         if pylint is None:
             self._skip_test('please install pylint')
-        required_pylint_version = LooseVersion('1.6.4')
+        required_pylint_version = tools.parse_version('1.6.4')
         if sys.version_info >= (3, 6):
-            required_pylint_version = LooseVersion('1.7.0')
-        if LooseVersion(getattr(pylint, '__version__', '0.0.1')) < required_pylint_version:
+            required_pylint_version = tools.parse_version('1.7.0')
+        if tools.parse_version(getattr(pylint, '__version__', '0.0.1')) < required_pylint_version:
             self._skip_test('please upgrade pylint to >= %s' % required_pylint_version)
 
         paths = [tools.config['root_path']]
@@ -69,7 +70,7 @@ class TestPyLint(TransactionCase):
             '--enable=%s' % ','.join(self.ENABLED_CODES),
             '--reports=n',
             "--msg-template='{msg} ({msg_id}) at {path}:{line}'",
-            '--load-plugins=pylint.extensions.bad_builtin,_odoo_checker_sql_injection,_odoo_checker_gettext',
+            '--load-plugins=pylint.extensions.bad_builtin,_odoo_checker_sql_injection,_odoo_checker_gettext,_odoo_checker_unlink_override',
             '--bad-functions=%s' % ','.join(self.BAD_FUNCTIONS),
             '--deprecated-modules=%s' % ','.join(self.BAD_MODULES)
         ]

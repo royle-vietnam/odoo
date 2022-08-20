@@ -7,6 +7,7 @@ from odoo.tests import tagged
 from odoo.tools import mute_logger
 
 
+@tagged('mail_performance', 'post_install', '-at_install')
 class TestMassMailPerformanceBase(TransactionCase):
 
     def setUp(self):
@@ -22,11 +23,21 @@ class TestMassMailPerformanceBase(TransactionCase):
             groups='base.group_user,mass_mailing.group_mass_mailing_user',
             name='Martial Marketing', signature='--\nMartial')
 
+        # setup mail gateway
+        self.alias_domain = 'example.com'
+        self.alias_catchall = 'catchall.test'
+        self.alias_bounce = 'bounce.test'
+        self.default_from = 'notifications'
+        self.env['ir.config_parameter'].set_param('mail.bounce.alias', self.alias_bounce)
+        self.env['ir.config_parameter'].set_param('mail.catchall.domain', self.alias_domain)
+        self.env['ir.config_parameter'].set_param('mail.catchall.alias', self.alias_catchall)
+        self.env['ir.config_parameter'].set_param('mail.default.from', self.default_from)
+
         # patch registry to simulate a ready environment
         self.patch(self.env.registry, 'ready', True)
 
 
-@tagged('mail_performance')
+@tagged('mail_performance', 'post_install', '-at_install')
 class TestMassMailPerformance(TestMassMailPerformanceBase):
 
     def setUp(self):
@@ -45,20 +56,20 @@ class TestMassMailPerformance(TestMassMailPerformanceBase):
             'name': 'Test',
             'subject': 'Test',
             'body_html': '<p>Hello <a role="button" href="https://www.example.com/foo/bar?baz=qux">quux</a><a role="button" href="/unsubscribe_from_list">Unsubscribe</a></p>',
-            'reply_to_mode': 'email',
+            'reply_to_mode': 'new',
             'mailing_model_id': self.ref('test_mass_mailing.model_mailing_performance'),
             'mailing_domain': [('id', 'in', self.mm_recs.ids)],
         })
 
-        # runbot needs +50 compared to local
-        with self.assertQueryCount(__system__=1714, marketing=1715):
+        # runbot needs +151 compared to local
+        with self.assertQueryCount(__system__=1671, marketing=1672):  # tmm 1520/1521
             mailing.action_send_mail()
 
         self.assertEqual(mailing.sent, 50)
         self.assertEqual(mailing.delivered, 50)
 
 
-@tagged('mail_performance')
+@tagged('mail_performance', 'post_install', '-at_install')
 class TestMassMailBlPerformance(TestMassMailPerformanceBase):
 
     def setUp(self):
@@ -85,13 +96,13 @@ class TestMassMailBlPerformance(TestMassMailPerformanceBase):
             'name': 'Test',
             'subject': 'Test',
             'body_html': '<p>Hello <a role="button" href="https://www.example.com/foo/bar?baz=qux">quux</a><a role="button" href="/unsubscribe_from_list">Unsubscribe</a></p>',
-            'reply_to_mode': 'email',
+            'reply_to_mode': 'new',
             'mailing_model_id': self.ref('test_mass_mailing.model_mailing_performance_blacklist'),
             'mailing_domain': [('id', 'in', self.mm_recs.ids)],
         })
 
-        # runbot needs +62 compared to local
-        with self.assertQueryCount(__system__=1993, marketing=1994):
+        # runbot needs +175 compared to local
+        with self.assertQueryCount(__system__=1961, marketing=1962):  # tmm 1786/1787
             mailing.action_send_mail()
 
         self.assertEqual(mailing.sent, 50)

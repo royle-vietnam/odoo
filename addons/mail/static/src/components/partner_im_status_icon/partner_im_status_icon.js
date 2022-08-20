@@ -1,28 +1,10 @@
-odoo.define('mail/static/src/components/partner_im_status_icon/partner_im_status_icon.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
-const { markEventHandled } = require('mail/static/src/utils/utils.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 
-class PartnerImStatusIcon extends Component {
-
-    /**
-     * @override
-     */
-    constructor(...args) {
-        super(...args);
-        useStore(props => {
-            const partner = this.env.models['mail.partner'].get(props.partnerLocalId);
-            return {
-                partner: partner ? partner.__state : undefined,
-                partnerRoot: this.env.messaging.partnerRoot
-                    ? this.env.messaging.partnerRoot.__state
-                    : undefined,
-            };
-        });
-    }
+export class PartnerImStatusIcon extends Component {
 
     //--------------------------------------------------------------------------
     // Public
@@ -32,7 +14,7 @@ class PartnerImStatusIcon extends Component {
      * @returns {mail.partner}
      */
     get partner() {
-        return this.env.models['mail.partner'].get(this.props.partnerLocalId);
+        return this.messaging && this.messaging.models['mail.partner'].get(this.props.partnerLocalId);
     }
 
     //--------------------------------------------------------------------------
@@ -47,7 +29,6 @@ class PartnerImStatusIcon extends Component {
         if (!this.props.hasOpenChat) {
             return;
         }
-        markEventHandled(ev, 'PartnerImStatusIcon.openChat');
         this.partner.openChat();
     }
 
@@ -70,6 +51,4 @@ Object.assign(PartnerImStatusIcon, {
     template: 'mail.PartnerImStatusIcon',
 });
 
-return PartnerImStatusIcon;
-
-});
+registerMessagingComponent(PartnerImStatusIcon);

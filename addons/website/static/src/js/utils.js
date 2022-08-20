@@ -4,7 +4,7 @@ odoo.define('website.utils', function (require) {
 var ajax = require('web.ajax');
 var core = require('web.core');
 
-var qweb = core.qweb;
+const { qweb, _t } = core;
 
 /**
  * Allows to load anchors from a page.
@@ -14,15 +14,20 @@ var qweb = core.qweb;
  */
 function loadAnchors(url) {
     return new Promise(function (resolve, reject) {
-        if (url !== window.location.pathname && url[0] !== '#') {
-            $.get(window.location.origin + url).then(resolve, reject);
-        } else {
+        if (url === window.location.pathname || url[0] === '#') {
             resolve(document.body.outerHTML);
+        } else if (url.length && !url.startsWith("http")) {
+            $.get(window.location.origin + url).then(resolve, reject);
+        } else { // avoid useless query
+            resolve();
         }
     }).then(function (response) {
         return _.map($(response).find('[id][data-anchor=true]'), function (el) {
             return '#' + el.id;
         });
+    }).catch(error => {
+        console.debug(error);
+        return [];
     });
 }
 
@@ -32,8 +37,9 @@ function loadAnchors(url) {
  * @param {ServicesMixin|Widget} self - an element capable to trigger an RPC
  * @param {jQuery} $input
  */
-function autocompleteWithPages(self, $input) {
+function autocompleteWithPages(self, $input, options) {
     $.widget("website.urlcomplete", $.ui.autocomplete, {
+        options: options || {},
         _create: function () {
             this._super();
             this.widget().menu("option", "items", "> :not(.ui-autocomplete-category)");
@@ -50,7 +56,7 @@ function autocompleteWithPages(self, $input) {
             });
         },
         _renderSeparator: function (ul, item) {
-            return $("<li class='ui-autocomplete-category font-weight-bold text-capitalize m-2'>")
+            return $("<li class='ui-autocomplete-category font-weight-bold text-capitalize p-2'>")
                    .append(`<div>${item.separator}</div>`)
                    .appendTo(ul);
         },
@@ -67,6 +73,9 @@ function autocompleteWithPages(self, $input) {
                 loadAnchors(request.term).then(function (anchors) {
                     response(anchors);
                 });
+            } else if (request.term.startsWith('http') || request.term.length === 0) {
+                // avoid useless call to /website/get_suggested_links
+                response();
             } else {
                 return self._rpc({
                     route: '/website/get_suggested_links',
@@ -88,8 +97,12 @@ function autocompleteWithPages(self, $input) {
                 });
             }
         },
-        close: function () {
+        select: function (ev, ui) {
+            // choose url in dropdown with arrow change ev.target.value without trigger_up
+            // so cannot check here if value has been updated
+            ev.target.value = ui.item.value;
             self.trigger_up('website_url_chosen');
+            ev.preventDefault();
         },
     });
 }
@@ -161,6 +174,8 @@ function prompt(options, _qweb) {
         field_name: '',
         'default': '', // dict notation for IE<9
         init: function () {},
+        btn_primary_title: _t('Create'),
+        btn_secondary_title: _t('Cancel'),
     }, options || {});
 
     var type = _.intersection(Object.keys(options), ['input', 'textarea', 'select']);
@@ -260,6 +275,95 @@ function sendRequest(route, params) {
     form.submit();
 }
 
+/**
+ * Converts a base64 SVG into a base64 PNG.
+ *
+ * @param {string|HTMLImageElement} src - an URL to a SVG or a *loaded* image
+ *      with such an URL. This allows the call to potentially be a bit more
+ *      efficient in that second case.
+ * @returns {Promise<string>} a base64 PNG (as result of a Promise)
+ */
+async function svgToPNG(src) {
+    function checkImg(imgEl) {
+        // Firefox does not support drawing SVG to canvas unless it has width
+        // and height attributes set on the root <svg>.
+        return (imgEl.naturalHeight !== 0);
+    }
+    function toPNGViaCanvas(imgEl) {
+        const canvas = document.createElement('canvas');
+        canvas.width = imgEl.width;
+        canvas.height = imgEl.height;
+        canvas.getContext('2d').drawImage(imgEl, 0, 0);
+        return canvas.toDataURL('image/png');
+    }
+
+    // In case we receive a loaded image and that this image is not problematic,
+    // we can convert it to PNG directly.
+    if (src instanceof HTMLImageElement) {
+        const loadedImgEl = src;
+        if (checkImg(loadedImgEl)) {
+            return toPNGViaCanvas(loadedImgEl);
+        }
+        src = loadedImgEl.src;
+    }
+
+    // At this point, we either did not receive a loaded image or the received
+    // loaded image is problematic => we have to do some asynchronous code.
+    return new Promise(resolve => {
+        const imgEl = new Image();
+        imgEl.onload = () => {
+            if (checkImg(imgEl)) {
+                resolve(imgEl);
+                return;
+            }
+
+            // Set arbitrary height on image and attach it to the DOM to force
+            // width computation.
+            imgEl.height = 1000;
+            imgEl.style.opacity = 0;
+            document.body.appendChild(imgEl);
+
+            const request = new XMLHttpRequest();
+            request.open('GET', imgEl.src, true);
+            request.onload = () => {
+                // Convert the data URI to a SVG element
+                const parser = new DOMParser();
+                const result = parser.parseFromString(request.responseText, 'text/xml');
+                const svgEl = result.getElementsByTagName("svg")[0];
+
+                // Add the attributes Firefox needs and remove the image from
+                // the DOM.
+                svgEl.setAttribute('width', imgEl.width);
+                svgEl.setAttribute('height', imgEl.height);
+                imgEl.remove();
+
+                // Convert the SVG element to a data URI
+                const svg64 = btoa(new XMLSerializer().serializeToString(svgEl));
+                const finalImg = new Image();
+                finalImg.onload = () => {
+                    resolve(finalImg);
+                };
+                finalImg.src = `data:image/svg+xml;base64,${svg64}`;
+            };
+            request.send();
+        };
+        imgEl.src = src;
+    }).then(loadedImgEl => toPNGViaCanvas(loadedImgEl));
+}
+
+/**
+ * Generates a Google Maps URL based on the given parameter.
+ *
+ * @param {DOMStringMap} dataset
+ * @returns {string} a Google Maps URL
+ */
+function generateGMapLink(dataset) {
+    return 'https://maps.google.com/maps?q=' + encodeURIComponent(dataset.mapAddress)
+            + '&t=' + encodeURIComponent(dataset.mapType)
+            + '&z=' + encodeURIComponent(dataset.mapZoom)
+            + '&ie=UTF8&iwloc=&output=embed';
+}
+
 return {
     loadAnchors: loadAnchors,
     autocompleteWithPages: autocompleteWithPages,
@@ -267,5 +371,7 @@ return {
     prompt: prompt,
     sendRequest: sendRequest,
     websiteDomain: websiteDomain,
+    svgToPNG: svgToPNG,
+    generateGMapLink: generateGMapLink,
 };
 });

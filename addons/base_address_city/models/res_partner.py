@@ -19,10 +19,15 @@ class Partner(models.Model):
             self.city = self.city_id.name
             self.zip = self.city_id.zipcode
             self.state_id = self.city_id.state_id
-        else:
+        elif self._origin:
             self.city = False
             self.zip = False
             self.state_id = False
+
+    @api.model
+    def _address_fields(self):
+        """Returns the list of address fields that are synced from the parent."""
+        return super(Partner, self)._address_fields() + ['city_id',]
 
     @api.model
     def _fields_view_get_address(self, arch):
@@ -35,12 +40,11 @@ class Partner(models.Model):
         replacement_xml = """
             <div>
                 <field name="country_enforce_cities" invisible="1"/>
-                <field name="parent_id" invisible="1"/>
                 <field name='city' placeholder="%(placeholder)s" class="o_address_city"
                     attrs="{
                         'invisible': [('country_enforce_cities', '=', True), '|', ('city_id', '!=', False), ('city', 'in', ['', False ])],
                         'readonly': [('type', '=', 'contact')%(parent_condition)s]
-                    }"
+                    }"%(required)s
                 />
                 <field name='city_id' placeholder="%(placeholder)s" string="%(placeholder)s" class="o_address_city"
                     context="{'default_country_id': country_id,
@@ -78,8 +82,12 @@ class Partner(models.Model):
         for city_node in doc.xpath("//field[@name='city']"):
             location = _arch_location(city_node)
             replacement_data['parent_condition'] = ''
+            replacement_data['required'] = ''
             if location['view_type'] == 'form' or not location['in_subview']:
                 replacement_data['parent_condition'] = ", ('parent_id', '!=', False)"
+            if 'required' in city_node.attrib:
+                existing_value = city_node.attrib.get('required')
+                replacement_data['required'] = f' required="{existing_value}"'
 
             replacement_formatted = replacement_xml % replacement_data
             for replace_node in etree.fromstring(replacement_formatted).getchildren():

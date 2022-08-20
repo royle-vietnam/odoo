@@ -3,29 +3,6 @@
     <data>
 
 <!-- Editor custom -->
-<template id="assets_editor" inherit_id="website.assets_editor" name="Forum Editor Assets">
-    <xpath expr="." position="inside">
-        <script type="text/javascript" src="/website_forum/static/src/js/tours/website_forum.js"/>
-        <script type="text/javascript" src="/website_forum/static/src/js/website_forum.editor.js"/>
-    </xpath>
-</template>
-
-<template id="assets_tests" name="Website Forum Assets Tests" inherit_id="web.assets_tests">
-    <xpath expr="." position="inside">
-        <script type="text/javascript" src="/website_forum/static/tests/tours/website_forum_question.js"></script>
-    </xpath>
-</template>
-
-<template id="assets_frontend" inherit_id="website.assets_frontend">
-    <xpath expr="link[last()]" position="after">
-        <link rel="stylesheet" type="text/scss" href="/website_forum/static/src/scss/website_forum.scss"/>
-    </xpath>
-    <xpath expr="script[last()]" position="after">
-        <script type="text/javascript" src="/website_forum/static/src/js/website_forum.js"/>
-        <script type="text/javascript" src="/website_forum/static/src/js/website_forum.share.js"/>
-    </xpath>
-</template>
-
 <!-- helper -->
 <template id="link_button">
     <form  t-attf-method="#{form_method or 'POST'}" t-att-action="url" t-attf-class="#{form_classes} #{not inDropdown and 'btn btn-sm border'}">
@@ -37,7 +14,7 @@
     </form>
 </template>
 
-<!-- website_forum.layout removes the access right check for summernote bundle -->
+<!-- website_forum.layout removes the access right check for wysiwyg bundle -->
 <template id="layout" inherit_id="website.layout" name="Forum Layout" primary="True">
     <xpath expr="//div[@id='wrapwrap']" position="before">
         <t t-set="pageName" t-value="'website_forum'"/>
@@ -74,8 +51,8 @@
                 <div class="col o_wprofile_email_validation_container mb16">
                     <t t-call="website_profile.email_validation_banner">
                         <t t-set="redirect_url" t-value="'/forum/%s' % forum.id"/>
-                        <t t-set="send_validation_email_message">Click here to send a verification email allowing you to participate to the forum.</t>
-                        <t t-set="additional_validated_email_message"> You may now participate to our forums.</t>
+                        <t t-set="send_validation_email_message">Click here to send a verification email allowing you to participate in the forum.</t>
+                        <t t-set="additional_validated_email_message"> You may now participate in our forums.</t>
                     </t>
                     <div class="row">
                         <div class="col">
@@ -113,7 +90,7 @@
                                     <li t-elif="tags" class="breadcrumb-item">All Tags</li>
                                 </ol>
                             </nav>
-                            <t t-raw="0"/>
+                            <t t-out="0"/>
                         </div>
                         <aside t-if="uid" class="d-none d-lg-flex justify-content-end col-auto">
                             <t t-call="website_forum.user_sidebar"/>
@@ -137,7 +114,7 @@
 <template id="forum_nav_header">
     <div class="navbar navbar-expand-sm navbar-light">
         <div class="container flex-wrap flex-md-nowrap">
-            <a t-if="back_button_url" class="btn btn-light border mr-2" t-attf-href="#{back_button_url}" title="Back">
+            <a t-if="back_button_url" class="btn btn-light border mr-2 o_back_button" title="Back">
                 <i class="fa fa-chevron-left mr-1"/>Back
             </a>
             <!-- Desktop -->
@@ -221,16 +198,16 @@
             </ul>
 
             <!-- 'Search Box' -->
-            <form id="o_wforum_search" class="form-inline collapse w-100 w-md-auto pt-2 pt-md-0 d-md-flex"
-                  role="search" t-attf-action="#{url_for('/forum/')}#{slug(forum)}#{tag and ('/tag/%s/questions' % slug(tag))}" method="get">
-                <t t-call="website.website_search_box">
-                    <t t-set="_classes" t-valuef="w-100"/>
-                </t>
-
+            <t t-call="website.website_search_box_input">
+                <t t-set="_classes" t-valuef="w-100 w-md-auto pt-2 pt-md-0 d-md-flex"/>
+                <t t-set="search_type" t-valuef="forums"/>
+                <t t-set="action" t-value="'/forum/%s%s' % (slug(forum), tag and ('/tag/%s/questions' % slug(tag)) or '')"/>
+                <t t-set="display_description" t-valuef="true"/>
+                <t t-set="display_detail" t-valuef="true"/>
                 <input t-if="filters" type="hidden" name="filters" t-att-value="filters"/>
                 <input t-if="my" type="hidden" name="my" t-att-value="my"/>
                 <input t-if="sorting" type="hidden" name="sorting" t-att-value="sorting"/>
-            </form>
+            </t>
         </div>
     </div>
 </template>
@@ -309,7 +286,7 @@
         </div>
     </div>
     <!--  Display post's content in moderation mode-->
-    <div><t t-raw="post_content"/></div>
+    <div><t t-out="post_content"/></div>
 </template>
 
 <template id="display_post">
@@ -561,7 +538,7 @@
             data-toggle="tooltip"
             data-trigger="hover"
             title="My profile">
-            <img class="o_forum_avatar rounded-circle mr-1" t-att-src="website.image_url(user, 'image_128', '30x30')" alt="Avatar"/>
+            <img class="o_forum_avatar rounded-circle mr-1" t-att-src="website.image_url(user, 'avatar_128', '30x30')" alt="Avatar"/>
             <div>
                 <h6 class="my-0" t-esc="user_id.name"/>
                 <small class="text-muted font-weight-bold"><t t-esc="user_id.karma"/>xp</small>
@@ -626,7 +603,7 @@
             </span>
             <a t-else="" class="nav-link rounded-pill text-reset" t-attf-href="/forum/#{slug(forum)}/flagged_queue">
                 <i class="fa fa-flag fa-fw"/> Flagged
-                <span t-attf-class="badge pull-right #{forum.count_flagged_posts > 0 and 'badge-danger' or 'badge-light'}" t-esc="forum.count_flagged_posts"/>
+                <span id="count_flagged_posts" t-attf-class="badge pull-right #{forum.count_flagged_posts > 0 and 'badge-danger' or 'badge-light'}" t-esc="forum.count_flagged_posts"/>
             </a>
         </t>
     </nav>
@@ -645,7 +622,7 @@
                     </span>
                     <span t-if="my" t-attf-class="w-100 w-md-auto mb-2 mb-md-0 border rounded pl-2 d-inline-flex align-items-center justify-content-between #{search and 'ml-md-2'}">
                         <div>
-                            <img t-if="uid" class="o_forum_avatar rounded-circle mr-1" t-att-src="website.image_url(user, 'image_128', '16x16')" alt="Avatar"/>
+                            <img t-if="uid" class="o_forum_avatar rounded-circle mr-1" t-att-src="website.image_url(user, 'avatar_128', '16x16')" alt="Avatar"/>
                             <span t-if="my == 'favourites'"> My <b>Favourites</b></span>
                             <span t-elif="my == 'followed'"> I'm <b>Following</b></span>
                             <span t-elif="my == 'mine'"> My <b>Posts</b></span>
@@ -761,7 +738,7 @@
             </div>
 
             <!-- No posts or search/filters result -->
-            <div t-if="question_count == 0" class="col">
+            <div t-if="question_count == 0 or original_search" class="col">
                 <div t-if="search or tag or (not no_filters)" class="alert alert-info">
                     <t t-set="_filters_str">
                         <t t-if="filters == 'unanswered'">unanswered</t>
@@ -773,14 +750,14 @@
                         <t t-if="my == 'followed'">in your followed list</t>
                         <t t-if="my == 'mine'">in your posts</t>
                     </t>
-                    <t t-set="_search_str"><t t-if="search">matching "<em class="font-weight-bold" t-esc="search"/>"</t></t>
+                    <t t-set="_search_str"><t t-if="search">matching "<em class="font-weight-bold" t-esc="original_search or search"/>"</t></t>
                     <t t-set="_search_and_tag_str"><t t-if="search and tag">&amp;nbsp;and&amp;nbsp;</t></t>
                     <t t-set="_tag_str"><t t-if="tag">using the <span class="badge badge-light" t-esc="tag.name"/> tag</t></t>
                     <t t-set="result_msg">
-                        Sorry, we could not find any <b>%s</b> result <b>
-                        %s</b> %s%s%s.
+                        Sorry, we could not find any <b>%s</b> result <b>%s</b> %s%s%s.
                     </t>
-                    <span t-raw="result_msg % (_filters_str.strip(), _my_str.strip(), _search_str.strip(), _search_and_tag_str.strip(), _tag_str.strip())"/>
+                    <span t-out="result_msg % (_filters_str.strip(), _my_str.strip(), _search_str.strip(), _search_and_tag_str.strip(), _tag_str.strip())"/>
+                    <span t-if="original_search">Showing results for <em class="font-weight-bold" t-esc="search"/> instead.</span>
                 </div>
 
                 <t t-elif="not tag and not search and no_filters">
@@ -801,7 +778,7 @@
                     Be the first one asking a question
                 </div>
 
-                <t t-if="search">
+                <t t-if="search and question_count == 0">
                     <h4>Search Tips</h4>
                     <ul>
                         <li>Check your spelling and try again</li>
@@ -997,7 +974,7 @@
 <!-- Edition: post an answer -->
 <template id="post_answer">
     <div class="d-flex align-items-center mt-5 mb-2">
-        <img t-if="uid" t-attf-class="o_forum_avatar rounded-circle mr-2" t-att-src="website.image_url(user, 'image_128', '24x24')" alt="Avatar"/>
+        <img t-if="uid" t-attf-class="o_forum_avatar rounded-circle mr-2" t-att-src="website.image_url(user, 'avatar_128', '24x24')" alt="Avatar"/>
         <h4 class="my-0">Your Answer</h4>
     </div>
     <t t-if="request.params.get('nocontent')">
@@ -1044,7 +1021,7 @@
             t-att-data-karma="forum.karma_downvote"
             t-att-data-can-downvote="can_downvote"
             aria-label="Negative vote" title="Negative vote"/>
-        <t t-raw="0"/>
+        <t t-out="0"/>
     </div>
 </template>
 
@@ -1414,7 +1391,7 @@
     <t t-set="display_info" t-value="show_name or show_date or show_karma"/>
     <t t-if="allow_biography and object.can_display_biography" t-set="bio_popover_data">
         <div class="d-flex o_wforum_bio_popover_wrap">
-            <img class="o_forum_avatar_big flex-shrink-0 mr-3" t-att-src="website.image_url(object.create_uid, 'image_128', '75x75')" alt="Avatar"/>
+            <img class="o_forum_avatar_big flex-shrink-0 mr-3" t-att-src="website.image_url(object.create_uid, 'avatar_128', '75x75')" alt="Avatar"/>
             <div>
                 <h5 class="o_wforum_bio_popover_name mb-0" t-field="object.create_uid" t-options='{"widget": "contact", "country_image": True, "fields": ["name", "country_id"]}'/>
 
@@ -1435,7 +1412,7 @@
             <span t-if="object_validable" class="o_wforum_author_box_check rounded-circle bg-success position-absolute">
                 <i class="fa fa-check fa-fw small text-white"/>
             </span>
-            <img t-attf-class="rounded-circle o_forum_avatar #{not display_info and 'shadow'}" t-att-src="website.image_url(object.create_uid, 'image_128', '40x40')" alt="Avatar"/>
+            <img t-attf-class="rounded-circle o_forum_avatar #{not display_info and 'shadow'}" t-att-src="website.image_url(object.create_uid, 'avatar_128', '40x40')" alt="Avatar"/>
         </a>
 
         <div t-if="show_name or show_date or show_karma" t-attf-class="d-flex #{compact and 'align-items-baseline ml-1' or 'flex-column justify-content-around ml-2'}">
@@ -1468,7 +1445,7 @@
                     <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
                     <input name="post_id" t-att-value="object.id" type="hidden" class="mt8"/>
                     <div class="d-flex w-100">
-                        <img class="d-none d-md-inline-block rounded-circle o_forum_avatar mr-3" t-att-src="website.image_url(user, 'image_128', '40x40')" alt="Avatar"/>
+                        <img class="d-none d-md-inline-block rounded-circle o_forum_avatar mr-3" t-att-src="website.image_url(user, 'avatar_128', '40x40')" alt="Avatar"/>
                         <div class="w-100">
                             <textarea name="comment" class="form-control mb-2" placeholder="Comment this post..."/>
                             <div>
@@ -1612,7 +1589,7 @@
                                 <a class="nav-link spam_menu" id="character-tab" data-toggle="tab" href="#spam_character" role="tab" aria-controls="spam_character" aria-selected="false">圾 Text</a>
                             </li>
                         </ul>
-                        <button type="button" class="close align-self-start" data-dismiss="modal"><span>&amp;times;</span></button>
+                        <button type="button" class="close align-self-start" data-dismiss="modal"><span aria-label="Close">×</span></button>
                     </div>
                     <div class="modal-body bg-100">
                         <div class="tab-content" id="o_tab_content_spam">
@@ -1624,7 +1601,7 @@
                                                 <div class="custom-control custom-checkbox">
                                                     <input type="checkbox" t-att-value="user.id" class="custom-control-input" t-attf-id="user_#{user.id}"/>
                                                     <label class="custom-control-label" t-attf-for="user_#{user.id}">
-                                                        <img class="d-inline img o_forum_avatar" t-att-src="website.image_url(user, 'image_128', '40x40')" alt="Avatar"/>
+                                                        <img class="d-inline img o_forum_avatar" t-att-src="website.image_url(user, 'avatar_128', '40x40')" alt="Avatar"/>
                                                         <span t-esc="user.name" class="d-inline"/>
                                                     </label>
                                                 </div>
@@ -1703,39 +1680,8 @@
         <attribute name="name"/>
         <attribute name="t-att-data-module-id"/>
         <attribute name="t-att-data-module-shortdesc"/>
-        <attribute name="groups">website.group_website_designer</attribute>
+        <attribute name="t-if">is_designer</attribute>
     </xpath>
-</template>
-
-<!-- Chatter templates -->
-<template id="forum_post_template_new_answer">
-    <p>A new answer on <t t-esc="object.name"/> has been posted. Click here to access the post :</p>
-    <p style="margin-left: 30px; margin-top: 10 px; margin-bottom: 10px;">
-        <a t-attf-href="/forum/#{slug(object.forum_id)}/#{slug(object)}"
-            style="padding: 5px 10px; font-size: 12px; line-height: 18px; color: #FFFFFF; border-color:#875A7B; text-decoration: none; display: inline-block; margin-bottom: 0px; font-weight: 400; text-align: center; vertical-align: middle; cursor: pointer; background-color: #875A7B; border: 1px solid #875A7B; border-radius:3px">
-            See post
-        </a>
-    </p>
-</template>
-
-<template id="forum_post_template_new_question">
-    <p>A new question <b t-esc="object.name" /> on <t t-esc="object.forum_id.name"/> has been posted. Click here to access the question :</p>
-    <p style="margin-left: 30px; margin-top: 10 px; margin-bottom: 10px;">
-        <a t-attf-href="/forum/#{slug(object.forum_id)}/#{slug(object)}"
-            style="padding: 5px 10px; font-size: 12px; line-height: 18px; color: #FFFFFF; border-color:#875A7B; text-decoration: none; display: inline-block; margin-bottom: 0px; font-weight: 400; text-align: center; vertical-align: middle; cursor: pointer;background-color: #875A7B; border: 1px solid #875A7B; border-radius:3px">
-            See question
-        </a>
-    </p>
-</template>
-
-<template id="forum_post_template_validation">
-    <p>A new question <b t-esc="object.name" /> on <t t-esc="object.forum_id.name"/> has been posted and require your validation. Click here to access the question :</p>
-    <p style="margin-left: 30px; margin-top: 10 px; margin-bottom: 10px;">
-        <a t-attf-href="/forum/#{slug(object.forum_id)}/#{slug(object)}"
-            style="padding: 5px 10px; font-size: 12px; line-height: 18px; color: #FFFFFF; border-color:#875A7B; text-decoration: none; display: inline-block; margin-bottom: 0px; font-weight: 400; text-align: center; vertical-align: middle; cursor: pointer;background-color: #875A7B; border: 1px solid #875A7B; border-radius:3px">
-            Validate question
-        </a>
-    </p>
 </template>
 
     </data>

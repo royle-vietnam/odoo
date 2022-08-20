@@ -26,12 +26,11 @@ class Populate(Command):
         opt = odoo.tools.config.parse_config(cmdargs)
         populate_models = opt.populate_models and set(opt.populate_models.split(','))
         population_size = opt.population_size
-        with odoo.api.Environment.manage():
-            dbname = odoo.tools.config['db_name']
-            registry = odoo.registry(dbname)
-            with registry.cursor() as cr:
-                env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
-                self.populate(env, population_size, populate_models)
+        dbname = odoo.tools.config['db_name']
+        registry = odoo.registry(dbname)
+        with registry.cursor() as cr:
+            env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
+            self.populate(env, population_size, populate_models)
 
 
     @classmethod
@@ -51,7 +50,8 @@ class Populate(Command):
                 env.cr.commit()
                 model_time = time.time() - t0
                 if model_time > 1:
-                    _logger.info('Populated database for model %s in %ss', model._name, model_time)
+                    _logger.info('Populated database for model %s (total: %fs) (average: %fms per record)',
+                                 model._name, model_time, model_time / len(registry.populated_models[model._name]) * 1000)
         except:
             _logger.exception('Something went wrong populating database')
         finally:

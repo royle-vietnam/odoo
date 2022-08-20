@@ -1,5 +1,7 @@
 odoo.define('point_of_sale.NumberPopup', function(require) {
     'use strict';
+    var core = require('web.core');
+    var _t = core._t;
 
     const { useState } = owl;
     const AbstractAwaitablePopup = require('point_of_sale.AbstractAwaitablePopup');
@@ -13,6 +15,7 @@ odoo.define('point_of_sale.NumberPopup', function(require) {
          * @param {Object} props
          * @param {Boolean} props.isPassword Show password popup.
          * @param {number|null} props.startingValue Starting value of the popup.
+         * @param {Boolean} props.isInputSelected Input is highlighted and will reset upon a change.
          *
          * Resolve to { confirmed, payload } when used with showPopup method.
          * @confirmed {Boolean}
@@ -24,9 +27,9 @@ odoo.define('point_of_sale.NumberPopup', function(require) {
             useListener('close-this-popup', this.cancel);
             let startingBuffer = '';
             if (typeof this.props.startingValue === 'number' && this.props.startingValue > 0) {
-                startingBuffer = this.props.startingValue.toString();
+                startingBuffer = this.props.startingValue.toString().replace('.', this.decimalSeparator);
             }
-            this.state = useState({ buffer: startingBuffer });
+            this.state = useState({ buffer: startingBuffer, toStartOver: this.props.isInputSelected });
             NumberBuffer.use({
                 nonKeyboardInputEvent: 'numpad-click-input',
                 triggerAtEnter: 'accept-input',
@@ -47,6 +50,11 @@ odoo.define('point_of_sale.NumberPopup', function(require) {
                 return this.state.buffer;
             }
         }
+        confirm(event) {
+            if (NumberBuffer.get()) {
+                super.confirm();
+            }
+        }
         sendInput(key) {
             this.trigger('numpad-click-input', { key });
         }
@@ -56,9 +64,9 @@ odoo.define('point_of_sale.NumberPopup', function(require) {
     }
     NumberPopup.template = 'NumberPopup';
     NumberPopup.defaultProps = {
-        confirmText: 'Ok',
-        cancelText: 'Cancel',
-        title: 'Confirm ?',
+        confirmText: _t('Ok'),
+        cancelText: _t('Cancel'),
+        title: _t('Confirm ?'),
         body: '',
         cheap: false,
         startingValue: null,

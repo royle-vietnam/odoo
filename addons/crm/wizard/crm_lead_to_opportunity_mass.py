@@ -50,8 +50,7 @@ class Lead2OpportunityMassConvert(models.TransientModel):
             user = convert.user_id or convert.user_ids and convert.user_ids[0] or self.env.user
             if convert.team_id and user in convert.team_id.member_ids | convert.team_id.user_id:
                 continue
-            team_domain = []
-            team = self.env['crm.team']._get_default_team_id(user_id=user.id, domain=team_domain)
+            team = self.env['crm.team']._get_default_team_id(user_id=user.id, domain=None)
             convert.team_id = team.id
 
     @api.depends('lead_tomerge_ids')
@@ -81,6 +80,8 @@ class Lead2OpportunityMassConvert(models.TransientModel):
     def action_mass_convert(self):
         self.ensure_one()
         if self.name == 'convert' and self.deduplicate:
+            # TDE CLEANME: still using active_ids from context
+            active_ids = self._context.get('active_ids', [])
             merged_lead_ids = set()
             remaining_lead_ids = set()
             for lead in self.lead_tomerge_ids:
@@ -94,10 +95,11 @@ class Lead2OpportunityMassConvert(models.TransientModel):
                         lead = duplicated_leads.merge_opportunity()
                         merged_lead_ids.update(duplicated_leads.ids)
                         remaining_lead_ids.add(lead.id)
-            active_ids = set(self._context.get('active_ids', {}))
-            active_ids = (active_ids - merged_lead_ids) | remaining_lead_ids
+            # rebuild list of lead IDS to convert, following given order
+            final_ids = [lead_id for lead_id in active_ids if lead_id not in merged_lead_ids]
+            final_ids += [lead_id for lead_id in remaining_lead_ids if lead_id not in final_ids]
 
-            self = self.with_context(active_ids=list(active_ids))  # only update active_ids when there are set
+            self = self.with_context(active_ids=final_ids)  # only update active_ids when there are set
         return self.action_apply()
 
     def _convert_handle_partner(self, lead, action, partner_id):

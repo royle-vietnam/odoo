@@ -3,6 +3,7 @@
 
 from datetime import datetime, timedelta
 import uuid
+import pytz
 
 from odoo import fields, models, api, _
 from odoo.addons.base.models.res_partner import _tz_get
@@ -30,10 +31,10 @@ class WebsiteVisitor(models.Model):
     _order = 'last_connection_datetime DESC'
 
     name = fields.Char('Name')
-    access_token = fields.Char(required=True, default=lambda x: uuid.uuid4().hex, index=True, copy=False, groups='base.group_website_publisher')
+    access_token = fields.Char(required=True, default=lambda x: uuid.uuid4().hex, index=False, copy=False, groups='website.group_website_publisher')
     active = fields.Boolean('Active', default=True)
     website_id = fields.Many2one('website', "Website", readonly=True)
-    partner_id = fields.Many2one('res.partner', string="Linked Partner", help="Partner of the last logged in user.")
+    partner_id = fields.Many2one('res.partner', string="Contact", help="Partner of the last logged in user.")
     partner_image = fields.Binary(related='partner_id.image_1920')
 
     # localisation and info
@@ -42,18 +43,18 @@ class WebsiteVisitor(models.Model):
     lang_id = fields.Many2one('res.lang', string='Language', help="Language from the website when visitor has been created")
     timezone = fields.Selection(_tz_get, string='Timezone')
     email = fields.Char(string='Email', compute='_compute_email_phone')
-    mobile = fields.Char(string='Mobile Phone', compute='_compute_email_phone')
+    mobile = fields.Char(string='Mobile', compute='_compute_email_phone')
 
     # Visit fields
-    visit_count = fields.Integer('Number of visits', default=1, readonly=True, help="A new visit is considered if last connection was more than 8 hours ago.")
+    visit_count = fields.Integer('# Visits', default=1, readonly=True, help="A new visit is considered if last connection was more than 8 hours ago.")
     website_track_ids = fields.One2many('website.track', 'visitor_id', string='Visited Pages History', readonly=True)
     visitor_page_count = fields.Integer('Page Views', compute="_compute_page_statistics", help="Total number of visits on tracked pages")
-    page_ids = fields.Many2many('website.page', string="Visited Pages", compute="_compute_page_statistics")
+    page_ids = fields.Many2many('website.page', string="Visited Pages", compute="_compute_page_statistics", groups="website.group_website_designer", search="_search_page_ids")
     page_count = fields.Integer('# Visited Pages', compute="_compute_page_statistics", help="Total number of tracked page visited")
     last_visited_page_id = fields.Many2one('website.page', string="Last Visited Page", compute="_compute_last_visited_page_id")
 
     # Time fields
-    create_date = fields.Datetime('First connection date', readonly=True)
+    create_date = fields.Datetime('First Connection', readonly=True)
     last_connection_datetime = fields.Datetime('Last Connection', default=fields.Datetime.now, help="Last page view date", readonly=True)
     time_since_last_action = fields.Char('Last action', compute="_compute_time_statistics", help='Time since last page view. E.g.: 2 minutes ago')
     is_connected = fields.Boolean('Is connected ?', compute='_compute_time_statistics', help='A visitor is considered as connected if his last page view was within the last 5 minutes.')
@@ -65,10 +66,13 @@ class WebsiteVisitor(models.Model):
 
     @api.depends('name')
     def name_get(self):
-        return [(
-            record.id,
-            (record.name or _('Website Visitor #%s', record.id))
-        ) for record in self]
+        res = []
+        for record in self:
+            res.append((
+                record.id,
+                record.name or _('Website Visitor #%s', record.id)
+            ))
+        return res
 
     @api.depends('partner_id.email_normalized', 'partner_id.mobile', 'partner_id.phone')
     def _compute_email_phone(self):
@@ -106,6 +110,11 @@ class WebsiteVisitor(models.Model):
             visitor.visitor_page_count = visitor_info['visitor_page_count']
             visitor.page_count = visitor_info['page_count']
 
+    def _search_page_ids(self, operator, value):
+        if operator not in ('like', 'ilike', 'not like', 'not ilike', '=like', '=ilike', '=', '!='):
+            raise ValueError(_('This operator is not supported'))
+        return [('website_track_ids.page_id.name', operator, value)]
+
     @api.depends('website_track_ids.page_id')
     def _compute_last_visited_page_id(self):
         results = self.env['website.track'].read_group([('visitor_id', 'in', self.ids)],
@@ -137,7 +146,7 @@ class WebsiteVisitor(models.Model):
     def action_send_mail(self):
         self.ensure_one()
         if not self._check_for_message_composer():
-            raise UserError(_("There is no contact and/or no email linked this visitor."))
+            raise UserError(_("There are no contact and/or no email linked to this visitor."))
         visitor_composer_ctx = self._prepare_message_composer_context()
         compose_form = self.env.ref('mail.email_compose_message_wizard_form', False)
         compose_ctx = dict(
@@ -185,7 +194,11 @@ class WebsiteVisitor(models.Model):
             # Cookie associated to a Partner
             visitor = Visitor
 
-        if force_create and not visitor:
+        if visitor and not visitor.timezone:
+            tz = self._get_visitor_timezone()
+            if tz:
+                visitor._update_visitor_timezone(tz)
+        if not visitor and force_create:
             visitor = self._create_visitor()
 
         return visitor
@@ -235,6 +248,11 @@ class WebsiteVisitor(models.Model):
             'country_id': country_id,
             'website_id': request.website.id,
         }
+
+        tz = self._get_visitor_timezone()
+        if tz:
+            vals['timezone'] = tz
+
         if not self.env.user._is_public():
             vals['partner_id'] = self.env.user.partner_id.id
             vals['name'] = self.env.user.partner_id.name
@@ -279,6 +297,18 @@ class WebsiteVisitor(models.Model):
         visitors_to_archive = self.env['website.visitor'].sudo().search([('last_connection_datetime', '<', deadline)])
         visitors_to_archive.write({'active': False})
 
+    def _update_visitor_timezone(self, timezone):
+        """ We need to do this part here to avoid concurrent updates error. """
+        query = """
+            UPDATE website_visitor
+            SET timezone = %s
+            WHERE id IN (
+                SELECT id FROM website_visitor WHERE id = %s
+                FOR NO KEY UPDATE SKIP LOCKED
+            )
+        """
+        self.env.cr.execute(query, (timezone, self.id))
+
     def _update_visitor_last_visit(self):
         """ We need to do this part here to avoid concurrent updates error. """
         try:
@@ -298,3 +328,12 @@ class WebsiteVisitor(models.Model):
                 self.env.cr.execute(query, (date_now, self.id), log_exceptions=False)
         except Exception:
             pass
+
+    def _get_visitor_timezone(self):
+        tz = request.httprequest.cookies.get('tz') if request else None
+        if tz in pytz.all_timezones:
+            return tz
+        elif not self.env.user._is_public():
+            return self.env.user.tz
+        else:
+            return None

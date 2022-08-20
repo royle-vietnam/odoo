@@ -13,12 +13,14 @@ const CountdownWidget = publicWidget.Widget.extend({
     selector: '.s_countdown',
     xmlDependencies: ['/website/static/src/snippets/s_countdown/000.xml'],
     disabledInEditableMode: false,
+    defaultColor: 'rgba(0, 0, 0, 255)',
 
     /**
      * @override
      */
     start: function () {
         this.$wrapper = this.$('.s_countdown_canvas_wrapper');
+        this.$wrapper.addClass('d-flex justify-content-center');
         this.hereBeforeTimerEnds = false;
         this.endAction = this.el.dataset.endAction;
         this.endTime = parseInt(this.el.dataset.endTime);
@@ -51,10 +53,10 @@ const CountdownWidget = publicWidget.Widget.extend({
      */
     destroy: function () {
         this.$('.s_countdown_end_redirect_message').remove();
-        this.$('canvas').remove();
         this.$('.s_countdown_end_message').addClass('d-none');
         this.$('.s_countdown_text_wrapper').remove();
         this.$('.s_countdown_canvas_wrapper').removeClass('d-none');
+        this.$('.s_countdown_canvas_flex').remove();
 
         clearInterval(this.setInterval);
         this._super(...arguments);
@@ -76,7 +78,7 @@ const CountdownWidget = publicWidget.Widget.extend({
         if (ColorpickerWidget.isCSSColor(color)) {
             return color;
         }
-        return weUtils.getCSSVariableValue(color);
+        return weUtils.getCSSVariableValue(color) || this.defaultColor;
     },
     /**
      * Gets the time difference in seconds between now and countdown due date.
@@ -109,7 +111,7 @@ const CountdownWidget = publicWidget.Widget.extend({
                     );
                 }
             }
-        } else if (this.endAction === 'message') {
+        } else if (this.endAction === 'message' || this.endAction === 'message_no_countdown') {
             this.$('.s_countdown_end_message').removeClass('d-none');
         }
     },
@@ -124,7 +126,7 @@ const CountdownWidget = publicWidget.Widget.extend({
         this.diff = [];
         if (this._isUnitVisible('d') && !(this.onlyOneUnit && delta < 86400)) {
             this.diff.push({
-                canvas: $('<canvas/>').appendTo(this.$wrapper)[0],
+                canvas: $('<div class="s_countdown_canvas_flex"><canvas class="w-100"/></div>').appendTo(this.$wrapper)[0],
                 // There is no logical number of unit (total) on which day units
                 //  can be compared against, so we use an arbitrary number.
                 total: 15,
@@ -134,7 +136,7 @@ const CountdownWidget = publicWidget.Widget.extend({
         }
         if (this._isUnitVisible('h') || (this.onlyOneUnit && delta < 86400 && delta > 3600)) {
             this.diff.push({
-                canvas: $('<canvas/>').appendTo(this.$wrapper)[0],
+                canvas: $('<div class="s_countdown_canvas_flex"><canvas class="w-100"/></div>').appendTo(this.$wrapper)[0],
                 total: 24,
                 label: _t("Hours"),
                 nbSeconds: 3600,
@@ -142,7 +144,7 @@ const CountdownWidget = publicWidget.Widget.extend({
         }
         if (this._isUnitVisible('m') || (this.onlyOneUnit && delta < 3600 && delta > 60)) {
             this.diff.push({
-                canvas: $('<canvas/>').appendTo(this.$wrapper)[0],
+                canvas: $('<div class="s_countdown_canvas_flex"><canvas class="w-100"/></div>').appendTo(this.$wrapper)[0],
                 total: 60,
                 label: _t("Minutes"),
                 nbSeconds: 60,
@@ -150,7 +152,7 @@ const CountdownWidget = publicWidget.Widget.extend({
         }
         if (this._isUnitVisible('s') || (this.onlyOneUnit && delta < 60)) {
             this.diff.push({
-                canvas: $('<canvas/>').appendTo(this.$wrapper)[0],
+                canvas: $('<div class="s_countdown_canvas_flex"><canvas class="w-100"/></div>').appendTo(this.$wrapper)[0],
                 total: 60,
                 label: _t("Seconds"),
                 nbSeconds: 1,
@@ -174,16 +176,17 @@ const CountdownWidget = publicWidget.Widget.extend({
      * @private
      */
     _render: function () {
+
         // If only one unit mode, restart widget on unit change to populate diff
         if (this.onlyOneUnit && this._getDelta() < this.diff[0].nbSeconds) {
-            this.$('canvas').remove();
+            this.$('.s_countdown_canvas_flex').remove();
             this._initTimeDiff();
         }
         this._updateTimeDiff();
 
         const hideCountdown = this.isFinished && !this.editableMode && this.$el.hasClass('hide-countdown');
         if (this.layout === 'text') {
-            this.$('canvas').addClass('d-none');
+            this.$('.s_countdown_canvas_flex').addClass('d-none');
             if (!this.$textWrapper) {
                 this.$textWrapper = $('<span/>').attr({
                     class: 's_countdown_text_wrapper d-none',
@@ -201,7 +204,7 @@ const CountdownWidget = publicWidget.Widget.extend({
             this.$('.s_countdown_text').text(countdownText.toLowerCase());
         } else {
             for (const val of this.diff) {
-                const canvas = val.canvas;
+                const canvas = val.canvas.querySelector('canvas');
                 const ctx = canvas.getContext("2d");
                 ctx.canvas.width = this.width;
                 ctx.canvas.height = this.size;
@@ -223,7 +226,7 @@ const CountdownWidget = publicWidget.Widget.extend({
                 if (this.progressBarStyle !== 'none') {
                     this._drawProgressBar(ctx, val.nb, val.total, this.progressBarWeight === 'thin');
                 }
-                $(canvas).toggleClass('mx-2', this.layout === 'boxes');
+                this.$('.s_countdown_canvas_flex').toggleClass('mx-1', this.layout === 'boxes');
             }
         }
 

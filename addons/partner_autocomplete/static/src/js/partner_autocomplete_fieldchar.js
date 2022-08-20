@@ -46,7 +46,7 @@ var FieldAutocomplete = FieldChar.extend(AutocompleteMixin, {
 
         if (this.mode === 'edit') {
             this.tagName = 'div';
-            this.className += ' dropdown open';
+            this.className += ' dropdown open w-100';
         }
 
         if (this.debounceSuggestions > 0) {
@@ -176,6 +176,10 @@ var FieldAutocomplete = FieldChar.extend(AutocompleteMixin, {
                 suggestions: this.suggestions,
             }));
             this.$dropdown.appendTo(this.$el);
+            // We need to make sure that the element containing the dropdown menu doesn't have the
+            // style attribute overflow: hidden, otherwise the dropdown menu will be hidden by it
+            this.$el.removeClass('o_text_overflow');
+            this.$input.addClass('o_text_overflow');
         }
     },
 

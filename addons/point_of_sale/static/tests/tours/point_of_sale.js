@@ -1,3 +1,4 @@
+/* global posmodel */
 odoo.define('point_of_sale.tour.pricelist', function (require) {
     "use strict";
 
@@ -44,9 +45,12 @@ odoo.define('point_of_sale.tour.pricelist', function (require) {
         };
     }
 
+    // The global posmodel is only present when the posmodel is instanciated
+    // So, wait for everythiong to be loaded
     var steps = [{ // Leave category displayed by default
         content: 'waiting for loading to finish',
-        trigger: 'body:not(:has(.loader))',
+        extra_trigger: 'body .pos:not(:has(.loader))', // Pos has finished loading
+        trigger: '.o_loading_indicator:not(.o_loading)', // WebClient has finished Loading
         run: function () {
             var product_wall_shelf = posmodel.db.search_product_in_category(0, 'Wall Shelf Unit')[0];
             var product_small_shelf = posmodel.db.search_product_in_category(0, 'Small Shelf')[0];
@@ -81,6 +85,8 @@ odoo.define('point_of_sale.tour.pricelist', function (require) {
                     $('.pos').addClass('done-testing');
                 });
         },
+    }, {
+        trigger: '.opening-cash-control .button:contains("Open session")',
     }];
 
     steps = steps.concat([{
@@ -420,11 +426,11 @@ odoo.define('point_of_sale.tour.acceptance', function (require) {
     steps = steps.concat(verify_order_total('5.52'));
 
     steps = steps.concat([{
-        content: "close the Point of Sale frontend",
+        content: "open closing the Point of Sale frontend popup",
         trigger: ".header-button",
     }, {
-        content: "confirm closing the frontend",
-        trigger: ".header-button.confirm",
+        content: "close the Point of Sale frontend",
+        trigger: ".close-pos-popup .button:contains('Continue Selling')",
         run: function() {}, //it's a check,
     }]);
 

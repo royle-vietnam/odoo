@@ -27,7 +27,8 @@ class HrEmployeeBase(models.AbstractModel):
     work_phone = fields.Char('Work Phone', compute="_compute_phones", store=True, readonly=False)
     mobile_phone = fields.Char('Work Mobile')
     work_email = fields.Char('Work Email')
-    work_location = fields.Char('Work Location')
+    work_location_id = fields.Many2one('hr.work.location', 'Work Location', compute="_compute_work_location_id", store=True, readonly=False,
+    domain="[('address_id', '=', address_id), '|', ('company_id', '=', False), ('company_id', '=', company_id)]")
     user_id = fields.Many2one('res.users')
     resource_id = fields.Many2one('resource.resource')
     resource_calendar_id = fields.Many2one('resource.calendar', domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]")
@@ -53,6 +54,14 @@ class HrEmployeeBase(models.AbstractModel):
         ('presence_absent', 'Absent'),
         ('presence_to_define', 'To define'),
         ('presence_undetermined', 'Undetermined')], compute='_compute_presence_icon')
+    employee_type = fields.Selection([
+        ('employee', 'Employee'),
+        ('student', 'Student'),
+        ('trainee', 'Trainee'),
+        ('contractor', 'Contractor'),
+        ('freelance', 'Freelancer'),
+        ], string='Employee Type', default='employee', required=True,
+        help="The employee type. Although the primary purpose may seem to categorize employees, this field has also an impact in the Contract History. Only Employee type is supposed to be under contract and will have a Contract History.")
 
     @api.depends('user_id.im_status')
     def _compute_presence_state(self):
@@ -62,12 +71,12 @@ class HrEmployeeBase(models.AbstractModel):
         """
         # Check on login
         check_login = literal_eval(self.env['ir.config_parameter'].sudo().get_param('hr.hr_presence_control_login', 'False'))
-        employee_to_check_working = self.filtered(lambda e: e.user_id.im_status)
+        employee_to_check_working = self.filtered(lambda e: e.user_id.im_status == 'offline')
         working_now_list = employee_to_check_working._get_employee_working_now()
         for employee in self:
             state = 'to_define'
             if check_login:
-                if employee.user_id.im_status == 'online' or employee.last_activity:
+                if employee.user_id.im_status == 'online':
                     state = 'present'
                 elif employee.user_id.im_status == 'offline' and employee.id not in working_now_list:
                     state = 'absent'
@@ -86,7 +95,7 @@ class HrEmployeeBase(models.AbstractModel):
                 last_activity_datetime = last_presence.replace(tzinfo=UTC).astimezone(timezone(tz)).replace(tzinfo=None)
                 employee.last_activity = last_activity_datetime.date()
                 if employee.last_activity == fields.Date.today():
-                    employee.last_activity_time = format_time(self.env, last_activity_datetime, time_format='short')
+                    employee.last_activity_time = format_time(self.env, last_presence, time_format='short')
                 else:
                     employee.last_activity_time = False
             else:
@@ -133,7 +142,7 @@ class HrEmployeeBase(models.AbstractModel):
         This method compute the state defining the display icon in the kanban view.
         It can be overriden to add other possibilities, like time off or attendances recordings.
         """
-        working_now_list = self._get_employee_working_now()
+        working_now_list = self.filtered(lambda e: e.hr_presence_state == 'present')._get_employee_working_now()
         for employee in self:
             if employee.hr_presence_state == 'present':
                 if employee.id in working_now_list:
@@ -154,11 +163,16 @@ class HrEmployeeBase(models.AbstractModel):
                     icon = 'presence_undetermined'
             employee.hr_icon_display = icon
 
+    @api.depends('address_id')
+    def _compute_work_location_id(self):
+        to_reset = self.filtered(lambda e: e.address_id != e.work_location_id.address_id)
+        to_reset.work_location_id = False
+
     @api.model
     def _get_employee_working_now(self):
         working_now = []
         # We loop over all the employee tz and the resource calendar_id to detect working hours in batch.
-        all_employee_tz = self.mapped('tz')
+        all_employee_tz = set(self.mapped('tz'))
         for tz in all_employee_tz:
             employee_ids = self.filtered(lambda e: e.tz == tz)
             resource_calendar_ids = employee_ids.mapped('resource_calendar_id')
@@ -170,7 +184,7 @@ class HrEmployeeBase(models.AbstractModel):
                 to_datetime = utc.localize(stop_dt).astimezone(timezone(tz or 'UTC'))
                 # Getting work interval of the first is working. Functions called on resource_calendar_id
                 # are waiting for singleton
-                work_interval = res_employee_ids[0].resource_calendar_id._work_intervals(from_datetime, to_datetime)
+                work_interval = res_employee_ids[0].resource_calendar_id._work_intervals_batch(from_datetime, to_datetime)[False]
                 # Employee that is not supposed to work have empty items.
                 if len(work_interval._items) > 0:
                     # The employees should be working now according to their work schedule

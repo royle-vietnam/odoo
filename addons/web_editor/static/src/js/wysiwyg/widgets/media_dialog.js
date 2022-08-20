@@ -39,6 +39,7 @@ var MediaDialog = Dialog.extend({
     init: function (parent, options, media) {
         var $media = $(media);
         media = $media[0];
+        this.media = media;
 
         options = _.extend({}, options);
         var onlyImages = options.onlyImages || this.multiImages || (media && ($media.parent().data('oeField') === 'image' || $media.parent().data('oeType') === 'image'));
@@ -50,14 +51,6 @@ var MediaDialog = Dialog.extend({
             title: _t("Select a Media"),
             save_text: _t("Add"),
         }, options));
-
-        this.trigger_up('getRecordInfo', {
-            recordInfo: options,
-            type: 'media',
-            callback: function (recordInfo) {
-                _.defaults(options, recordInfo);
-            },
-        });
 
         if (!options.noImages) {
             this.imageWidget = new MediaModules.ImageWidget(this, media, options);
@@ -83,6 +76,7 @@ var MediaDialog = Dialog.extend({
         } else {
             this.activeWidget = [this.imageWidget, this.documentWidget, this.videoWidget, this.iconWidget].find(w => !!w);
         }
+        this.initiallyActiveWidget = this.activeWidget;
     },
     /**
      * Adds the appropriate class to the current modal and appends the media
@@ -161,10 +155,20 @@ var MediaDialog = Dialog.extend({
         var _super = this._super;
         var args = arguments;
         return this.activeWidget.save().then(function (data) {
-            self._clearWidgets();
+            if (self.activeWidget !== self.initiallyActiveWidget) {
+                self._clearWidgets();
+            }
+            // Restore classes if the media was replaced (when changing type)
+            if (self.media !== data) {
+                var oldClasses = self.media && _.toArray(self.media.classList);
+                if (oldClasses) {
+                    data.className = _.union(_.toArray(data.classList), oldClasses).join(' ');
+                }
+            }
             self.final_data = data;
             _super.apply(self, args);
             $(data).trigger('content_changed');
+            $(data).trigger('replace_target', data);
         });
     },
 

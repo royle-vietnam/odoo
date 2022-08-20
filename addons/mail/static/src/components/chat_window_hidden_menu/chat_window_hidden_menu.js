@@ -1,31 +1,17 @@
-odoo.define('mail/static/src/components/chat_window_hidden_menu/chat_window_hidden_menu.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    ChatWindowHeader: require('mail/static/src/components/chat_window_header/chat_window_header.js'),
-};
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 const { useRef } = owl.hooks;
 
-class ChatWindowHiddenMenu extends Component {
+export class ChatWindowHiddenMenu extends Component {
 
     /**
      * @override
      */
     constructor(...args) {
         super(...args);
-        useStore(props => {
-            const chatWindowManager = this.env.messaging.chatWindowManager;
-            const device = this.env.messaging.device;
-            const locale = this.env.messaging.locale;
-            return {
-                chatWindowManager: chatWindowManager ? chatWindowManager.__state : undefined,
-                device: device ? device.__state : undefined,
-                localeTextDirection: locale ? locale.textDirection : undefined,
-            };
-        });
         this._onClickCaptureGlobal = this._onClickCaptureGlobal.bind(this);
         /**
          * Reference of the dropup list. Useful to auto-set max height based on
@@ -59,16 +45,19 @@ class ChatWindowHiddenMenu extends Component {
      * @private
      */
     _apply() {
+        if (!this.messaging) {
+            return;
+        }
         this._applyListHeight();
         this._applyOffset();
-        this._wasMenuOpen = this.env.messaging.chatWindowManager.isHiddenMenuOpen;
+        this._wasMenuOpen = this.messaging.chatWindowManager.isHiddenMenuOpen;
     }
 
     /**
      * @private
      */
     _applyListHeight() {
-        const device = this.env.messaging.device;
+        const device = this.messaging.device;
         const height = device.globalWindowInnerHeight / 2;
         this._listRef.el.style['max-height'] = `${height}px`;
     }
@@ -77,10 +66,10 @@ class ChatWindowHiddenMenu extends Component {
      * @private
      */
     _applyOffset() {
-        const textDirection = this.env.messaging.locale.textDirection;
+        const textDirection = this.messaging.locale.textDirection;
         const offsetFrom = textDirection === 'rtl' ? 'left' : 'right';
         const oppositeFrom = offsetFrom === 'right' ? 'left' : 'right';
-        const offset = this.env.messaging.chatWindowManager.visual.hidden.offset;
+        const offset = this.messaging.chatWindowManager.visual.hidden.offset;
         this.el.style[offsetFrom] = `${offset}px`;
         this.el.style[oppositeFrom] = 'auto';
     }
@@ -97,10 +86,10 @@ class ChatWindowHiddenMenu extends Component {
      * @param {MouseEvent} ev
      */
     _onClickCaptureGlobal(ev) {
-        if (this.el.contains(ev.target)) {
+        if (!this.el || this.el.contains(ev.target)) {
             return;
         }
-        this.env.messaging.chatWindowManager.closeHiddenMenu();
+        this.messaging.chatWindowManager.closeHiddenMenu();
     }
 
     /**
@@ -109,9 +98,9 @@ class ChatWindowHiddenMenu extends Component {
      */
     _onClickToggle(ev) {
         if (this._wasMenuOpen) {
-            this.env.messaging.chatWindowManager.closeHiddenMenu();
+            this.messaging.chatWindowManager.closeHiddenMenu();
         } else {
-            this.env.messaging.chatWindowManager.openHiddenMenu();
+            this.messaging.chatWindowManager.openHiddenMenu();
         }
     }
 
@@ -124,17 +113,14 @@ class ChatWindowHiddenMenu extends Component {
     _onClickedChatWindow(ev) {
         const chatWindow = ev.detail.chatWindow;
         chatWindow.makeActive();
-        this.env.messaging.chatWindowManager.closeHiddenMenu();
+        this.messaging.chatWindowManager.closeHiddenMenu();
     }
 
 }
 
 Object.assign(ChatWindowHiddenMenu, {
-    components,
     props: {},
     template: 'mail.ChatWindowHiddenMenu',
 });
 
-return ChatWindowHiddenMenu;
-
-});
+registerMessagingComponent(ChatWindowHiddenMenu);

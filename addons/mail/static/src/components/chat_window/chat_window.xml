@@ -2,14 +2,14 @@
 <templates xml:space="preserve">
 
     <t t-name="mail.ChatWindow" owl="1">
-        <div class="o_ChatWindow" tabindex="0" t-att-data-visible-index="chatWindow ? chatWindow.visibleIndex : undefined"
+        <div class="o_ChatWindow bg-white" tabindex="0" t-att-data-visible-index="chatWindow ? chatWindow.visibleIndex : undefined"
             t-att-class="{
                 'o-focused': chatWindow and chatWindow.isFocused,
                 'o-folded': chatWindow and chatWindow.isFolded,
                 'o-fullscreen': props.isFullscreen,
-                'o-mobile': env.messaging.device.isMobile,
+                'o-mobile': messaging and messaging.device.isMobile,
                 'o-new-message': chatWindow and !chatWindow.thread,
-            }" t-on-click="_onClick" t-on-keydown="_onKeydown" t-on-focusout="_onFocusout" t-att-data-chat-window-local-id="chatWindow ? chatWindow.localId : undefined" t-att-data-thread-local-id="chatWindow ? (chatWindow.thread ? chatWindow.thread.localId : '') : undefined"
+            }" t-on-keydown="_onKeydown" t-on-focusout="_onFocusout" t-att-data-chat-window-local-id="chatWindow ? chatWindow.localId : undefined" t-att-data-thread-local-id="chatWindow ? (chatWindow.thread ? chatWindow.thread.localId : '') : undefined"
         >
             <t t-if="chatWindow">
                 <ChatWindowHeader
@@ -20,14 +20,17 @@
                     t-on-o-clicked="_onClickedHeader"
                     t-ref="header"
                 />
+                <t t-if="chatWindow.thread and chatWindow.thread.hasMemberListFeature and chatWindow.isMemberListOpened">
+                    <ChannelMemberList channelLocalId="chatWindow.thread.localId" class="bg-white"/>
+                </t>
+                <t t-if="chatWindow.channelInvitationForm">
+                    <ChannelInvitationForm class="o_ChatWindow_channelInvitationForm" localId="chatWindow.channelInvitationForm.localId"/>
+                </t>
                 <t t-if="chatWindow.threadView">
                     <ThreadView
                         class="o_ChatWindow_thread"
-                        composerAttachmentsDetailsMode="'card'"
-                        hasComposer="chatWindow.thread.model !== 'mail.box' and (!chatWindow.thread.mass_mailing or env.messaging.device.isMobile)"
                         hasComposerCurrentPartnerAvatar="false"
-                        hasComposerSendButton="env.messaging.device.isMobile"
-                        hasSquashCloseMessages="chatWindow.thread.model !== 'mail.box'"
+                        hasComposerSendButton="messaging.device.isMobile"
                         threadViewLocalId="chatWindow.threadView.localId"
                         t-on-focusin="_onFocusinThread"
                         t-ref="thread"
@@ -40,10 +43,10 @@
                         </span>
                         <AutocompleteInput
                             class="o_ChatWindow_newMessageFormInput"
-                            isHtml="true"
                             placeholder="newMessageFormInputPlaceholder"
                             select="_onAutocompleteSelect"
                             source="_onAutocompleteSource"
+                            t-on-focusin="chatWindow.onFocusInNewMessageFormInput"
                             t-ref="input"
                         />
                     </div>

@@ -1,12 +1,11 @@
-odoo.define('mail/static/src/components/follow_button/follow_button.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 const { useState } = owl.hooks;
 
-class FollowButton extends Component {
+export class FollowButton extends Component {
     /**
      * @override
      */
@@ -18,12 +17,6 @@ class FollowButton extends Component {
              */
             isUnfollowButtonHighlighted: false,
         });
-        useStore(props => {
-            const thread = this.env.models['mail.thread'].get(props.threadLocalId);
-            return {
-                thread: thread ? thread.__state : undefined,
-            };
-        });
     }
 
     //--------------------------------------------------------------------------
@@ -34,7 +27,7 @@ class FollowButton extends Component {
      * @return {mail.thread}
      */
     get thread() {
-        return this.env.models['mail.thread'].get(this.props.threadLocalId);
+        return this.messaging && this.messaging.models['mail.thread'].get(this.props.threadLocalId);
     }
 
     //--------------------------------------------------------------------------
@@ -53,8 +46,9 @@ class FollowButton extends Component {
      * @private
      * @param {MouseEvent} ev
      */
-    _onClickUnfollow(ev) {
-        this.thread.unfollow();
+    async _onClickUnfollow(ev) {
+        await this.thread.unfollow();
+        this.trigger('reload', { fieldNames: ['message_follower_ids'], keepChanges: true });
     }
 
     /**
@@ -86,6 +80,4 @@ Object.assign(FollowButton, {
     template: 'mail.FollowButton',
 });
 
-return FollowButton;
-
-});
+registerMessagingComponent(FollowButton);

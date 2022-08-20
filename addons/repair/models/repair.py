@@ -3,9 +3,11 @@
 from collections import defaultdict
 from random import randint
 
+from markupsafe import Markup
+
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError, ValidationError
-from odoo.tools import float_compare
+from odoo.tools import float_compare, is_html_empty
 
 
 class StockMove(models.Model):
@@ -18,13 +20,14 @@ class Repair(models.Model):
     _name = 'repair.order'
     _description = 'Repair Order'
     _inherit = ['mail.thread', 'mail.activity.mixin']
-    _order = 'create_date desc'
+    _order = 'priority desc, create_date desc'
 
     name = fields.Char(
         'Repair Reference',
-        default='/',
+        default='New',
         copy=False, required=True,
-        states={'confirmed': [('readonly', True)]})
+        readonly=True)
+    description = fields.Char('Repair Description')
     product_id = fields.Many2one(
         'product.product', string='Product to Repair',
         domain="[('type', 'in', ['product', 'consu']), '|', ('company_id', '=', company_id), ('company_id', '=', False)]",
@@ -49,19 +52,20 @@ class Repair(models.Model):
     state = fields.Selection([
         ('draft', 'Quotation'),
         ('confirmed', 'Confirmed'),
-        ('under_repair', 'Under Repair'),
         ('ready', 'Ready to Repair'),
+        ('under_repair', 'Under Repair'),
         ('2binvoiced', 'To be Invoiced'),
-        ('invoice_except', 'Invoice Exception'),
         ('done', 'Repaired'),
         ('cancel', 'Cancelled')], string='Status',
         copy=False, default='draft', readonly=True, tracking=True,
         help="* The \'Draft\' status is used when a user is encoding a new and unconfirmed repair order.\n"
              "* The \'Confirmed\' status is used when a user confirms the repair order.\n"
              "* The \'Ready to Repair\' status is used to start to repairing, user can start repairing only after repair order is confirmed.\n"
+             "* The \'Under Repair\' status is used when the repair is ongoing.\n"
              "* The \'To be Invoiced\' status is used to generate the invoice before or after repairing done.\n"
              "* The \'Done\' status is set when repairing is completed.\n"
              "* The \'Cancelled\' status is used when user cancel repair order.")
+    schedule_date = fields.Date("Scheduled Date")
     location_id = fields.Many2one(
         'stock.location', 'Location',
         index=True, readonly=True, required=True, check_company=True,
@@ -74,7 +78,7 @@ class Repair(models.Model):
     guarantee_limit = fields.Date('Warranty Expiration', states={'confirmed': [('readonly', True)]})
     operations = fields.One2many(
         'repair.line', 'repair_id', 'Parts',
-        copy=True, readonly=True, states={'draft': [('readonly', False)]})
+        copy=True)
     pricelist_id = fields.Many2one(
         'product.pricelist', 'Pricelist',
         default=lambda self: self.env['product.pricelist'].search([('company_id', 'in', [self.env.company.id, False])], limit=1).id,
@@ -98,14 +102,15 @@ class Repair(models.Model):
         help="Move created by the repair order")
     fees_lines = fields.One2many(
         'repair.fee', 'repair_id', 'Operations',
-        copy=True, readonly=True, states={'draft': [('readonly', False)]})
-    internal_notes = fields.Text('Internal Notes')
-    quotation_notes = fields.Text('Quotation Notes')
+        copy=True, readonly=False)
+    internal_notes = fields.Html('Internal Notes')
+    quotation_notes = fields.Html('Quotation Notes')
     user_id = fields.Many2one('res.users', string="Responsible", default=lambda self: self.env.user, check_company=True)
     company_id = fields.Many2one(
         'res.company', 'Company',
         readonly=True, required=True, index=True,
         default=lambda self: self.env.company)
+    sale_order_id = fields.Many2one('sale.order', 'Sale Order', copy=False, help="Sale Order from which the product to be repaired comes from.")
     tag_ids = fields.Many2many('repair.tags', string="Tags")
     invoiced = fields.Boolean('Invoiced', copy=False, readonly=True)
     repaired = fields.Boolean('Repaired', copy=False, readonly=True)
@@ -114,6 +119,7 @@ class Repair(models.Model):
     amount_total = fields.Float('Total', compute='_amount_total', store=True)
     tracking = fields.Selection(string='Product Tracking', related="product_id.tracking", readonly=False)
     invoice_state = fields.Selection(string='Invoice State', related='invoice_id.state')
+    priority = fields.Selection([('0', 'Normal'), ('1', 'Urgent')], default='0', string="Priority", help="Important repair order")
 
     @api.depends('partner_id')
     def _compute_default_address_id(self):
@@ -126,7 +132,8 @@ class Repair(models.Model):
         for order in self:
             total = sum(operation.price_subtotal for operation in order.operations)
             total += sum(fee.price_subtotal for fee in order.fees_lines)
-            order.amount_untaxed = order.pricelist_id.currency_id.round(total)
+            currency = order.pricelist_id.currency_id or self.env.company.currency_id
+            order.amount_untaxed = currency.round(total)
 
     @api.depends('operations.price_unit', 'operations.product_uom_qty', 'operations.product_id',
                  'fees_lines.price_unit', 'fees_lines.product_uom_qty', 'fees_lines.product_id',
@@ -134,14 +141,15 @@ class Repair(models.Model):
     def _amount_tax(self):
         for order in self:
             val = 0.0
+            currency = order.pricelist_id.currency_id or self.env.company.currency_id
             for operation in order.operations:
                 if operation.tax_id:
-                    tax_calculate = operation.tax_id.compute_all(operation.price_unit, order.pricelist_id.currency_id, operation.product_uom_qty, operation.product_id, order.partner_id)
+                    tax_calculate = operation.tax_id.compute_all(operation.price_unit, currency, operation.product_uom_qty, operation.product_id, order.partner_id)
                     for c in tax_calculate['taxes']:
                         val += c['amount']
             for fee in order.fees_lines:
                 if fee.tax_id:
-                    tax_calculate = fee.tax_id.compute_all(fee.price_unit, order.pricelist_id.currency_id, fee.product_uom_qty, fee.product_id, order.partner_id)
+                    tax_calculate = fee.tax_id.compute_all(fee.price_unit, currency, fee.product_uom_qty, fee.product_id, order.partner_id)
                     for c in tax_calculate['taxes']:
                         val += c['amount']
             order.amount_tax = val
@@ -149,7 +157,8 @@ class Repair(models.Model):
     @api.depends('amount_untaxed', 'amount_tax')
     def _amount_total(self):
         for order in self:
-            order.amount_total = order.pricelist_id.currency_id.round(order.amount_untaxed + order.amount_tax)
+            currency = order.pricelist_id.currency_id or self.env.company.currency_id
+            order.amount_total = currency.round(order.amount_untaxed + order.amount_tax)
 
     _sql_constraints = [
         ('name', 'unique (name)', 'The name of the Repair Order must be unique!'),
@@ -191,27 +200,24 @@ class Repair(models.Model):
     @api.onchange('company_id')
     def _onchange_company_id(self):
         if self.company_id:
-            warehouse = self.env['stock.warehouse'].search([('company_id', '=', self.company_id.id)], limit=1)
-            self.location_id = warehouse.lot_stock_id
+            if self.location_id.company_id != self.company_id:
+                warehouse = self.env['stock.warehouse'].search([('company_id', '=', self.company_id.id)], limit=1)
+                self.location_id = warehouse.lot_stock_id
         else:
             self.location_id = False
 
-    def unlink(self):
+    @api.ondelete(at_uninstall=False)
+    def _unlink_except_confirmed(self):
         for order in self:
+            if order.invoice_id and order.invoice_id.posted_before:
+                raise UserError(_('You can not delete a repair order which is linked to an invoice which has been posted once.'))
             if order.state not in ('draft', 'cancel'):
                 raise UserError(_('You can not delete a repair order once it has been confirmed. You must first cancel it.'))
-            if order.state == 'cancel' and order.invoice_id and order.invoice_id.posted_before:
-                raise UserError(_('You can not delete a repair order which is linked to an invoice which has been posted once.'))
-        return super().unlink()
 
     @api.model
     def create(self, vals):
-        # To avoid consuming a sequence number when clicking on 'Create', we preprend it if the
-        # the name starts with '/'.
-        vals['name'] = vals.get('name') or '/'
-        if vals['name'].startswith('/'):
-            vals['name'] = (self.env['ir.sequence'].next_by_code('repair.order') or '/') + vals['name']
-            vals['name'] = vals['name'][:-1] if vals['name'].endswith('/') and vals['name'] != '/' else vals['name']
+        # We generate a standard reference
+        vals['name'] = self.env['ir.sequence'].next_by_code('repair.order') or '/'
         return super(Repair, self).create(vals)
 
     def button_dummy(self):
@@ -330,11 +336,11 @@ class Repair(models.Model):
             currency = repair.pricelist_id.currency_id
             company = repair.env.company
 
-            journal = repair.env['account.move'].with_context(type='out_invoice')._get_default_journal()
+            journal = repair.env['account.move'].with_context(move_type='out_invoice')._get_default_journal()
             if not journal:
                 raise UserError(_('Please define an accounting sales journal for the company %s (%s).') % (company.name, company.id))
 
-            if (partner_invoice.id, currency.id) not in grouped_invoices_vals:
+            if (partner_invoice.id, currency.id, company.id) not in grouped_invoices_vals:
                 grouped_invoices_vals[(partner_invoice.id, currency.id, company.id)] = []
             current_invoices_list = grouped_invoices_vals[(partner_invoice.id, currency.id, company.id)]
 
@@ -345,8 +351,7 @@ class Repair(models.Model):
                     'partner_id': partner_invoice.id,
                     'partner_shipping_id': repair.address_id.id,
                     'currency_id': currency.id,
-                    'narration': narration,
-                    'line_ids': [],
+                    'narration': narration if not is_html_empty(narration) else '',
                     'invoice_origin': repair.name,
                     'repair_ids': [(4, repair.id)],
                     'invoice_line_ids': [],
@@ -360,10 +365,11 @@ class Repair(models.Model):
                 invoice_vals = current_invoices_list[0]
                 invoice_vals['invoice_origin'] += ', ' + repair.name
                 invoice_vals['repair_ids'].append((4, repair.id))
-                if not invoice_vals['narration']:
-                    invoice_vals['narration'] = narration
-                else:
-                    invoice_vals['narration'] += '\n' + narration
+                if not is_html_empty(narration):
+                    if  is_html_empty(invoice_vals['narration']):
+                        invoice_vals['narration'] = narration
+                    else:
+                        invoice_vals['narration'] += Markup('<br/>') + narration
 
             # Create invoice lines from operations.
             for operation in repair.operations.filtered(lambda op: op.type == 'add'):
@@ -372,7 +378,7 @@ class Repair(models.Model):
                 else:
                     name = operation.name
 
-                account = operation.product_id.product_tmpl_id._get_product_accounts()['income']
+                account = operation.product_id.product_tmpl_id.get_product_accounts(fiscal_pos=fpos)['income']
                 if not account:
                     raise UserError(_('No account defined for product "%s".', operation.product_id.name))
 
@@ -414,7 +420,7 @@ class Repair(models.Model):
                 if not fee.product_id:
                     raise UserError(_('No product defined on fees.'))
 
-                account = fee.product_id.product_tmpl_id._get_product_accounts()['income']
+                account = fee.product_id.product_tmpl_id.get_product_accounts(fiscal_pos=fpos)['income']
                 if not account:
                     raise UserError(_('No account defined for product "%s".', fee.product_id.name))
 
@@ -496,6 +502,7 @@ class Repair(models.Model):
         """
         if self.filtered(lambda repair: repair.state != 'under_repair'):
             raise UserError(_("Repair must be under repair in order to end reparation."))
+        self._check_product_tracking()
         for repair in self:
             repair.write({'repaired': True})
             vals = {'state': 'done'}
@@ -596,6 +603,15 @@ class Repair(models.Model):
             res[repair.id] = move.id
         return res
 
+    def _check_product_tracking(self):
+        invalid_lines = self.operations.filtered(lambda x: x.tracking != 'none' and not x.lot_id)
+        if invalid_lines:
+            products = invalid_lines.product_id
+            raise ValidationError(_(
+                "Serial number is required for operation lines with products: %s",
+                ", ".join(products.mapped('display_name')),
+            ))
+
 
 class RepairLine(models.Model):
     _name = 'repair.line'
@@ -618,6 +634,7 @@ class RepairLine(models.Model):
     invoiced = fields.Boolean('Invoiced', copy=False, readonly=True)
     price_unit = fields.Float('Unit Price', required=True, digits='Product Price')
     price_subtotal = fields.Float('Subtotal', compute='_compute_price_subtotal', store=True, digits=0)
+    price_total = fields.Float('Total', compute='_compute_price_total', compute_sudo=True, digits=0)
     tax_id = fields.Many2many(
         'account.tax', 'repair_operation_line_tax', 'repair_operation_line_id', 'tax_id', 'Taxes',
         domain="[('type_tax_use','=','sale'), ('company_id', '=', company_id)]", check_company=True)
@@ -650,17 +667,19 @@ class RepairLine(models.Model):
         ('cancel', 'Cancelled')], 'Status', default='draft',
         copy=False, readonly=True, required=True,
         help='The status of a repair line is set automatically to the one of the linked repair order.')
-
-    @api.constrains('lot_id', 'product_id')
-    def constrain_lot_id(self):
-        for line in self.filtered(lambda x: x.product_id.tracking != 'none' and not x.lot_id):
-            raise ValidationError(_("Serial number is required for operation line with product '%s'") % (line.product_id.name))
+    tracking = fields.Selection(string='Product Tracking', related="product_id.tracking")
 
     @api.depends('price_unit', 'repair_id', 'product_uom_qty', 'product_id', 'repair_id.invoice_method')
     def _compute_price_subtotal(self):
         for line in self:
             taxes = line.tax_id.compute_all(line.price_unit, line.repair_id.pricelist_id.currency_id, line.product_uom_qty, line.product_id, line.repair_id.partner_id)
             line.price_subtotal = taxes['total_excluded']
+
+    @api.depends('price_unit', 'repair_id', 'product_uom_qty', 'product_id', 'tax_id', 'repair_id.invoice_method')
+    def _compute_price_total(self):
+        for line in self:
+            taxes = line.tax_id.compute_all(line.price_unit, line.repair_id.pricelist_id.currency_id, line.product_uom_qty, line.product_id, line.repair_id.partner_id)
+            line.price_total = taxes['total_included']
 
     @api.onchange('type')
     def onchange_operation_type(self):
@@ -682,7 +701,7 @@ class RepairLine(models.Model):
         else:
             self.price_unit = 0.0
             self.tax_id = False
-            self.location_id = self.env['stock.location'].search([('usage', '=', 'production')], limit=1).id
+            self.location_id = self.env['stock.location'].search([('usage', '=', 'production'), ('company_id', '=', self.repair_id.company_id.id)], limit=1).id
             self.location_dest_id = self.env['stock.location'].search([('scrap_location', '=', True), ('company_id', 'in', [self.repair_id.company_id.id, False])], limit=1).id
 
     @api.onchange('repair_id', 'product_id', 'product_uom_qty')
@@ -707,7 +726,8 @@ class RepairLine(models.Model):
         if self.type != 'remove':
             if partner:
                 fpos = self.env['account.fiscal.position'].get_fiscal_position(partner_invoice.id, delivery_id=self.repair_id.address_id.id)
-                self.tax_id = fpos.map_tax(self.product_id.taxes_id, self.product_id, partner)
+                taxes = self.product_id.taxes_id.filtered(lambda x: x.company_id == self.repair_id.company_id)
+                self.tax_id = fpos.map_tax(taxes)
             warning = False
             pricelist = self.repair_id.pricelist_id
             if not pricelist:
@@ -749,12 +769,13 @@ class RepairFee(models.Model):
     name = fields.Text('Description', index=True, required=True)
     product_id = fields.Many2one(
         'product.product', 'Product', check_company=True,
-        domain="[('type', 'in', ['product', 'consu']), '|', ('company_id', '=', company_id), ('company_id', '=', False)]")
+        domain="[('type', '=', 'service'), '|', ('company_id', '=', company_id), ('company_id', '=', False)]")
     product_uom_qty = fields.Float('Quantity', digits='Product Unit of Measure', required=True, default=1.0)
     price_unit = fields.Float('Unit Price', required=True, digits='Product Price')
     product_uom = fields.Many2one('uom.uom', 'Product Unit of Measure', required=True, domain="[('category_id', '=', product_uom_category_id)]")
     product_uom_category_id = fields.Many2one(related='product_id.uom_id.category_id')
     price_subtotal = fields.Float('Subtotal', compute='_compute_price_subtotal', store=True, digits=0)
+    price_total = fields.Float('Total', compute='_compute_price_total', compute_sudo=True, digits=0)
     tax_id = fields.Many2many(
         'account.tax', 'repair_fee_line_tax', 'repair_fee_line_id', 'tax_id', 'Taxes',
         domain="[('type_tax_use','=','sale'), ('company_id', '=', company_id)]", check_company=True)
@@ -766,6 +787,12 @@ class RepairFee(models.Model):
         for fee in self:
             taxes = fee.tax_id.compute_all(fee.price_unit, fee.repair_id.pricelist_id.currency_id, fee.product_uom_qty, fee.product_id, fee.repair_id.partner_id)
             fee.price_subtotal = taxes['total_excluded']
+
+    @api.depends('price_unit', 'repair_id', 'product_uom_qty', 'product_id', 'tax_id')
+    def _compute_price_total(self):
+        for fee in self:
+            taxes = fee.tax_id.compute_all(fee.price_unit, fee.repair_id.pricelist_id.currency_id, fee.product_uom_qty, fee.product_id, fee.repair_id.partner_id)
+            fee.price_total = taxes['total_included']
 
     @api.onchange('repair_id', 'product_id', 'product_uom_qty')
     def onchange_product_id(self):
@@ -782,7 +809,8 @@ class RepairFee(models.Model):
 
         if partner and self.product_id:
             fpos = self.env['account.fiscal.position'].get_fiscal_position(partner_invoice.id, delivery_id=self.repair_id.address_id.id)
-            self.tax_id = fpos.map_tax(self.product_id.taxes_id, self.product_id, partner).ids
+            taxes = self.product_id.taxes_id.filtered(lambda x: x.company_id == self.repair_id.company_id)
+            self.tax_id = fpos.map_tax(taxes)
         if partner:
             self.name = self.product_id.with_context(lang=partner.lang).display_name
         else:

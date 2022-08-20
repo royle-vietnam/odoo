@@ -1,24 +1,17 @@
-odoo.define('mail/static/src/components/notification_group/notification_group.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 const { useRef } = owl.hooks;
 
-class NotificationGroup extends Component {
+export class NotificationGroup extends Component {
 
     /**
      * @override
      */
     constructor(...args) {
         super(...args);
-        useStore(props => {
-            const group = this.env.models['mail.notification_group'].get(props.notificationGroupLocalId);
-            return {
-                group: group ? group.__state : undefined,
-            };
-        });
         /**
          * Reference of the "mark as read" button. Useful to disable the
          * top-level click handler when clicking on this specific button.
@@ -34,7 +27,7 @@ class NotificationGroup extends Component {
      * @returns {mail.notification_group}
      */
     get group() {
-        return this.env.models['mail.notification_group'].get(this.props.notificationGroupLocalId);
+        return this.messaging && this.messaging.models['mail.notification_group'].get(this.props.notificationGroupLocalId);
     }
 
     /**
@@ -61,8 +54,8 @@ class NotificationGroup extends Component {
             return;
         }
         this.group.openDocuments();
-        if (!this.env.messaging.device.isMobile) {
-            this.env.messaging.messagingMenu.close();
+        if (!this.messaging.device.isMobile) {
+            this.messaging.messagingMenu.close();
         }
     }
 
@@ -72,8 +65,8 @@ class NotificationGroup extends Component {
      */
     _onClickMarkAsRead(ev) {
         this.group.openCancelAction();
-        if (!this.env.messaging.device.isMobile) {
-            this.env.messaging.messagingMenu.close();
+        if (!this.messaging.device.isMobile) {
+            this.messaging.messagingMenu.close();
         }
     }
 
@@ -86,6 +79,4 @@ Object.assign(NotificationGroup, {
     template: 'mail.NotificationGroup',
 });
 
-return NotificationGroup;
-
-});
+registerMessagingComponent(NotificationGroup);

@@ -26,19 +26,45 @@ const DynamicSnippetCarousel = DynamicSnippet.extend({
     //--------------------------------------------------------------------------
 
     /**
-     * Method to be overridden in child components in order to prepare QWeb
-     * options
-     * @private
+     * @override
      */
-    _getQWebRenderParams: function () {
+    _getQWebRenderOptions: function () {
         return Object.assign(
             this._super.apply(this, arguments),
             {
-                interval : parseInt(this.$target[0].dataset.carouselInterval),
+                interval: parseInt(this.$target[0].dataset.carouselInterval),
             },
         );
     },
-
+    /**
+     * @todo remove me in master.
+     */
+    _renderContent: function () {
+        this._super.apply(this, arguments);
+        this._computeHeights();
+    },
+    /**
+     * @todo remove me in master. This is already automatically done by the
+     * related public widget which is also in charge of initializing the
+     * carousel behaviors. This is left to be done twice in stable to not break
+     * potential custo.
+     */
+    _computeHeights: function () {
+        var maxHeight = 0;
+        var $items = this.$('.carousel-item');
+        $items.css('min-height', '');
+        _.each($items, function (el) {
+            var $item = $(el);
+            var isActive = $item.hasClass('active');
+            $item.addClass('active');
+            var height = $item.outerHeight();
+            if (height > maxHeight) {
+                maxHeight = height;
+            }
+            $item.toggleClass('active', isActive);
+        });
+        $items.css('min-height', maxHeight);
+    },
 });
 publicWidget.registry.dynamic_snippet_carousel = DynamicSnippetCarousel;
 

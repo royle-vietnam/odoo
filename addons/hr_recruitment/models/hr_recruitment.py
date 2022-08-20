@@ -63,12 +63,15 @@ class RecruitmentStage(models.Model):
     fold = fields.Boolean(
         "Folded in Kanban",
         help="This stage is folded in the kanban view when there are no records in that stage to display.")
+    hired_stage = fields.Boolean('Hired Stage',
+        help="If checked, this stage is used to determine the hire date of an applicant")
     legend_blocked = fields.Char(
         'Red Kanban Label', default=lambda self: _('Blocked'), translate=True, required=True)
     legend_done = fields.Char(
         'Green Kanban Label', default=lambda self: _('Ready for Next Stage'), translate=True, required=True)
     legend_normal = fields.Char(
         'Grey Kanban Label', default=lambda self: _('In Progress'), translate=True, required=True)
+    is_warning_visible = fields.Boolean(compute='_compute_is_warning_visible')
 
     @api.model
     def default_get(self, fields):
@@ -78,6 +81,15 @@ class RecruitmentStage(models.Model):
             self = self.with_context(context)
         return super(RecruitmentStage, self).default_get(fields)
 
+    @api.depends('hired_stage')
+    def _compute_is_warning_visible(self):
+        applicant_data = self.env['hr.applicant'].read_group([('stage_id', 'in', self.ids)], ['stage_id'], 'stage_id')
+        applicants = dict((data['stage_id'][0], data['stage_id_count']) for data in applicant_data)
+        for stage in self:
+            if stage._origin.hired_stage and not stage.hired_stage and applicants.get(stage._origin.id):
+                stage.is_warning_visible = True
+            else:
+                stage.is_warning_visible = False
 
 class RecruitmentDegree(models.Model):
     _name = "hr.recruitment.degree"
@@ -95,10 +107,11 @@ class Applicant(models.Model):
     _description = "Applicant"
     _order = "priority desc, id desc"
     _inherit = ['mail.thread.cc', 'mail.activity.mixin', 'utm.mixin']
+    _mailing_enabled = True
 
     name = fields.Char("Subject / Application Name", required=True, help="Email subject for applications sent via email")
     active = fields.Boolean("Active", default=True, help="If the active field is set to false, it will allow you to hide the case without removing it.")
-    description = fields.Text("Description")
+    description = fields.Html("Description")
     email_from = fields.Char("Email", size=128, help="Applicant email", compute='_compute_partner_phone_email',
         inverse='_inverse_partner_email', store=True)
     probability = fields.Float("Probability")
@@ -115,12 +128,12 @@ class Applicant(models.Model):
     company_id = fields.Many2one('res.company', "Company", compute='_compute_company', store=True, readonly=False, tracking=True)
     user_id = fields.Many2one(
         'res.users', "Recruiter", compute='_compute_user',
-        tracking=True, default=lambda self: self.env.uid, store=True, readonly=False)
-    date_closed = fields.Datetime("Closed", compute='_compute_date_closed', store=True, index=True)
+        tracking=True, store=True, readonly=False)
+    date_closed = fields.Datetime("Hire Date", compute='_compute_date_closed', store=True, index=True, readonly=False, tracking=True)
     date_open = fields.Datetime("Assigned", readonly=True, index=True)
     date_last_stage_update = fields.Datetime("Last Stage Update", index=True, default=fields.Datetime.now)
     priority = fields.Selection(AVAILABLE_PRIORITIES, "Appreciation", default='0')
-    job_id = fields.Many2one('hr.job', "Applied Job", domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]", tracking=True)
+    job_id = fields.Many2one('hr.job', "Applied Job", domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]", tracking=True, index=True)
     salary_proposed_extra = fields.Char("Proposed Salary Extra", help="Salary Proposed by the Organisation, extra advantages", tracking=True)
     salary_expected_extra = fields.Char("Expected Salary Extra", help="Salary Expected by Applicant, extra advantages", tracking=True)
     salary_proposed = fields.Float("Proposed Salary", group_operator="avg", help="Salary Proposed by the Organisation", tracking=True)
@@ -153,8 +166,10 @@ class Applicant(models.Model):
     legend_done = fields.Char(related='stage_id.legend_done', string='Kanban Valid')
     legend_normal = fields.Char(related='stage_id.legend_normal', string='Kanban Ongoing')
     application_count = fields.Integer(compute='_compute_application_count', help='Applications with the same email')
-    meeting_count = fields.Integer(compute='_compute_meeting_count', help='Meeting Count')
     refuse_reason_id = fields.Many2one('hr.applicant.refuse.reason', string='Refuse Reason', tracking=True)
+    meeting_ids = fields.One2many('calendar.event', 'applicant_id', 'Meetings')
+    meeting_display_text = fields.Char(compute='_compute_meeting_display')
+    meeting_display_date = fields.Date(compute='_compute_meeting_display')
 
     @api.depends('date_open', 'date_closed')
     def _compute_day(self):
@@ -176,7 +191,7 @@ class Applicant(models.Model):
 
     @api.depends('email_from')
     def _compute_application_count(self):
-        application_data = self.env['hr.applicant'].read_group([
+        application_data = self.env['hr.applicant'].with_context(active_test=False).read_group([
             ('email_from', 'in', list(set(self.mapped('email_from'))))], ['email_from'], ['email_from'])
         application_data_mapped = dict((data['email_from'], data['email_from_count']) for data in application_data)
         applicants = self.filtered(lambda applicant: applicant.email_from)
@@ -184,18 +199,30 @@ class Applicant(models.Model):
             applicant.application_count = application_data_mapped.get(applicant.email_from, 1) - 1
         (self - applicants).application_count = False
 
-    def _compute_meeting_count(self):
-        if self.ids:
-            meeting_data = self.env['calendar.event'].sudo().read_group(
-                [('applicant_id', 'in', self.ids)],
-                ['applicant_id'],
-                ['applicant_id']
-            )
-            mapped_data = {m['applicant_id'][0]: m['applicant_id_count'] for m in meeting_data}
-        else:
-            mapped_data = dict()
-        for applicant in self:
-            applicant.meeting_count = mapped_data.get(applicant.id, 0)
+    @api.depends_context('lang')
+    @api.depends('meeting_ids', 'meeting_ids.start')
+    def _compute_meeting_display(self):
+        applicant_with_meetings = self.filtered('meeting_ids')
+        (self - applicant_with_meetings).update({
+            'meeting_display_text': _('No Meeting'),
+            'meeting_display_date': ''
+        })
+        today = fields.Date.today()
+        for applicant in applicant_with_meetings:
+            count = len(applicant.meeting_ids)
+            dates = applicant.meeting_ids.mapped('start')
+            min_date, max_date = min(dates).date(), max(dates).date()
+            if min_date >= today:
+                applicant.meeting_display_date = min_date
+            else:
+                applicant.meeting_display_date = max_date
+            if count == 1:
+                applicant.meeting_display_text = _('1 Meeting')
+            elif applicant.meeting_display_date >= today:
+                applicant.meeting_display_text = _('Next Meeting')
+            else:
+                applicant.meeting_display_text = _('Last Meeting')
+
 
     def _get_attachment_number(self):
         read_group_res = self.env['ir.attachment'].read_group(
@@ -272,12 +299,12 @@ class Applicant(models.Model):
         for applicant in self.filtered(lambda a: a.partner_id and a.partner_mobile and not a.partner_id.mobile):
             applicant.partner_id.mobile = applicant.partner_mobile
 
-    @api.depends('stage_id')
+    @api.depends('stage_id.hired_stage')
     def _compute_date_closed(self):
         for applicant in self:
-            if applicant.stage_id and applicant.stage_id.fold:
+            if applicant.stage_id and applicant.stage_id.hired_stage and not applicant.date_closed:
                 applicant.date_closed = fields.datetime.now()
-            else:
+            if not applicant.stage_id.hired_stage:
                 applicant.date_closed = False
 
     @api.model
@@ -309,7 +336,7 @@ class Applicant(models.Model):
         return res
 
     def get_empty_list_help(self, help):
-        if 'active_id' in  self.env.context:
+        if 'active_id' in self.env.context and self.env.context.get('active_model') == 'hr.job':
             alias_id = self.env['hr.job'].browse(self.env.context['active_id']).alias_id
         else:
             alias_id = False
@@ -341,6 +368,7 @@ class Applicant(models.Model):
         category = self.env.ref('hr_recruitment.categ_meet_interview')
         res = self.env['ir.actions.act_window']._for_xml_id('calendar.action_calendar_event')
         res['context'] = {
+            'default_applicant_id': self.id,
             'default_partner_ids': partners.ids,
             'default_user_id': self.env.uid,
             'default_name': self.name,
@@ -349,8 +377,7 @@ class Applicant(models.Model):
         return res
 
     def action_get_attachment_tree_view(self):
-        attachment_action = self.env.ref('base.action_attachment')
-        action = attachment_action.read()[0]
+        action = self.env['ir.actions.act_window']._for_xml_id('base.action_attachment')
         action['context'] = {'default_res_model': self._name, 'default_res_id': self.ids[0]}
         action['domain'] = str(['&', ('res_model', '=', self._name), ('res_id', 'in', self.ids)])
         action['search_view_id'] = (self.env.ref('hr_recruitment.ir_attachment_view_search_inherit_hr_recruitment').id, )
@@ -359,10 +386,13 @@ class Applicant(models.Model):
     def action_applications_email(self):
         return {
             'type': 'ir.actions.act_window',
-            'name': _('Applications'),
+            'name': _('Job Applications'),
             'res_model': self._name,
             'view_mode': 'kanban,tree,form,pivot,graph,calendar,activity',
             'domain': [('email_from', 'in', self.mapped('email_from'))],
+            'context': {
+                'active_test': False
+            },
         }
 
     def _track_template(self, changes):
@@ -371,7 +401,7 @@ class Applicant(models.Model):
         if 'stage_id' in changes and applicant.stage_id.template_id:
             res['stage_id'] = (applicant.stage_id.template_id, {
                 'auto_delete_message': True,
-                'subtype_id': self.env['ir.model.data'].xmlid_to_res_id('mail.mt_note'),
+                'subtype_id': self.env['ir.model.data']._xmlid_to_res_id('mail.mt_note'),
                 'email_layout_xmlid': 'mail.mail_notification_light'
             })
         return res
@@ -398,7 +428,7 @@ class Applicant(models.Model):
         recipients = super(Applicant, self)._message_get_suggested_recipients()
         for applicant in self:
             if applicant.partner_id:
-                applicant._message_add_suggested_recipient(recipients, partner=applicant.partner_id, reason=_('Contact'))
+                applicant._message_add_suggested_recipient(recipients, partner=applicant.partner_id.sudo(), reason=_('Contact'))
             elif applicant.email_from:
                 email_from = applicant.email_from
                 if applicant.partner_name:
@@ -417,6 +447,9 @@ class Applicant(models.Model):
         # want the gateway user to be responsible if no other responsible is
         # found.
         self = self.with_context(default_user_id=False)
+        stage = False
+        if custom_values and 'job_id' in custom_values:
+            stage = self.env['hr.job'].browse(custom_values['job_id'])._get_first_stage()
         val = msg.get('from').split('<')[0]
         defaults = {
             'name': msg.get('subject') or _("No Subject"),
@@ -426,6 +459,8 @@ class Applicant(models.Model):
         }
         if msg.get('priority'):
             defaults['priority'] = msg.get('priority')
+        if stage and stage.id:
+            defaults['stage_id'] = stage.id
         if custom_values:
             defaults.update(custom_values)
         return super(Applicant, self).message_new(msg, custom_values=defaults)
@@ -475,7 +510,7 @@ class Applicant(models.Model):
                     'default_name': applicant.partner_name or contact_name,
                     'default_job_id': applicant.job_id.id,
                     'default_job_title': applicant.job_id.name,
-                    'address_home_id': address_id,
+                    'default_address_home_id': address_id,
                     'default_department_id': applicant.department_id.id or False,
                     'default_address_id': applicant.company_id and applicant.company_id.partner_id
                             and applicant.company_id.partner_id.id or False,
@@ -513,7 +548,8 @@ class Applicant(models.Model):
                 ], order='sequence asc', limit=1).id
         for applicant in self:
             applicant.write(
-                {'stage_id': default_stage[applicant.job_id.id], 'refuse_reason_id': False})
+                {'stage_id': applicant.job_id.id and default_stage[applicant.job_id.id],
+                 'refuse_reason_id': False})
 
     def toggle_active(self):
         res = super(Applicant, self).toggle_active()
@@ -546,4 +582,5 @@ class ApplicantRefuseReason(models.Model):
     _description = 'Refuse Reason of Applicant'
 
     name = fields.Char('Description', required=True, translate=True)
+    template_id = fields.Many2one('mail.template', string='Email Template', domain="[('model', '=', 'hr.applicant')]")
     active = fields.Boolean('Active', default=True)

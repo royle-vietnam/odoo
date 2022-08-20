@@ -1,9 +1,59 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+from odoo import SUPERUSER_ID
 from odoo.addons.crm.tests import common as crm_common
 from odoo.fields import Datetime
 from odoo.tests.common import tagged, users
+from odoo.tests.common import Form
+
+@tagged('lead_manage')
+class TestLeadConvertForm(crm_common.TestLeadConvertCommon):
+
+    @users('user_sales_manager')
+    def test_form_action_default(self):
+        """ Test Lead._find_matching_partner() """
+        lead = self.env['crm.lead'].browse(self.lead_1.ids)
+        customer = self.env['res.partner'].create({
+            "name": "Amy Wong",
+            "email": '"Amy, PhD Student, Wong" Tiny <AMY.WONG@test.example.com>'
+        })
+
+        wizard = Form(self.env['crm.lead2opportunity.partner'].with_context({
+            'active_model': 'crm.lead',
+            'active_id': lead.id,
+            'active_ids': lead.ids,
+        }))
+
+        self.assertEqual(wizard.name, 'convert')
+        self.assertEqual(wizard.action, 'exist')
+        self.assertEqual(wizard.partner_id, customer)
+
+    @users('user_sales_manager')
+    def test_form_name_onchange(self):
+        """ Test Lead._find_matching_partner() """
+        lead = self.env['crm.lead'].browse(self.lead_1.ids)
+        lead_dup = lead.copy({'name': 'Duplicate'})
+        customer = self.env['res.partner'].create({
+            "name": "Amy Wong",
+            "email": '"Amy, PhD Student, Wong" Tiny <AMY.WONG@test.example.com>'
+        })
+
+        wizard = Form(self.env['crm.lead2opportunity.partner'].with_context({
+            'active_model': 'crm.lead',
+            'active_id': lead.id,
+            'active_ids': lead.ids,
+        }))
+
+        self.assertEqual(wizard.name, 'merge')
+        self.assertEqual(wizard.action, 'exist')
+        self.assertEqual(wizard.partner_id, customer)
+        self.assertEqual(wizard.duplicated_lead_ids[:], lead + lead_dup)
+
+        wizard.name = 'convert'
+        wizard.action = 'create'
+        self.assertEqual(wizard.action, 'create', 'Should keep user input')
+        self.assertEqual(wizard.name, 'convert', 'Should keep user input')
 
 
 @tagged('lead_manage')
@@ -19,6 +69,56 @@ class TestLeadConvert(crm_common.TestLeadConvertCommon):
         date = Datetime.from_string('2020-01-20 16:00:00')
         cls.crm_lead_dt_mock.now.return_value = date
 
+    @users('user_sales_manager')
+    def test_duplicates_computation(self):
+        """ Test Lead._get_lead_duplicates() and check won / probability usage """
+        test_lead = self.env['crm.lead'].browse(self.lead_1.ids)
+        customer, dup_leads = self._create_duplicates(test_lead)
+        dup_leads += self.env['crm.lead'].create([
+            {'name': 'Duplicate lead: same email_from, lost',
+             'type': 'lead',
+             'email_from': test_lead.email_from,
+             'probability': 0, 'active': False,
+            },
+            {'name': 'Duplicate lead: same email_from, proba 0 but not lost',
+             'type': 'lead',
+             'email_from': test_lead.email_from,
+             'probability': 0, 'active': True,
+            },
+            {'name': 'Duplicate opp: same email_from, won',
+             'type': 'opportunity',
+             'email_from': test_lead.email_from,
+             'probability': 100, 'stage_id': self.stage_team1_won.id,
+            },
+            {'name': 'Duplicate opp: same email_from, proba 100 but not won',
+             'type': 'opportunity',
+             'email_from': test_lead.email_from,
+             'probability': 100, 'stage_id': self.stage_team1_2.id,
+            }
+        ])
+        lead_lost = dup_leads.filtered(lambda lead: lead.name == 'Duplicate lead: same email_from, lost')
+        _opp_proba100 = dup_leads.filtered(lambda lead: lead.name == 'Duplicate opp: same email_from, proba 100 but not won')
+        opp_won = dup_leads.filtered(lambda lead: lead.name == 'Duplicate opp: same email_from, won')
+        opp_lost = dup_leads.filtered(lambda lead: lead.name == 'Duplicate: lost opportunity')
+
+        test_lead.write({'partner_id': customer.id})
+
+        # not include_lost = remove archived leads as well as 'won' opportunities
+        result = test_lead._get_lead_duplicates(
+            partner=test_lead.partner_id,
+            email=test_lead.email_from,
+            include_lost=False
+        )
+        self.assertEqual(result, test_lead + dup_leads - (lead_lost + opp_won + opp_lost))
+
+        # include_lost = remove archived opp only
+        result = test_lead._get_lead_duplicates(
+            partner=test_lead.partner_id,
+            email=test_lead.email_from,
+            include_lost=True
+        )
+        self.assertEqual(result, test_lead + dup_leads - (lead_lost))
+
     def test_initial_data(self):
         """ Ensure initial data to avoid spaghetti test update afterwards """
         self.assertFalse(self.lead_1.date_conversion)
@@ -30,6 +130,7 @@ class TestLeadConvert(crm_common.TestLeadConvertCommon):
     @users('user_sales_manager')
     def test_lead_convert_base(self):
         """ Test base method ``convert_opportunity`` or crm.lead model """
+        self.contact_2.phone = False  # force Falsy to compare with mobile
         self.assertFalse(self.contact_2.phone)
         lead = self.lead_1.with_user(self.env.user)
         lead.write({
@@ -207,6 +308,31 @@ class TestLeadConvert(crm_common.TestLeadConvertCommon):
         self.assertEqual(self.lead_1.partner_id, self.env['res.partner'])
 
     @users('user_sales_manager')
+    def test_lead_convert_contact_mutlicompany(self):
+        """ Check the wizard convert to opp don't find contact
+        You are not able to see because they belong to another company """
+        # Use superuser_id because creating a company with a user add directly
+        # the company in company_ids of the user.
+        company_2 = self.env['res.company'].with_user(SUPERUSER_ID).create({'name': 'Company 2'})
+        partner_company_2 = self.env['res.partner'].with_user(SUPERUSER_ID).create({
+            'name': 'Contact in other company',
+            'email': 'test@company2.com',
+            'company_id': company_2.id,
+        })
+        lead = self.env['crm.lead'].create({
+            'name': 'LEAD',
+            'type': 'lead',
+            'email_from': 'test@company2.com',
+        })
+        convert = self.env['crm.lead2opportunity.partner'].with_context({
+            'active_model': 'crm.lead',
+            'active_id': lead.id,
+            'active_ids': lead.ids,
+        }).create({'name': 'convert', 'action': 'exist'})
+        self.assertNotEqual(convert.partner_id, partner_company_2,
+            "Conversion wizard should not be able to find the partner from another company")
+
+    @users('user_sales_manager')
     def test_lead_convert_same_partner(self):
         """ Check that we don't erase lead information
         with existing partner info if the partner is already set
@@ -240,6 +366,7 @@ class TestLeadConvert(crm_common.TestLeadConvertCommon):
                 'type': 'lead', 'user_id': False, 'team_id': self.lead_1.team_id.id,
                 'contact_name': 'Duplicate %02d of %s' % (x+1, self.lead_1.contact_name),
                 'email_from': self.lead_1.email_from,
+                'probability': 10,
             })
 
         convert = self.env['crm.lead2opportunity.partner'].with_context({
@@ -263,37 +390,71 @@ class TestLeadConvert(crm_common.TestLeadConvertCommon):
         convert.action_apply()
         self.assertEqual(self.lead_1.type, 'opportunity')
 
+    @users('user_sales_salesman')
+    def test_lead_merge_user(self):
+        """ Test convert wizard working in merge mode with sales user """
+        date = Datetime.from_string('2020-01-20 16:00:00')
+        self.crm_lead_dt_mock.now.return_value = date
+
+        leads = self.env['crm.lead']
+        for x in range(2):
+            leads |= self.env['crm.lead'].create({
+                'name': 'Dup-%02d-%s' % (x+1, self.lead_1.name),
+                'type': 'lead', 'user_id': False, 'team_id': self.lead_1.team_id.id,
+                'contact_name': 'Duplicate %02d of %s' % (x+1, self.lead_1.contact_name),
+                'email_from': self.lead_1.email_from,
+                'probability': 10,
+            })
+
+        convert = self.env['crm.lead2opportunity.partner'].with_context({
+            'active_model': 'crm.lead',
+            'active_id': leads[0].id,
+            'active_ids': leads[0].ids,
+        }).create({})
+
+        # test internals of convert wizard
+        self.assertEqual(convert.duplicated_lead_ids, leads)
+        self.assertEqual(convert.name, 'merge')
+        self.assertEqual(convert.action, 'create')
+
+        convert.write({'user_id': self.user_sales_salesman.id})
+        self.assertEqual(convert.user_id, self.user_sales_salesman)
+        self.assertEqual(convert.team_id, self.sales_team_convert)
+
+        convert.action_apply()
+        self.assertEqual(leads[0].type, 'opportunity')
+
     @users('user_sales_manager')
     def test_lead_merge_duplicates(self):
-        """ Test Lead._get_lead_duplicates() """
+        """ Test Lead._get_lead_duplicates() and check: partner / email fallbacks """
+        customer, dup_leads = self._create_duplicates(self.lead_1)
+        lead_partner = dup_leads.filtered(lambda lead: lead.name == 'Duplicate: customer ID')
+        self.assertTrue(bool(lead_partner))
 
-        # Check: partner / email fallbacks
-        self._create_duplicates(self.lead_1)
         self.lead_1.write({
-            'partner_id': self.customer.id,
+            'partner_id': customer.id,
         })
         convert = self.env['crm.lead2opportunity.partner'].with_context({
             'active_model': 'crm.lead',
             'active_id': self.lead_1.id,
             'active_ids': self.lead_1.ids,
         }).create({})
-        self.assertEqual(convert.partner_id, self.customer)
-        # self.assertEqual(convert.duplicated_lead_ids, self.lead_1 | self.lead_email_from | self.lead_email_normalized | self.lead_partner | self.opp_lost)
-        self.assertEqual(convert.duplicated_lead_ids, self.lead_1 | self.lead_email_from | self.lead_partner | self.opp_lost)
+        self.assertEqual(convert.partner_id, customer)
+        self.assertEqual(convert.duplicated_lead_ids, self.lead_1 | dup_leads)
 
         # Check: partner fallbacks
         self.lead_1.write({
             'email_from': False,
-            'partner_id': self.customer.id,
+            'partner_id': customer.id,
         })
-        self.customer.write({'email': False})
+        customer.write({'email': False})
         convert = self.env['crm.lead2opportunity.partner'].with_context({
             'active_model': 'crm.lead',
             'active_id': self.lead_1.id,
             'active_ids': self.lead_1.ids,
         }).create({})
-        self.assertEqual(convert.partner_id, self.customer)
-        self.assertEqual(convert.duplicated_lead_ids, self.lead_1 | self.lead_partner)
+        self.assertEqual(convert.partner_id, customer)
+        self.assertEqual(convert.duplicated_lead_ids, self.lead_1 | lead_partner)
 
     @users('user_sales_manager')
     def test_lead_merge_duplicates_flow(self):
@@ -303,23 +464,22 @@ class TestLeadConvert(crm_common.TestLeadConvertCommon):
         self.lead_1.write({
             'email_from': 'Amy Wong <amy.wong@test.example.com>'
         })
-        self._create_duplicates(self.lead_1)
+        customer, dup_leads = self._create_duplicates(self.lead_1)
+        opp_lost = dup_leads.filtered(lambda lead: lead.name == 'Duplicate: lost opportunity')
+        self.assertTrue(bool(opp_lost))
 
         convert = self.env['crm.lead2opportunity.partner'].with_context({
             'active_model': 'crm.lead',
             'active_id': self.lead_1.id,
             'active_ids': self.lead_1.ids,
         }).create({})
-        self.assertEqual(convert.partner_id, self.customer)
-        # TDE FIXME: should check for email_normalized -> lead_email_normalized not correctly found
-        # self.assertEqual(convert.duplicated_lead_ids, self.lead_1 | lead_email_from | lead_email_normalized | lead_partner | opp_lost)
-        self.assertEqual(convert.duplicated_lead_ids, self.lead_1 | self.lead_email_from | self.lead_partner | self.opp_lost)
+        self.assertEqual(convert.partner_id, customer)
+        self.assertEqual(convert.duplicated_lead_ids, self.lead_1 | dup_leads)
 
         convert.action_apply()
         self.assertEqual(
-            # (self.lead_1 | self.lead_email_from | self.lead_email_normalized | self.lead_partner | self.opp_lost).exists(),
-            (self.lead_1 | self.lead_email_from | self.lead_partner | self.opp_lost).exists(),
-            self.opp_lost)
+            (self.lead_1 | dup_leads).exists(),
+            opp_lost)
 
 
 @tagged('lead_manage')
@@ -406,147 +566,3 @@ class TestLeadConvertBatch(crm_common.TestLeadConvertMassCommon):
                 self.assertEqual(opp.stage_id, self.stage_gen_1)  # did not change
             else:
                 self.assertFalse(True)
-
-
-@tagged('lead_manage')
-class TestLeadConvertMass(crm_common.TestLeadConvertMassCommon):
-
-    @classmethod
-    def setUpClass(cls):
-        super(TestLeadConvertMass, cls).setUpClass()
-
-        cls.leads = cls.lead_1 + cls.lead_w_partner + cls.lead_w_email_lost
-        cls.assign_users = cls.user_sales_manager + cls.user_sales_leads_convert + cls.user_sales_salesman
-
-    @users('user_sales_manager')
-    def test_mass_convert_internals(self):
-        """ Test internals mass converted in convert mode, without duplicate management """
-        # reset some assigned users to test salesmen assign
-        (self.lead_w_partner | self.lead_w_email_lost).write({
-            'user_id': False
-        })
-
-        mass_convert = self.env['crm.lead2opportunity.partner.mass'].with_context({
-            'active_model': 'crm.lead',
-            'active_ids': self.leads.ids,
-            'active_id': self.leads.ids[0]
-        }).create({
-            'deduplicate': False,
-            'user_id': self.user_sales_salesman.id,
-            'force_assignment': False,
-        })
-
-        # default values
-        self.assertEqual(mass_convert.name, 'convert')
-        self.assertEqual(mass_convert.action, 'each_exist_or_create')
-        # depending on options
-        self.assertEqual(mass_convert.partner_id, self.env['res.partner'])
-        self.assertEqual(mass_convert.deduplicate, False)
-        self.assertEqual(mass_convert.user_id, self.user_sales_salesman)
-        self.assertEqual(mass_convert.team_id, self.sales_team_convert)
-
-        mass_convert.action_mass_convert()
-        for lead in self.lead_1 | self.lead_w_partner:
-            self.assertEqual(lead.type, 'opportunity')
-            if lead == self.lead_w_partner:
-                self.assertEqual(lead.user_id, self.env['res.users'])  # user_id is bypassed
-                self.assertEqual(lead.partner_id, self.contact_1)
-            elif lead == self.lead_1:
-                self.assertEqual(lead.user_id, self.user_sales_leads)  # existing value not forced
-                new_partner = lead.partner_id
-                self.assertEqual(new_partner.name, 'Amy Wong')
-                self.assertEqual(new_partner.email, 'amy.wong@test.example.com')
-
-        # test unforced assignation
-        mass_convert.write({
-            'user_ids': self.user_sales_salesman.ids,
-        })
-        mass_convert.action_mass_convert()
-        self.assertEqual(self.lead_w_partner.user_id, self.user_sales_salesman)
-        self.assertEqual(self.lead_1.user_id, self.user_sales_leads)  # existing value not forced
-
-        # lost leads are untouched
-        self.assertEqual(self.lead_w_email_lost.type, 'lead')
-        self.assertFalse(self.lead_w_email_lost.active)
-        self.assertFalse(self.lead_w_email_lost.date_conversion)
-        # TDE FIXME: partner creation is done even on lost leads because not checked in wizard
-        # self.assertEqual(self.lead_w_email_lost.partner_id, self.env['res.partner'])
-
-    def test_mass_convert_deduplicate(self):
-        """ Test duplicated_lead_ids fields having another behavior in mass convert
-        because why not. Its use is: among leads under convert, store those with
-        duplicates if deduplicate is set to True. """
-        lead_1_dups = self._create_duplicates(self.lead_1, create_opp=False)
-        lead_1_final = self.lead_1  # after merge: same but with lower ID
-
-        lead_w_partner_dups = self._create_duplicates(self.lead_w_partner, create_opp=False)
-        lead_w_partner_final = lead_w_partner_dups[0]  # lead_w_partner has no stage -> lower in sort by confidence
-        lead_w_partner_dups_partner = lead_w_partner_dups[1]  # copy with a partner_id (with the same email)
-
-        mass_convert = self.env['crm.lead2opportunity.partner.mass'].with_context({
-            'active_model': 'crm.lead',
-            'active_ids': self.leads.ids,
-        }).create({
-            'deduplicate': True,
-        })
-        self.assertEqual(mass_convert.action, 'each_exist_or_create')
-        self.assertEqual(mass_convert.name, 'convert')
-        self.assertEqual(mass_convert.lead_tomerge_ids, self.leads)
-        self.assertEqual(mass_convert.duplicated_lead_ids, self.lead_1 | self.lead_w_partner)
-
-        mass_convert.action_mass_convert()
-
-        self.assertEqual(
-            (lead_1_dups | lead_w_partner_dups | lead_w_partner_dups_partner).exists(),
-            lead_w_partner_final
-        )
-        for lead in lead_1_final | lead_w_partner_final:
-            self.assertTrue(lead.active)
-            self.assertEqual(lead.type, 'opportunity')
-
-    def test_mass_convert_find_existing(self):
-        """ Check that we don't find a wrong partner
-            that have similar name during mass conversion
-        """
-        wrong_partner = self.env['res.partner'].create({
-            'name': 'casa depapel',
-            'street': "wrong street"
-        })
-
-        lead = self.env['crm.lead'].create({'name': 'Asa Depape'})
-        mass_convert = self.env['crm.lead2opportunity.partner.mass'].with_context({
-            'active_model': 'crm.lead',
-            'active_ids': lead.ids,
-            'active_id': lead.ids[0]
-        }).create({
-            'deduplicate': False,
-            'action': 'each_exist_or_create',
-            'name': 'convert',
-        })
-        mass_convert.action_mass_convert()
-
-        self.assertNotEqual(lead.partner_id, wrong_partner, "Partner Id should not match the wrong contact")
-
-    def test_mass_convert_w_salesmen(self):
-        # reset some assigned users to test salesmen assign
-        (self.lead_w_partner | self.lead_w_email_lost).write({
-            'user_id': False
-        })
-
-        mass_convert = self.env['crm.lead2opportunity.partner.mass'].with_context({
-            'active_model': 'crm.lead',
-            'active_ids': self.leads.ids,
-            'active_id': self.leads.ids[0]
-        }).create({
-            'deduplicate': False,
-            'user_ids': self.assign_users.ids,
-            'force_assignment': True,
-        })
-
-        # TDE FIXME: what happens if we mix people from different sales team ? currently nothing, to check
-        mass_convert.action_mass_convert()
-
-        for idx, lead in enumerate(self.leads - self.lead_w_email_lost):
-            self.assertEqual(lead.type, 'opportunity')
-            assigned_user = self.assign_users[idx % len(self.assign_users)]
-            self.assertEqual(lead.user_id, assigned_user)

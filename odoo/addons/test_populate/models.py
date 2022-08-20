@@ -17,6 +17,7 @@ class TestPopulateModel(models.Model):
     some_ref = fields.Integer('Reference')
     dependant_field_1 = fields.Char('Dependant 1')
     dependant_field_2 = fields.Char('Dependant 2')
+    sequence = fields.Integer("Sequence")
 
     _populate_dependencies = ['test.populate.category']
 
@@ -35,9 +36,9 @@ class TestPopulateModel(models.Model):
         ]
         def generate_dependant(iterator, *args):
             dependants_generator = populate.chain_factories(dependant_factories, self._name)
-            for values in dependants_generator:
-                dependant_values = next(iterator)
-                yield {**values, **dependant_values, '__complete': values['__complete'] and dependant_values['__complete']}
+            for dependant_values in dependants_generator:
+                values = next(iterator)
+                yield {**dependant_values, **values, '__complete': values['__complete'] and dependant_values['__complete']}
 
         def get_name(values=None, counter=0, **kwargs):
             active = 'active' if values['active'] else 'inactive'
@@ -53,6 +54,7 @@ class TestPopulateModel(models.Model):
             ('_dependant', generate_dependant),
             ('name', populate.compute(get_name)),
             ('category_id', populate.randomize([False] + category_ids)),
+            ('sequence', populate.randint(1, 10))
         ]
 
 class TestPopulateDependencyModel(models.Model):

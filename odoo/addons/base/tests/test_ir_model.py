@@ -4,8 +4,9 @@
 from psycopg2 import IntegrityError
 
 from odoo.exceptions import ValidationError
-from odoo.tests.common import TransactionCase, SavepointCase
+from odoo.tests.common import TransactionCase, tagged
 from odoo.tools import mute_logger
+from odoo import Command
 
 
 class TestXMLID(TransactionCase):
@@ -172,7 +173,7 @@ class TestXMLID(TransactionCase):
             model._load_records(data_list)
 
 
-class TestIrModel(SavepointCase):
+class TestIrModel(TransactionCase):
 
     @classmethod
     def setUpClass(cls):
@@ -192,7 +193,7 @@ class TestIrModel(SavepointCase):
             'name': 'Banana Ripeness',
             'model': 'x_banana_ripeness',
             'field_id': [
-                (0, 0, {'name': 'x_name', 'ttype': 'char', 'field_description': 'Name'}),
+                Command.create({'name': 'x_name', 'ttype': 'char', 'field_description': 'Name'}),
             ]
         })
         # stage values are pairs (id, display_name)
@@ -205,10 +206,10 @@ class TestIrModel(SavepointCase):
             'name': 'Bananas',
             'model': 'x_bananas',
             'field_id': [
-                (0, 0, {'name': 'x_name', 'ttype': 'char', 'field_description': 'Name'}),
-                (0, 0, {'name': 'x_length', 'ttype': 'float', 'field_description': 'Length'}),
-                (0, 0, {'name': 'x_color', 'ttype': 'integer', 'field_description': 'Color'}),
-                (0, 0, {'name': 'x_ripeness_id', 'ttype': 'many2one',
+                Command.create({'name': 'x_name', 'ttype': 'char', 'field_description': 'Name'}),
+                Command.create({'name': 'x_length', 'ttype': 'float', 'field_description': 'Length'}),
+                Command.create({'name': 'x_color', 'ttype': 'integer', 'field_description': 'Color'}),
+                Command.create({'name': 'x_ripeness_id', 'ttype': 'many2one',
                         'field_description': 'Ripeness','relation': 'x_banana_ripeness',
                         'group_expand': True})
             ]
@@ -257,9 +258,9 @@ class TestIrModel(SavepointCase):
 
         # check that the constraint is checked at model creation
         fields_value = [
-            (0, 0, {'name': 'x_name', 'ttype': 'char', 'field_description': 'Name'}),
-            (0, 0, {'name': 'x_length', 'ttype': 'float', 'field_description': 'Length'}),
-            (0, 0, {'name': 'x_color', 'ttype': 'integer', 'field_description': 'Color'}),
+            Command.create({'name': 'x_name', 'ttype': 'char', 'field_description': 'Name'}),
+            Command.create({'name': 'x_length', 'ttype': 'float', 'field_description': 'Length'}),
+            Command.create({'name': 'x_color', 'ttype': 'integer', 'field_description': 'Color'}),
         ]
         self.env['ir.model'].create({
             'name': 'MegaBananas',
@@ -310,3 +311,34 @@ class TestIrModel(SavepointCase):
             '__domain': [('x_ripeness_id', '=', self.ripeness_gone[0])],
         }]
         self.assertEqual(groups, expected, 'should include 2 empty ripeness stages')
+
+    def test_rec_name_deletion(self):
+        """Check that deleting 'x_name' does not crash."""
+        record = self.env['x_bananas'].create({'x_name': "Ifan Ben-Mezd"})
+        self.assertEqual(record._rec_name, 'x_name')
+        self.assertEqual(self.registry.field_depends[type(record).display_name], ('x_name',))
+        self.assertEqual(record.display_name, "Ifan Ben-Mezd")
+
+        # unlinking x_name should fixup _rec_name and display_name
+        self.env['ir.model.fields']._get('x_bananas', 'x_name').unlink()
+        record = self.env['x_bananas'].browse(record.id)
+        self.assertEqual(record._rec_name, None)
+        self.assertEqual(self.registry.field_depends[type(record).display_name], ())
+        self.assertEqual(record.display_name, f"x_bananas,{record.id}")
+
+
+@tagged('test_eval_context')
+class TestEvalContext(TransactionCase):
+
+    def test_module_usage(self):
+        self.env['ir.model.fields'].create({
+            'name': 'x_foo_bar_baz',
+            'model_id': self.env['ir.model'].search([('model', '=', 'res.partner')]).id,
+            'field_description': 'foo',
+            'ttype': 'integer',
+            'store': False,
+            'depends': 'name',
+            'compute': ("time.time()\ndatetime.datetime.now()\n"
+                        "dateutil.relativedelta.relativedelta(hours=1)")
+        })
+        self.env['res.partner'].create({'name': 'foo'}).x_foo_bar_baz

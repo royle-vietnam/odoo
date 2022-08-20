@@ -5,6 +5,7 @@ import datetime
 from datetime import datetime, timedelta, time
 
 from odoo import fields
+from odoo.tests import Form
 from odoo.addons.base.tests.common import SavepointCaseWithUserDemo
 import pytz
 import re
@@ -123,7 +124,7 @@ class TestCalendar(SavepointCaseWithUserDemo):
         self.assertEqual(test_record.activity_ids.date_deadline, (now + timedelta(days=-2)).date())
 
         # update event with a description that have a special character and a new line
-        test_description3 = 'Test & \n Description'
+        test_description3 = 'Test & <br> Description'
         test_note3 = '<p>Test &amp; <br> Description</p>'
         test_event.write({
             'description': test_description3,
@@ -186,6 +187,14 @@ class TestCalendar(SavepointCaseWithUserDemo):
                 self.assertEqual(d.hour, 15)
             self.assertEqual(d.minute, 30)
 
+    def test_recurring_ny(self):
+        self.env.user.tz = 'US/Eastern'
+        f = Form(self.CalendarEvent.with_context(tz='US/Eastern'))
+        f.name = 'test'
+        f.start = '2022-07-07 01:00:00'  # This is in UTC. In NY, it corresponds to the 6th of july at 9pm.
+        f.recurrency = True
+        self.assertEqual(f.weekday, 'WED')
+
     def test_event_activity_timezone(self):
         activty_type = self.env['mail.activity.type'].create({
             'name': 'Meeting',
@@ -195,7 +204,7 @@ class TestCalendar(SavepointCaseWithUserDemo):
         activity_id = self.env['mail.activity'].create({
             'summary': 'Meeting with partner',
             'activity_type_id': activty_type.id,
-            'res_model_id': self.env['ir.model'].search([('model', '=', 'res.partner')], limit=1).id,
+            'res_model_id': self.env['ir.model']._get_id('res.partner'),
             'res_id': self.env['res.partner'].create({'name': 'A Partner'}).id,
         })
 
@@ -228,7 +237,7 @@ class TestCalendar(SavepointCaseWithUserDemo):
         activity_id = self.env['mail.activity'].create({
             'summary': 'Meeting with partner',
             'activity_type_id': activty_type.id,
-            'res_model_id': self.env['ir.model'].search([('model', '=', 'res.partner')], limit=1).id,
+            'res_model_id': self.env['ir.model']._get_id('res.partner'),
             'res_id': self.env['res.partner'].create({'name': 'A Partner'}).id,
         })
 
@@ -258,7 +267,7 @@ class TestCalendar(SavepointCaseWithUserDemo):
         """
         Check that mail are sent to the attendees on event creation
         Check that mail are sent to the added attendees on event edit
-        Check that mail are NOT sent to the attendees when detaching a recurring event
+        Check that mail are NOT sent to the attendees when the event date is past
         """
 
         def _test_one_mail_per_attendee(self, partners):
@@ -274,7 +283,7 @@ class TestCalendar(SavepointCaseWithUserDemo):
             self.env['res.partner'].create({'name': 'testuser1', 'email': u'alice@example.com'}),
         ]
         partner_ids = [(6, False, [p.id for p in partners]),]
-        now = fields.Datetime.now()
+        now = fields.Datetime.context_timestamp(partners[0], fields.Datetime.now())
         m = self.CalendarEvent.create({
             'name': "mailTest1",
             'allday': False,
@@ -302,3 +311,60 @@ class TestCalendar(SavepointCaseWithUserDemo):
 
         # more email should be sent
         _test_one_mail_per_attendee(self, partners)
+
+        # create a new event in the past
+        self.CalendarEvent.create({
+            'name': "NOmailTest",
+            'allday': False,
+            'recurrency': False,
+            'partner_ids': partner_ids,
+            'start': fields.Datetime.to_string(now - timedelta(days=10)),
+            'stop': fields.Datetime.to_string(now - timedelta(days=9)),
+        })
+
+        # no more email should be sent
+        _test_one_mail_per_attendee(self, partners)
+
+    def test_event_creation_sudo_other_company(self):
+        """ Check Access right issue when create event with sudo
+
+            Create a company, a user in that company
+            Create an event for someone else in another company as sudo
+            Should not failed for acces right check
+        """
+        now = fields.Datetime.context_timestamp(self.partner_demo, fields.Datetime.now())
+
+        web_company = self.env['res.company'].sudo().create({'name': "Website Company"})
+        web_user = self.env['res.users'].with_company(web_company).sudo().create({
+            'name': 'web user',
+            'login': 'web',
+            'company_id': web_company.id
+        })
+        self.CalendarEvent.with_user(web_user).with_company(web_company).sudo().create({
+            'name': "Test",
+            'allday': False,
+            'recurrency': False,
+            'partner_ids': [(6, 0, self.partner_demo.ids)],
+            'alarm_ids': [(0, 0, {
+                'name': 'Alarm',
+                'alarm_type': 'notification',
+                'interval': 'minutes',
+                'duration': 30,
+            })],
+            'user_id': self.user_demo.id,
+            'start': fields.Datetime.to_string(now + timedelta(hours=5)),
+            'stop': fields.Datetime.to_string(now + timedelta(hours=6)),
+        })
+
+    def test_meeting_creation_from_partner_form(self):
+        """ When going from a partner to the Calendar and adding a meeting, both current user and partner
+         should be attendees of the event """
+        calendar_action = self.partner_demo.schedule_meeting()
+        event = self.env['calendar.event'].with_context(calendar_action['context']).create({
+            'name': 'Super Meeting',
+            'start': datetime(2020, 12, 13, 17),
+            'stop': datetime(2020, 12, 13, 22),
+        })
+        self.assertEqual(len(event.attendee_ids), 2)
+        self.assertTrue(self.partner_demo in event.attendee_ids.mapped('partner_id'))
+        self.assertTrue(self.env.user.partner_id in event.attendee_ids.mapped('partner_id'))

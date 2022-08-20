@@ -3,6 +3,7 @@ odoo.define('point_of_sale.ProductItem', function(require) {
 
     const PosComponent = require('point_of_sale.PosComponent');
     const Registries = require('point_of_sale.Registries');
+    const models = require('point_of_sale.models');
 
     class ProductItem extends PosComponent {
         /**
@@ -29,7 +30,7 @@ odoo.define('point_of_sale.ProductItem', function(require) {
         }
         get price() {
             const formattedUnitPrice = this.env.pos.format_currency(
-                this.props.product.get_price(this.pricelist, 1),
+                this.props.product.get_display_price(this.pricelist, 1),
                 'Product Price'
             );
             if (this.props.product.to_weight) {
@@ -39,6 +40,9 @@ odoo.define('point_of_sale.ProductItem', function(require) {
             } else {
                 return formattedUnitPrice;
             }
+        }
+        onProductInfoClick() {
+            this.showPopup('ProductInfoPopup', { product: this.props.product, quantity: 1 });
         }
     }
     ProductItem.template = 'ProductItem';

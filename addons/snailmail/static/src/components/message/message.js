@@ -1,22 +1,12 @@
-odoo.define('snailmail/static/src/components/message/message.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    Message: require('mail/static/src/components/message/message.js'),
-    SnailmailErrorDialog: require('snailmail/static/src/components/snailmail_error_dialog/snailmail_error_dialog.js'),
-    SnailmailNotificationPopover: require('snailmail/static/src/components/snailmail_notification_popover/snailmail_notification_popover.js'),
-};
+import { Message } from '@mail/components/message/message';
 
-const { patch } = require('web.utils');
+import { patch } from 'web.utils';
 
 const { useState } = owl;
 
-Object.assign(components.Message.components, {
-    SnailmailErrorDialog: components.SnailmailErrorDialog,
-    SnailmailNotificationPopover: components.SnailmailNotificationPopover,
-});
-
-patch(components.Message, 'snailmail/static/src/components/message/message.js', {
+patch(Message.prototype, 'snailmail/static/src/components/message/message.js', {
     /**
      * @override
      */
@@ -36,34 +26,34 @@ patch(components.Message, 'snailmail/static/src/components/message/message.js', 
      * @override
      */
     _onClickFailure() {
-        if (this.message.message_type === 'snailmail') {
+        if (this.messageView.message.message_type === 'snailmail') {
             /**
              * Messages from snailmail are considered to have at most one
              * notification. The failure type of the whole message is considered
              * to be the same as the one from that first notification, and the
              * click action will depend on it.
              */
-            switch (this.message.notifications[0].failure_type) {
+            switch (this.messageView.message.notifications[0].failure_type) {
                 case 'sn_credit':
                     // URL only used in this component, not received at init
-                    this.env.messaging.fetchSnailmailCreditsUrl();
+                    this.messaging.fetchSnailmailCreditsUrl();
                     this.snailmailState.hasDialog = true;
                     break;
                 case 'sn_error':
                     this.snailmailState.hasDialog = true;
                     break;
                 case 'sn_fields':
-                    this.message.openMissingFieldsLetterAction();
+                    this.messageView.message.openMissingFieldsLetterAction();
                     break;
                 case 'sn_format':
-                    this.message.openFormatLetterAction();
+                    this.messageView.message.openFormatLetterAction();
                     break;
                 case 'sn_price':
                     this.snailmailState.hasDialog = true;
                     break;
                 case 'sn_trial':
                     // URL only used in this component, not received at init
-                    this.env.messaging.fetchSnailmailCreditsUrlTrial();
+                    this.messaging.fetchSnailmailCreditsUrlTrial();
                     this.snailmailState.hasDialog = true;
                     break;
             }
@@ -82,6 +72,4 @@ patch(components.Message, 'snailmail/static/src/components/message/message.js', 
     _onDialogClosedSnailmailError() {
         this.snailmailState.hasDialog = false;
     },
-});
-
 });

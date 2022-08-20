@@ -27,7 +27,7 @@ const ImageCropWidget = Widget.extend({
         this.document = media.ownerDocument;
         // key: ratio identifier, label: displayed to user, value: used by cropper lib
         this.aspectRatios = {
-            "0/0": {label: _t("Free"), value: 0},
+            "0/0": {label: _t("Flexible"), value: 0},
             "16/9": {label: "16:9", value: 16 / 9},
             "4/3": {label: "4:3", value: 4 / 3},
             "1/1": {label: "1:1", value: 1},
@@ -45,7 +45,8 @@ const ImageCropWidget = Widget.extend({
     async willStart() {
         await this._super.apply(this, arguments);
         await loadImageInfo(this.media, this._rpc.bind(this));
-        if (this.media.dataset.originalSrc) {
+        const isIllustration = /^\/web_editor\/shape\/illustration\//.test(this.media.dataset.originalSrc);
+        if (this.media.dataset.originalSrc && !isIllustration) {
             this.originalSrc = this.media.dataset.originalSrc;
             this.originalId = this.media.dataset.originalId;
             return;
@@ -82,7 +83,6 @@ const ImageCropWidget = Widget.extend({
 
         await loadImage(this.originalSrc, cropperImage);
         await activateCropper(cropperImage, this.aspectRatios[this.aspectRatio].value, this.media.dataset);
-        core.bus.trigger('deactivate_snippet');
 
         this._onDocumentMousedown = this._onDocumentMousedown.bind(this);
         // We use capture so that the handler is called before other editor handlers
@@ -99,7 +99,26 @@ const ImageCropWidget = Widget.extend({
             this.document.removeEventListener('mousedown', this._onDocumentMousedown, {capture: true});
         }
         this.media.setAttribute('src', this.initialSrc);
+        this.$media.trigger('image_cropper_destroyed');
         return this._super(...arguments);
+    },
+
+    //--------------------------------------------------------------------------
+    // Public
+    //--------------------------------------------------------------------------
+
+    /**
+     * Resets the crop
+     */
+    async reset() {
+        if (this.$cropperImage) {
+            this.$cropperImage.cropper('reset');
+            if (this.aspectRatio !== '0/0') {
+                this.aspectRatio = '0/0';
+                this.$cropperImage.cropper('setAspectRatio', this.aspectRatios[this.aspectRatio].value);
+            }
+            await this._save(false);
+        }
     },
 
     //--------------------------------------------------------------------------
@@ -112,8 +131,9 @@ const ImageCropWidget = Widget.extend({
      * attachments will be created).
      *
      * @private
+     * @param {boolean} [cropped=true]
      */
-    async _save() {
+    async _save(cropped = true) {
         // Mark the media for later creation of cropped attachment
         this.media.classList.add('o_modified_image_to_save');
 
@@ -126,6 +146,7 @@ const ImageCropWidget = Widget.extend({
         });
         delete this.media.dataset.resizeWidth;
         this.initialSrc = await applyModifications(this.media);
+        this.media.classList.toggle('o_we_image_cropped', cropped);
         this.$media.trigger('image_cropped');
         this.destroy();
     },

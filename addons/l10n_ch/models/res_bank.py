@@ -2,13 +2,14 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 import re
+from stdnum.util import clean
 
 from odoo import api, fields, models, _
+from odoo.addons.base.models.res_bank import sanitize_account_number
+from odoo.addons.base_iban.models.res_partner_bank import normalize_iban, pretty_iban, validate_iban
 from odoo.exceptions import ValidationError
 from odoo.tools.misc import mod10r
-from odoo.exceptions import UserError
 
-import werkzeug.urls
 
 ISR_SUBSCRIPTION_CODE = {'CHF': '01', 'EUR': '03'}
 CLEARING = "09000"
@@ -37,6 +38,30 @@ def _is_l10n_ch_isr_issuer(account_ref, currency_code):
         return _is_l10n_ch_postal(account_ref)
     return False
 
+def validate_qr_iban(qr_iban):
+    # Check first if it's a valid IBAN.
+    validate_iban(qr_iban)
+
+    # We sanitize first so that _check_qr_iban_range() can extract correct IID from IBAN to validate it.
+    sanitized_qr_iban = sanitize_account_number(qr_iban)
+
+    if sanitized_qr_iban[:2] != 'CH':
+        raise ValidationError(_("QR-IBAN numbers are only available in Switzerland."))
+
+    # Now, check if it's valid QR-IBAN (based on its IID).
+    if not check_qr_iban_range(sanitized_qr_iban):
+        raise ValidationError(_("QR-IBAN '%s' is invalid.") % qr_iban)
+
+    return True
+
+def check_qr_iban_range(iban):
+    if not iban or len(iban) < 9:
+        return False
+    iid_start_index = 4
+    iid_end_index = 8
+    iid = iban[iid_start_index : iid_end_index+1]
+    return re.match(r'\d+', iid) and 30000 <= int(iid) <= 31999 # Those values for iid are reserved for QR-IBANs only
+
 
 class ResPartnerBank(models.Model):
     _inherit = 'res.partner.bank'
@@ -49,10 +74,18 @@ class ResPartnerBank(models.Model):
              "your own account. The client number is mostly 6 numbers without -, while the postal account number can "
              "be e.g. 01-162-8")
 
+    l10n_ch_qr_iban = fields.Char(string='QR-IBAN',
+                                  compute='_compute_l10n_ch_qr_iban',
+                                  store=True,
+                                  readonly=False,
+                                  help="Put the QR-IBAN here for your own bank accounts.  That way, you can "
+                                       "still use the main IBAN in the Account Number while you will see the "
+                                       "QR-IBAN for the barcode.  ")
+
     # fields to configure ISR payment slip generation
     l10n_ch_isr_subscription_chf = fields.Char(string='CHF ISR Subscription Number', help='The subscription number provided by the bank or Postfinance to identify the bank, used to generate ISR in CHF. eg. 01-162-8')
     l10n_ch_isr_subscription_eur = fields.Char(string='EUR ISR Subscription Number', help='The subscription number provided by the bank or Postfinance to identify the bank, used to generate ISR in EUR. eg. 03-162-5')
-    l10n_ch_show_subscription = fields.Boolean(compute='_compute_l10n_ch_show_subscription', default=lambda self: self.env.company.country_id.code == 'CH')
+    l10n_ch_show_subscription = fields.Boolean(compute='_compute_l10n_ch_show_subscription', default=lambda self: self.env.company.account_fiscal_country_id.code == 'CH')
 
     def _is_isr_issuer(self):
         return (_is_l10n_ch_isr_issuer(self.l10n_ch_postal, 'CHF')
@@ -62,7 +95,7 @@ class ResPartnerBank(models.Model):
     def _check_postal_num(self):
         """Validate postal number format"""
         for rec in self:
-            if rec.l10n_ch_postal and not _is_l10n_ch_postal(self.l10n_ch_postal):
+            if rec.l10n_ch_postal and not _is_l10n_ch_postal(rec.l10n_ch_postal):
                 # l10n_ch_postal is used for the purpose of Client Number on your own accounts, so don't do the check there
                 if rec.partner_id and not rec.partner_id.ref_company_ids:
                     raise ValidationError(
@@ -90,11 +123,11 @@ class ResPartnerBank(models.Model):
     def _compute_l10n_ch_show_subscription(self):
         for bank in self:
             if bank.partner_id:
-                bank.l10n_ch_show_subscription = bool(bank.partner_id.ref_company_ids)
+                bank.l10n_ch_show_subscription = bank.partner_id.ref_company_ids.country_id.code == 'CH'
             elif bank.company_id:
-                bank.l10n_ch_show_subscription = bank.company_id.country_id.code == 'CH'
+                bank.l10n_ch_show_subscription = bank.company_id.account_fiscal_country_id.code == 'CH'
             else:
-                bank.l10n_ch_show_subscription = self.env.company.country_id.code == 'CH'
+                bank.l10n_ch_show_subscription = self.env.company.account_fiscal_country_id.code == 'CH'
 
     @api.depends('acc_number', 'acc_type')
     def _compute_sanitized_acc_number(self):
@@ -103,6 +136,33 @@ class ResPartnerBank(models.Model):
         for bank in postal_banks:
             bank.sanitized_acc_number = bank.acc_number
         super(ResPartnerBank, self - postal_banks)._compute_sanitized_acc_number()
+
+    @api.depends('acc_number')
+    def _compute_l10n_ch_qr_iban(self):
+        for record in self:
+            try:
+                validate_qr_iban(record.acc_number)
+                valid_qr_iban = True
+            except ValidationError:
+                valid_qr_iban = False
+
+            if valid_qr_iban:
+                record.l10n_ch_qr_iban = record.sanitized_acc_number
+            else:
+                record.l10n_ch_qr_iban = None
+
+    @api.model
+    def create(self, vals):
+        if vals.get('l10n_ch_qr_iban'):
+            validate_qr_iban(vals['l10n_ch_qr_iban'])
+            vals['l10n_ch_qr_iban'] = pretty_iban(normalize_iban(vals['l10n_ch_qr_iban']))
+        return super().create(vals)
+
+    def write(self, vals):
+        if vals.get('l10n_ch_qr_iban'):
+            validate_qr_iban(vals['l10n_ch_qr_iban'])
+            vals['l10n_ch_qr_iban'] = pretty_iban(normalize_iban(vals['l10n_ch_qr_iban']))
+        return super().write(vals)
 
     @api.model
     def _get_supported_account_types(self):
@@ -176,14 +236,6 @@ class ResPartnerBank(models.Model):
             return self._pretty_postal_num(iban[-9:])
         return None
 
-    def _get_qr_code_url(self, qr_method, amount, currency, debtor_partner, free_communication, structured_communication):
-        if qr_method == 'ch_qr':
-            qr_code_vals = self._l10n_ch_get_qr_vals(amount, currency, debtor_partner, free_communication, structured_communication)
-
-            return '/report/barcode/?type=%s&value=%s&width=%s&height=%s&quiet=1&mask=ch_cross' % ('QR', werkzeug.urls.url_quote_plus('\n'.join(qr_code_vals)), 256, 256)
-
-        return super()._get_qr_code_url(qr_method, amount, currency, debtor_partner, free_communication, structured_communication)
-
     def _l10n_ch_get_qr_vals(self, amount, currency, debtor_partner, free_communication, structured_communication):
         comment = ""
         if free_communication:
@@ -197,10 +249,16 @@ class ResPartnerBank(models.Model):
         # just like ISR number for invoices)
         reference_type = 'NON'
         reference = ''
-        if self._is_qr_iban():
+        acc_number = self.sanitized_acc_number
+
+        if self.l10n_ch_qr_iban:
             # _check_for_qr_code_errors ensures we can't have a QR-IBAN without a QR-reference here
             reference_type = 'QRR'
             reference = structured_communication
+            acc_number = sanitize_account_number(self.l10n_ch_qr_iban)
+        elif self._is_iso11649_reference(structured_communication):
+            reference_type = 'SCOR'
+            reference = structured_communication.replace(' ', '')
 
         currency = currency or self.currency_id or self.company_id.currency_id
 
@@ -208,7 +266,7 @@ class ResPartnerBank(models.Model):
             'SPC',                                                # QR Type
             '0200',                                               # Version
             '1',                                                  # Coding Type
-            self.sanitized_acc_number,                            # IBAN
+            acc_number,                                           # IBAN / QR-IBAN
             'K',                                                  # Creditor Address Type
             (self.acc_holder_name or self.partner_id.name)[:70],  # Creditor Name
             creditor_addr_1,                                      # Creditor Address Line 1
@@ -226,7 +284,7 @@ class ResPartnerBank(models.Model):
             '{:.2f}'.format(amount),                              # Amount
             currency.name,                                        # Currency
             'K',                                                  # Ultimate Debtor Address Type
-            debtor_partner.name[:70],                             # Ultimate Debtor Name
+            debtor_partner.commercial_partner_id.name[:70],       # Ultimate Debtor Name
             debtor_addr_1,                                        # Ultimate Debtor Address Line 1
             debtor_addr_2,                                        # Ultimate Debtor Address Line 2
             '',                                                   # Ultimate Debtor Postal Code (not to be provided for address type K)
@@ -238,6 +296,25 @@ class ResPartnerBank(models.Model):
             'EPD',                                                # Mandatory trailer part
         ]
 
+    def _get_qr_vals(self, qr_method, amount, currency, debtor_partner, free_communication, structured_communication):
+        if qr_method == 'ch_qr':
+            return self._l10n_ch_get_qr_vals(amount, currency, debtor_partner, free_communication, structured_communication)
+        return super()._get_qr_vals(qr_method, amount, currency, debtor_partner, free_communication, structured_communication)
+
+    def _get_qr_code_generation_params(self, qr_method, amount, currency, debtor_partner, free_communication, structured_communication):
+        if qr_method == 'ch_qr':
+            return {
+                'barcode_type': 'QR',
+                'width': 256,
+                'height': 256,
+                'quiet': 1,
+                'mask': 'ch_cross',
+                'value': '\n'.join(self._get_qr_vals(qr_method, amount, currency, debtor_partner, free_communication, structured_communication)),
+                # Swiss QR code requires Error Correction Level = 'M' by specification
+                'barLevel': 'M',
+            }
+        return super()._get_qr_code_generation_params(qr_method, amount, currency, debtor_partner, free_communication, structured_communication)
+
     def _get_partner_address_lines(self, partner):
         """ Returns a tuple of two elements containing the address lines to use
         for this partner. Line 1 contains the street and number, line 2 contains
@@ -248,26 +325,6 @@ class ResPartnerBank(models.Model):
         line_2 = partner.zip + ' ' + partner.city
         return line_1[:70], line_2[:70]
 
-    def _check_qr_iban_range(self, iban):
-        if not iban or len(iban) < 9:
-            return False
-        iid_start_index = 4
-        iid_end_index = 8
-        iid = iban[iid_start_index : iid_end_index+1]
-        return re.match('\d+', iid) \
-               and 30000 <= int(iid) <= 31999 # Those values for iid are reserved for QR-IBANs only
-
-    def _is_qr_iban(self):
-        """ Tells whether or not this bank account has a QR-IBAN account number.
-        QR-IBANs are specific identifiers used in Switzerland as references in
-        QR-codes. They are formed like regular IBANs, but are actually something
-        different.
-        """
-        self.ensure_one()
-
-        return self.acc_type == 'iban' \
-               and self._check_qr_iban_range(self.sanitized_acc_number)
-
     @api.model
     def _is_qr_reference(self, reference):
         """ Checks whether the given reference is a QR-reference, i.e. it is
@@ -277,6 +334,17 @@ class ResPartnerBank(models.Model):
                and len(reference) == 27 \
                and re.match('\d+$', reference) \
                and reference == mod10r(reference[:-1])
+
+    @api.model
+    def _is_iso11649_reference(self, reference):
+        """ Checks whether the given reference is a ISO11649 (SCOR) reference.
+        """
+        return reference \
+               and len(reference) >= 5 \
+               and len(reference) <= 25 \
+               and reference.startswith('RF') \
+               and int(''.join(str(int(x, 36)) for x in clean(reference[4:] + reference[:4], ' -.,/:').upper().strip())) % 97 == 1
+               # see https://github.com/arthurdejong/python-stdnum/blob/master/stdnum/iso11649.py
 
     def _eligible_for_qr_code(self, qr_method, debtor_partner, currency):
         if qr_method == 'ch_qr':
@@ -300,9 +368,9 @@ class ResPartnerBank(models.Model):
                 return _("The partner set on the bank account meant to receive the payment (%s) must have a complete postal address (street, zip, city and country).", self.acc_number)
 
             if debtor_partner and not _partner_fields_set(debtor_partner):
-                return _("The partner the QR-code must have a complete postal address (street, zip, city and country).")
+                return _("The partner must have a complete postal address (street, zip, city and country).")
 
-            if self._is_qr_iban() and not self._is_qr_reference(structured_communication):
+            if self.l10n_ch_qr_iban and not self._is_qr_reference(structured_communication):
                 return _("When using a QR-IBAN as the destination account of a QR-code, the payment reference must be a QR-reference.")
 
         return super()._check_for_qr_code_errors(qr_method, amount, currency, debtor_partner, free_communication, structured_communication)

@@ -17,12 +17,15 @@
                         <field name="allowed_operation_ids" invisible="1"/>
                         <field name="company_id"/>
                         <field name="product_id"/>
+                        <field name="product_uom_category_id" invisible="1"/>
                         <label for="product_qty"/>
                         <div class="o_row">
                             <field name="product_qty"/>
                             <field name="product_uom_id" groups="uom.group_uom"/>
                         </div>
                         <field name="operation_id" groups="mrp.group_mrp_routings" options="{'no_quick_create':True,'no_create_edit':True}"/>
+                        <field name="possible_bom_product_template_attribute_value_ids" invisible="1"/>
+                        <field name="bom_product_template_attribute_value_ids" widget="many2many_tags" options="{'no_create': True}" groups="product.group_product_variant"/>
                     </group>
                 </form>
             </field>
@@ -48,9 +51,9 @@
                     <group>
                         <group>
                             <field name="active" invisible="1"/>
-                            <field name="product_tmpl_id" context="{'default_type': 'product'}"/>
+                            <field name="product_tmpl_id" context="{'default_detailed_type': 'product'}"/>
                             <field name="product_uom_category_id" invisible="1"/>
-                            <field name="product_id" groups="product.group_product_variant" context="{'default_type': 'product'}"/>
+                            <field name="product_id" groups="product.group_product_variant" context="{'default_detailed_type': 'product'}"/>
                             <label for="product_qty" string="Quantity"/>
                             <div class="o_row">
                                 <field name="product_qty"/>
@@ -80,7 +83,7 @@
                                 <tree string="Components" editable="bottom">
                                     <field name="company_id" invisible="1"/>
                                     <field name="sequence" widget="handle"/>
-                                    <field name="product_id" context="{'default_type': 'product'}"/>
+                                    <field name="product_id" context="{'default_detailed_type': 'product'}"/>
                                     <field name="product_tmpl_id" invisible="1"/>
                                     <button name="action_see_attachments" type="object" icon="fa-files-o" aria-label="Product Attachments" title="Product Attachments" class="float-right oe_read_only"/>
                                     <field name="attachments_count" class="text-left oe_read_only"
@@ -88,9 +91,9 @@
                                     <field name="product_qty"/>
                                     <field name="product_uom_category_id" invisible="1"/>
                                     <field name="parent_product_tmpl_id" invisible="1" />
-                                    <field name="possible_bom_product_template_attribute_value_ids" invisible="1"/>
                                     <field name="product_uom_id" options="{'no_open':True,'no_create':True}" groups="uom.group_uom"/>
-                                    <field name="bom_product_template_attribute_value_ids" widget="many2many_tags" options="{'no_create': True}" attrs="{'column_invisible': [('parent.product_id', '!=', False)]}" groups="product.group_product_variant"/>
+                                    <field name="possible_bom_product_template_attribute_value_ids" invisible="1"/>
+                                    <field name="bom_product_template_attribute_value_ids" optional="hide" widget="many2many_tags" options="{'no_create': True}" attrs="{'column_invisible': [('parent.product_id', '!=', False)]}" groups="product.group_product_variant"/>
                                     <field name="allowed_operation_ids" invisible="1"/>
                                     <field name="operation_id" groups="mrp.group_mrp_routings" optional="hidden" attrs="{'column_invisible': [('parent.type','not in', ('normal', 'phantom'))]}" options="{'no_quick_create':True,'no_create_edit':True}"/>
                                 </tree>
@@ -98,12 +101,12 @@
                         </page>
                         <page string="Operations"
                             name="operations"
-                            attrs="{'invisible': [('type','not in',('normal','phantom'))]}"
+                            attrs="{'invisible': [('type', 'not in',('normal','phantom'))]}"
                             groups="mrp.group_mrp_routings">
                                 <field name="operation_ids"
                                     attrs="{'invisible': [('type','not in',('normal','phantom'))]}"
                                     groups="mrp.group_mrp_routings"
-                                    context="{'default_company_id': company_id}"/>
+                                    context="{'bom_id_invisible': True, 'default_company_id': company_id, 'default_bom_id': id, 'tree_view_ref': 'mrp.mrp_routing_workcenter_bom_tree_view'}" widget="mrp_one2many_with_copy"/>
                         </page>
                         <page string="By-products"
                             name="by_products"
@@ -112,22 +115,27 @@
                             <field name="byproduct_ids"  context="{'form_view_ref' : 'mrp.mrp_bom_byproduct_form_view', 'default_company_id': company_id, 'default_bom_id': id}">
                                 <tree string="By-products"  editable="top">
                                     <field name="company_id" invisible="1"/>
-                                    <field name="product_id" context="{'default_type': 'product'}"/>
+                                    <field name="product_uom_category_id" invisible="1"/>
+                                    <field name="sequence" widget="handle"/>
+                                    <field name="product_id" context="{'default_detailed_type': 'product'}"/>
                                     <field name="product_qty"/>
                                     <field name="product_uom_id" groups="uom.group_uom"/>
+                                    <field name="cost_share" optional="hide"/>
                                     <field name="allowed_operation_ids" invisible="1"/>
                                     <field name="operation_id" groups="mrp.group_mrp_routings" options="{'no_quick_create':True,'no_create_edit':True}"/>
+                                    <field name="possible_bom_product_template_attribute_value_ids" invisible="1"/>
+                                    <field name="bom_product_template_attribute_value_ids" optional="hide" widget="many2many_tags" options="{'no_create': True}" attrs="{'column_invisible': [('parent.product_id', '!=', False)]}" groups="product.group_product_variant"/>
                                 </tree>
                            </field>
                        </page>
                         <page string="Miscellaneous" name="miscellaneous">
                             <group>
                                 <group>
-                                    <field name="ready_to_produce" attrs="{'invisible': [('type','!=','normal')]}" string="Manufacturing Readiness" widget="radio" groups="mrp.group_mrp_routings"/>
-                                    <field name="consumption" attrs="{'invisible': [('type','!=','normal')]}" widget="radio"/>
+                                    <field name="ready_to_produce" attrs="{'invisible': [('type','=','phantom')]}" string="Manufacturing Readiness" widget="radio" groups="mrp.group_mrp_routings"/>
+                                    <field name="consumption" attrs="{'invisible': [('type','=','phantom')]}" widget="radio"/>
                                 </group>
                                 <group>
-                                    <field name="picking_type_id" attrs="{'invisible': [('type','!=','normal')]}" string="Operation" groups="stock.group_adv_location"/>
+                                    <field name="picking_type_id" attrs="{'invisible': [('type','=','phantom')]}" string="Operation" groups="stock.group_adv_location"/>
                                 </group>
                             </group>
                         </page>
@@ -261,13 +269,14 @@
         </record>
 
         <record id="template_open_bom" model="ir.actions.act_window">
-            <field name="context">{'default_product_tmpl_id': active_id, 'search_default_product_tmpl_id': active_id}</field>
+            <field name="context">{'default_product_tmpl_id': active_id}</field>
             <field name="name">Bill of Materials</field>
             <field name="res_model">mrp.bom</field>
+            <field name="domain">['|', ('product_tmpl_id', '=', active_id), ('byproduct_ids.product_id.product_tmpl_id', '=', active_id)]</field>
         </record>
 
         <record id="product_open_bom" model="ir.actions.act_window">
-            <field name="context">{'default_product_id': active_id, 'search_default_product_id': active_id}</field>
+            <field name="context">{'default_product_id': active_id}</field>
             <field name="name">Bill of Materials</field>
             <field name="res_model">mrp.bom</field>
             <field name="domain">[]</field> <!-- Force empty -->

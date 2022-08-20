@@ -60,7 +60,7 @@ def load_data(cr, idref, mode, kind, package):
     filename = None
     try:
         if kind in ('demo', 'test'):
-            threading.currentThread().testing = True
+            threading.current_thread().testing = True
         for filename in _get_files_of_kind(kind):
             _logger.info("loading %s/%s", package.name, filename)
             noupdate = False
@@ -69,7 +69,7 @@ def load_data(cr, idref, mode, kind, package):
             tools.convert_file(cr, package.name, filename, idref, mode, noupdate, kind)
     finally:
         if kind in ('demo', 'test'):
-            threading.currentThread().testing = False
+            threading.current_thread().testing = False
 
     return bool(filename)
 
@@ -117,6 +117,7 @@ def force_demo(cr):
 
     env = api.Environment(cr, SUPERUSER_ID, {})
     env['ir.module.module'].invalidate_cache(['demo'])
+    env['res.groups']._update_user_groups_view()
 
 
 def load_module_graph(cr, graph, status=None, perform_checks=True,
@@ -227,7 +228,7 @@ def load_module_graph(cr, graph, status=None, perform_checks=True,
 
             # Update translations for all installed languages
             overwrite = odoo.tools.config["overwrite_existing_translations"]
-            module.with_context(overwrite=overwrite)._update_translations()
+            module._update_translations(overwrite=overwrite)
 
         if package.name is not None:
             registry._init_modules.add(package.name)
@@ -246,6 +247,22 @@ def load_module_graph(cr, graph, status=None, perform_checks=True,
             # update made to the schema or data so the tests can run
             # (separately in their own transaction)
             cr.commit()
+            concrete_models = [model for model in model_names if not registry[model]._abstract]
+            if concrete_models:
+                cr.execute("""
+                    SELECT model FROM ir_model 
+                    WHERE id NOT IN (SELECT DISTINCT model_id FROM ir_model_access) AND model IN %s
+                """, [tuple(concrete_models)])
+                models = [model for [model] in cr.fetchall()]
+                if models:
+                    lines = [
+                        f"The models {models} have no access rules in module {module_name}, consider adding some, like:",
+                        "id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink"
+                    ]
+                    for model in models:
+                        xmlid = model.replace('.', '_')
+                        lines.append(f"{module_name}.access_{xmlid},access_{xmlid},{module_name}.model_{xmlid},base.group_user,1,0,0,0")
+                    _logger.warning('\n'.join(lines))
 
         updating = tools.config.options['init'] or tools.config.options['update']
         test_time = test_queries = 0
@@ -253,7 +270,7 @@ def load_module_graph(cr, graph, status=None, perform_checks=True,
         if tools.config.options['test_enable'] and (needs_update or not updating):
             env = api.Environment(cr, SUPERUSER_ID, {})
             loader = odoo.tests.loader
-            suite = loader.make_suite(module_name, 'at_install')
+            suite = loader.make_suite([module_name], 'at_install')
             if suite.countTestCases():
                 if not needs_update:
                     registry.setup_models(cr)
@@ -353,7 +370,10 @@ def load_marked_modules(cr, graph, states, force, progressdict, report,
             break
     return processed_modules
 
-def load_modules(db, force_demo=False, status=None, update_module=False):
+def load_modules(registry, force_demo=False, status=None, update_module=False):
+    """ Load the modules for a registry object that has just been created.  This
+        function is part of Registry.new() and should not be used anywhere else.
+    """
     initialize_sys_path()
 
     force = []
@@ -362,7 +382,12 @@ def load_modules(db, force_demo=False, status=None, update_module=False):
 
     models_to_check = set()
 
-    with db.cursor() as cr:
+    with registry.cursor() as cr:
+        # prevent endless wait for locks on schema changes (during online
+        # installs) if a concurrent transaction has accessed the table;
+        # connection settings are automatically reset when the connection is
+        # borrowed from the pool
+        cr.execute("SET SESSION lock_timeout = '15s'")
         if not odoo.modules.db.is_initialized(cr):
             if not update_module:
                 _logger.error("Database %s not initialized, you can force it with `-i base`", cr.dbname)
@@ -373,10 +398,6 @@ def load_modules(db, force_demo=False, status=None, update_module=False):
             tools.config["init"]["all"] = 1
             if not tools.config['without_demo']:
                 tools.config["demo"]['all'] = 1
-
-        # This is a brand new registry, just created in
-        # odoo.modules.registry.Registry.new().
-        registry = odoo.registry(cr.dbname)
 
         if 'base' in tools.config['update'] or 'all' in tools.config['update']:
             cr.execute("update ir_module_module set state=%s where name=%s and state=%s", ('to upgrade', 'base', 'installed'))
@@ -421,7 +442,7 @@ def load_modules(db, force_demo=False, status=None, update_module=False):
 
             module_names = [k for k, v in tools.config['update'].items() if v]
             if module_names:
-                modules = Module.search([('state', '=', 'installed'), ('name', 'in', module_names)])
+                modules = Module.search([('state', 'in', ('installed', 'to upgrade')), ('name', 'in', module_names)])
                 if modules:
                     modules.button_upgrade()
 
@@ -454,12 +475,6 @@ def load_modules(db, force_demo=False, status=None, update_module=False):
                     ['to install'], force, status, report,
                     loaded_modules, update_module, models_to_check)
 
-        # check that new module dependencies have been properly installed after a migration/upgrade
-        cr.execute("SELECT name from ir_module_module WHERE state IN ('to install', 'to upgrade')")
-        module_list = [name for (name,) in cr.fetchall()]
-        if module_list:
-            _logger.error("Some modules have inconsistent states, some dependencies may be missing: %s", sorted(module_list))
-
         # check that all installed modules have been loaded by the registry after a migration/upgrade
         cr.execute("SELECT name from ir_module_module WHERE state = 'installed' and name != 'studio_customization'")
         module_list = [name for (name,) in cr.fetchall() if name not in graph]
@@ -474,17 +489,18 @@ def load_modules(db, force_demo=False, status=None, update_module=False):
         for package in graph:
             migrations.migrate_module(package, 'end')
 
+        # check that new module dependencies have been properly installed after a migration/upgrade
+        cr.execute("SELECT name from ir_module_module WHERE state IN ('to install', 'to upgrade')")
+        module_list = [name for (name,) in cr.fetchall()]
+        if module_list:
+            _logger.error("Some modules have inconsistent states, some dependencies may be missing: %s", sorted(module_list))
+
         # STEP 3.6: apply remaining constraints in case of an upgrade
         registry.finalize_constraints()
 
         # STEP 4: Finish and cleanup installations
         if processed_modules:
             env = api.Environment(cr, SUPERUSER_ID, {})
-            cr.execute("""select model,name from ir_model where id NOT IN (select distinct model_id from ir_model_access)""")
-            for (model, name) in cr.fetchall():
-                if model in registry and not registry[model]._abstract:
-                    _logger.warning('The model %s has no access rules, consider adding one. E.g. access_%s,access_%s,model_%s,base.group_user,1,0,0,0',
-                        model, model.replace('.', '_'), model.replace('.', '_'), model.replace('.', '_'))
 
             cr.execute("SELECT model from ir_model")
             for (model,) in cr.fetchall():
@@ -521,10 +537,10 @@ def load_modules(db, force_demo=False, status=None, update_module=False):
                 # modules to remove next time
                 cr.commit()
                 _logger.info('Reloading registry once more after uninstalling modules')
-                api.Environment.reset()
                 registry = odoo.modules.registry.Registry.new(
                     cr.dbname, force_demo, status, update_module
                 )
+                cr.reset()
                 registry.check_tables_exist(cr)
                 cr.commit()
                 return registry
@@ -556,6 +572,10 @@ def load_modules(db, force_demo=False, status=None, update_module=False):
             _logger.error('At least one test failed when loading the modules.')
 
         # STEP 8: call _register_hook on every model
+        # This is done *exactly once* when the registry is being loaded. See the
+        # management of those hooks in `Registry.setup_models`: all the calls to
+        # setup_models() done here do not mess up with hooks, as registry.ready
+        # is False.
         env = api.Environment(cr, SUPERUSER_ID, {})
         for model in env.values():
             model._register_hook()

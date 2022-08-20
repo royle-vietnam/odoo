@@ -14,15 +14,14 @@ import traceback
 import werkzeug
 import werkzeug.exceptions
 import werkzeug.routing
-import werkzeug.urls
 import werkzeug.utils
 
 import odoo
 from odoo import api, http, models, tools, SUPERUSER_ID
 from odoo.exceptions import AccessDenied, AccessError, MissingError
-from odoo.http import request, content_disposition
+from odoo.http import request, content_disposition, Response
 from odoo.tools import consteq, pycompat
-from odoo.tools.mimetypes import guess_mimetype
+from odoo.tools.mimetypes import get_extension, guess_mimetype
 from odoo.modules.module import get_resource_path, get_module_path
 
 from odoo.http import ALLOWED_DEBUG_MODES
@@ -159,7 +158,7 @@ class IrHttp(models.AbstractModel):
 
             if (not datas and name != request.httprequest.path and
                     name.startswith(('http://', 'https://', '/'))):
-                return werkzeug.utils.redirect(name, 301)
+                return request.redirect(name, 301, local=False)
 
             response = werkzeug.wrappers.Response()
             response.last_modified = wdate
@@ -191,7 +190,8 @@ class IrHttp(models.AbstractModel):
 
         # This is done first as the attachment path may
         # not match any HTTP controller
-        if isinstance(exception, werkzeug.exceptions.HTTPException) and exception.code == 404:
+        if (isinstance(exception, werkzeug.exceptions.HTTPException) and exception.code == 404) or \
+           (isinstance(exception, odoo.exceptions.AccessError)):
             serve = cls._serve_fallback(exception)
             if serve:
                 return serve
@@ -241,6 +241,10 @@ class IrHttp(models.AbstractModel):
             return cls._handle_exception(e)
 
         return result
+
+    @classmethod
+    def _redirect(cls, location, code=303):
+        return werkzeug.utils.redirect(location, code=code, Response=Response)
 
     @classmethod
     def _postprocess_args(cls, arguments, rule):
@@ -377,7 +381,7 @@ class IrHttp(models.AbstractModel):
         filehash = 'checksum' in record and record['checksum'] or False
 
         field_def = record._fields[field]
-        if field_def.type == 'binary' and field_def.attachment:
+        if field_def.type == 'binary' and field_def.attachment and not field_def.related:
             if model != 'ir.attachment':
                 field_attachment = self.env['ir.attachment'].sudo().search_read(domain=[('res_model', '=', model), ('res_id', '=', record.id), ('res_field', '=', field)], fields=['datas', 'mimetype', 'checksum'], limit=1)
                 if field_attachment:
@@ -390,15 +394,17 @@ class IrHttp(models.AbstractModel):
                 filehash = record['checksum']
 
         if not content:
-            content = record[field] or ''
+            try:
+                content = record[field] or ''
+            except AccessError:
+                # `record[field]` may not be readable for current user -> 404
+                content = ''
 
         # filename
-        default_filename = False
         if not filename:
             if filename_field in record:
                 filename = record[filename_field]
             if not filename:
-                default_filename = True
                 filename = "%s-%s-%s" % (record._name, record.id, field)
 
         if not mimetype:
@@ -409,8 +415,8 @@ class IrHttp(models.AbstractModel):
             mimetype = guess_mimetype(decoded_content, default=default_mimetype)
 
         # extension
-        _, existing_extension = os.path.splitext(filename)
-        if not existing_extension or default_filename:
+        has_extension = get_extension(filename) or mimetypes.guess_type(filename)[0]
+        if not has_extension:
             extension = mimetypes.guess_extension(mimetype)
             if extension:
                 filename = "%s%s" % (filename, extension)
@@ -422,7 +428,7 @@ class IrHttp(models.AbstractModel):
         return status, content, filename, mimetype, filehash
 
     def _binary_set_headers(self, status, content, filename, mimetype, unique, filehash=None, download=False):
-        headers = [('Content-Type', mimetype), ('X-Content-Type-Options', 'nosniff')]
+        headers = [('Content-Type', mimetype), ('X-Content-Type-Options', 'nosniff'), ('Content-Security-Policy', "default-src 'none'")]
         # cache
         etag = bool(request) and request.httprequest.headers.get('If-None-Match')
         status = status or 200
@@ -469,7 +475,8 @@ class IrHttp(models.AbstractModel):
         content, headers, status = None, [], None
 
         if record._name == 'ir.attachment':
-            status, content, filename, mimetype, filehash = self._binary_ir_attachment_redirect_content(record, default_mimetype=default_mimetype)
+            status, content, default_filename, mimetype, filehash = self._binary_ir_attachment_redirect_content(record, default_mimetype=default_mimetype)
+            filename = filename or default_filename
         if not content:
             status, content, filename, mimetype, filehash = self._binary_record_content(
                 record, field=field, filename=filename, filename_field=filename_field,
@@ -484,6 +491,6 @@ class IrHttp(models.AbstractModel):
         if status == 304:
             return werkzeug.wrappers.Response(status=status, headers=headers)
         elif status == 301:
-            return werkzeug.utils.redirect(content, code=301)
+            return request.redirect(content, code=301, local=False)
         elif status != 200:
             return request.not_found()

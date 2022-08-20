@@ -13,7 +13,7 @@
 
 /* ------ FLOOR SELECTOR ------- */
 
-.floor-selector { 
+.floor-selector {
     line-height: 48px;
     font-size: 18px;
     display: -webkit-flex;
@@ -46,13 +46,15 @@
     box-shadow: 0px 6px 0px -3px rgba(0,0,0,0.07) inset;
     background: #D8D7D7;
     background-repeat: no-repeat;
-    overflow: hidden;
+    overflow: auto;
     background-size: cover;
     transition: all 300ms ease-in-out;
 }
 
 .floor-map .tables {
     position: relative;
+    --scale: 1;
+    transform: scale(var(--scale));
 }
 @media screen and (min-width: 1024px) {
     .floor-map .tables {
@@ -94,16 +96,16 @@
     bottom: 0;
     left: 50%;
     height: 20px;
-    width: 20px;
     line-height: 20px;
     font-size: 16px;
-    border-radius: 50%;
-    margin-left: -10px;
+    border-radius: 5px;
+    margin-left: -16px;
     margin-bottom: 4px;
     background: black;
     color: white;
     opacity: 0.2;
     z-index: 3;
+    padding: 0 4px;
 }
 .floor-map .table .label {
     display: block;
@@ -117,8 +119,11 @@
     cursor: move;
     z-index: 50;
 }
+.floor-map .table.selected .table-seats {
+    margin-left: -12px;
+}
 .floor-map .edit-button.editing {
-    position: absolute;
+    position: fixed;
     top: 0;
     right: 0;
     font-size: 20px;
@@ -136,7 +141,7 @@
     color: white;
 }
 .floor-map .edit-bar {
-    position: absolute;
+    position: fixed;
     top: 0;
     right: 40px;
     margin: 8px;
@@ -217,7 +222,8 @@
     border-radius: 24px;
     background: white;
     box-shadow: 0px 2px 3px rgba(0,0,0,0.2);
-    cursor: grab;
+    /* See o-grab-cursor mixin */
+    cursor: url(/web/static/src/img/openhand.cur), grab;
     transition: all 150ms linear;
     z-index: 100;
     transform: translate(-50%, -50%);
@@ -278,10 +284,11 @@
 /* ------ FLOOR BUTTON IN THE ORDER SELECTOR ------- */
 
 .pos .order-button.floor-button {
+    display: flex;
+    align-items: center;
     background: #6EC89B;
     font-weight: bold;
     font-size: 16px;
-    min-width: 128px;
     padding-left: 16px;
     padding-right: 16px;
 }
@@ -302,17 +309,6 @@
     border-left: solid 6px #7F82AC;
     color: #7F82AC;
     padding-left: 9px;
-}
-
-
-/* ------ ORDER NOTES ------- */
-
-.pos .order .orderline-note {
-    margin: 8px;
-}
-.orderline-note .fa {
-    opacity: 0.5;
-    margin-right: 4px;
 }
 
 /* ------ SPLIT BILL SCREEN ------- */
@@ -575,4 +571,9 @@
     border: none;
     outline: none;
     border-bottom: solid 1px #555555;
+}
+
+.multiprint-flex {
+    display: flex;
+    justify-content: space-between;
 }

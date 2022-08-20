@@ -197,12 +197,12 @@ const glFilters = {
  * @param {HTMLImageElement} img the image to which modifications are applied
  * @returns {string} dataURL of the image with the applied modifications
  */
-async function applyModifications(img) {
+async function applyModifications(img, dataOptions = {}) {
     const data = Object.assign({
         glFilter: '',
         filter: '#0000',
-        quality: '95',
-    }, img.dataset);
+        quality: '75',
+    }, img.dataset, dataOptions);
     let {
         width,
         height,
@@ -230,6 +230,11 @@ async function applyModifications(img) {
     result.width = resizeWidth || croppedImg.width;
     result.height = croppedImg.height * result.width / croppedImg.width;
     const ctx = result.getContext('2d');
+    ctx.imageSmoothingQuality = "high";
+    ctx.mozImageSmoothingEnabled = true;
+    ctx.webkitImageSmoothingEnabled = true;
+    ctx.msImageSmoothingEnabled = true;
+    ctx.imageSmoothingEnabled = true;
     ctx.drawImage(croppedImg, 0, 0, croppedImg.width, croppedImg.height, 0, 0, result.width, result.height);
 
     // GL filter
@@ -303,23 +308,48 @@ async function activateCropper(image, aspectRatio, dataset) {
  * @param {HTMLImageElement} img the image whose attachment data should be found
  * @param {Function} rpc a function that can be used to make the RPC. Typically
  *   this would be passed as 'this._rpc.bind(this)' from widgets.
+ * @param {string} [attachmentSrc=''] specifies the URL of the corresponding
+ * attachment if it can't be found in the 'src' attribute.
  */
-async function loadImageInfo(img, rpc) {
+async function loadImageInfo(img, rpc, attachmentSrc = '') {
+    const src = attachmentSrc || img.getAttribute('src');
     // If there is a marked originalSrc, the data is already loaded.
-    if (img.dataset.originalSrc) {
+    if (img.dataset.originalSrc || !src) {
         return;
     }
 
     const {original} = await rpc({
         route: '/web_editor/get_image_info',
-        params: {src: img.getAttribute('src').split(/[?#]/)[0]},
+        params: {src: src.split(/[?#]/)[0]},
     });
     // Check that url is local.
-    if (original && new URL(original.image_src, window.location.origin).origin === window.location.origin) {
+    const isLocal = original && new URL(original.image_src, window.location.origin).origin === window.location.origin;
+    if (isLocal && original.image_src) {
         img.dataset.originalId = original.id;
         img.dataset.originalSrc = original.image_src;
         img.dataset.mimetype = original.mimetype;
     }
+}
+
+/**
+ * @param {String} mimetype
+ * @returns {Boolean}
+ */
+function isImageSupportedForProcessing(mimetype) {
+    return ['image/jpeg', 'image/png'].includes(mimetype);
+}
+/**
+ * @param {HTMLImageElement} img
+ * @returns {Boolean}
+ */
+function isImageSupportedForStyle(img) {
+    return img.parentElement && !img.parentElement.dataset.oeType
+        // Editable root elements are technically *potentially* supported here
+        // (if the edited attributes are not computed inside the related view,
+        // they could technically be saved... but as we cannot tell the computed
+        // ones apart from the "static" ones, we choose to not support edition
+        // at all in those "root" cases).
+        && !img.dataset.oeXpath;
 }
 
 return {
@@ -329,5 +359,7 @@ return {
     loadImageInfo,
     loadImage,
     removeOnImageChangeAttrs: [...cropperDataFields, ...modifierFields, 'aspectRatio'],
+    isImageSupportedForProcessing,
+    isImageSupportedForStyle,
 };
 });

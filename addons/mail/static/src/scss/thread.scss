@@ -84,10 +84,9 @@
             min-width: 0;
             max-width: 100%;
             word-wrap: break-word;
-            > pre {
+            .o_thread_message_content > pre {
                 white-space: pre-wrap;
                 word-break: break-word;
-                text-align: justify;
             }
 
             .o_mail_note_title {
@@ -148,7 +147,7 @@
         &.o_neutral_face_icon:before {
             @extend %o-nocontent-init-image;
             @include size(120px, 140px);
-            background: transparent url(/web/static/src/img/neutral_face.svg) no-repeat center;
+            background: transparent url(/web/static/img/neutral_face.svg) no-repeat center;
         }
     }
 

@@ -1,7 +1,6 @@
-odoo.define('mail/static/src/component_hooks/use_drag_visible_dropzone/use_drag_visible_dropzone.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { useRef, useState, onMounted, onWillUnmount } = owl.hooks;
+const { useState, onMounted, onWillUnmount } = owl.hooks;
 
 /**
  * This hook handle the visibility of the dropzone based on drag & drop events.
@@ -10,7 +9,7 @@ const { useRef, useState, onMounted, onWillUnmount } = owl.hooks;
  *
  * @returns {Object}
  */
-function useDragVisibleDropZone() {
+export function useDragVisibleDropZone() {
     /**
      * Determine whether the drop zone should be visible or not.
      * Note that this is an observed value, and primitive types such as
@@ -18,7 +17,6 @@ function useDragVisibleDropZone() {
      * value accessible from `.value`
      */
     const isVisible = useState({ value: false });
-    const dropzoneRef = useRef('dropzone');
 
     /**
      * Counts how many drag enter/leave happened globally. This is the only
@@ -31,17 +29,29 @@ function useDragVisibleDropZone() {
         document.addEventListener('dragenter', _onDragenterListener, true);
         document.addEventListener('dragleave', _onDragleaveListener, true);
         document.addEventListener('drop', _onDropListener, true);
+
+        // Thoses Events prevent the browser to open or download the file if
+        // it's dropped outside of the dropzone
+        window.addEventListener('dragover', preventDefault);
+        window.addEventListener('drop', preventDefault);
     });
 
     onWillUnmount(() => {
         document.removeEventListener('dragenter', _onDragenterListener, true);
         document.removeEventListener('dragleave', _onDragleaveListener, true);
         document.removeEventListener('drop', _onDropListener, true);
+
+        window.removeEventListener('dragover', preventDefault);
+        window.removeEventListener('drop', preventDefault);
     });
 
     //--------------------------------------------------------------------------
     // Handlers
     //--------------------------------------------------------------------------
+
+    function preventDefault(ev) {
+        ev.preventDefault();
+    }
 
     /**
      * Shows the dropzone when entering the browser window, to let the user know
@@ -52,7 +62,11 @@ function useDragVisibleDropZone() {
      * @param {DragEvent} ev
      */
     function _onDragenterListener(ev) {
-        if (dragCount === 0) {
+        if (
+            dragCount === 0 &&
+            ev.dataTransfer &&
+            ev.dataTransfer.types.includes('Files')
+        ) {
             isVisible.value = true;
         }
         dragCount++;
@@ -75,14 +89,8 @@ function useDragVisibleDropZone() {
      */
     function _onDropListener(ev) {
         dragCount = 0;
-        if (dropzoneRef.comp && !dropzoneRef.comp.contains(ev.target)) {
-            isVisible.value = false;
-        }
+        isVisible.value = false;
     }
 
     return isVisible;
 }
-
-return useDragVisibleDropZone;
-
-});

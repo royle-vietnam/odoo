@@ -6,7 +6,7 @@ import re
 
 from lxml import etree
 
-from odoo import api, models, _
+from odoo import api, models, _, Command
 from odoo.exceptions import AccessError, RedirectWarning, UserError
 from odoo.tools import ustr
 
@@ -475,8 +475,8 @@ class ResConfigSettings(models.TransientModel, ResConfigModuleInstallationMixin)
                 module = IrModule.sudo().search([('name', '=', name[7:])], limit=1)
                 modules.append((name, module))
             elif hasattr(field, 'config_parameter'):
-                if field.type not in ('boolean', 'integer', 'float', 'char', 'selection', 'many2one'):
-                    raise Exception("Field %s must have type 'boolean', 'integer', 'float', 'char', 'selection' or 'many2one'" % field)
+                if field.type not in ('boolean', 'integer', 'float', 'char', 'selection', 'many2one', 'datetime'):
+                    raise Exception("Field %s must have type 'boolean', 'integer', 'float', 'char', 'selection', 'many2one' or 'datetime'" % field)
                 configs.append((name, field.config_parameter))
             else:
                 others.append(name)
@@ -577,10 +577,9 @@ class ResConfigSettings(models.TransientModel, ResConfigModuleInstallationMixin)
                 if self[name] == current_settings[name]:
                     continue
                 if int(self[name]):
-                    groups.write({'implied_ids': [(4, implied_group.id)]})
+                    groups._apply_group(implied_group)
                 else:
-                    groups.write({'implied_ids': [(3, implied_group.id)]})
-                    implied_group.write({'users': [(3, user.id) for user in groups.users]})
+                    groups._remove_group(implied_group)
 
         # config fields: store ir.config_parameters
         IrConfigParameter = self.env['ir.config_parameter'].sudo()
@@ -749,3 +748,35 @@ class ResConfigSettings(models.TransientModel, ResConfigModuleInstallationMixin)
         if (action_id):
             return RedirectWarning(msg % values, action_id, _('Go to the configuration panel'))
         return UserError(msg % values)
+
+    @api.model
+    def create(self, values):
+        # Optimisation: saving a res.config.settings even without changing any
+        # values will trigger the write of all related values. This in turn may
+        # trigger chain of further recomputation. To avoid it, delete values
+        # that were not changed.
+        for field in self._fields.values():
+            if not (field.name in values and field.related and not field.readonly):
+                continue
+            # we write on a related field like
+            # qr_code = fields.Boolean(related='company_id.qr_code', readonly=False)
+            fname0, *fnames = field.related.split(".")
+            if fname0 not in values:
+                continue
+
+            # determine the current value
+            field0 = self._fields[fname0]
+            old_value = field0.convert_to_record(
+                field0.convert_to_cache(values[fname0], self), self)
+            for fname in fnames:
+                old_value = next(iter(old_value), old_value)[fname]
+
+            # determine the new value
+            new_value = field.convert_to_record(
+                field.convert_to_cache(values[field.name], self), self)
+
+            # drop if the value is the same
+            if old_value == new_value:
+                values.pop(field.name)
+
+        return super(ResConfigSettings, self).create(values)

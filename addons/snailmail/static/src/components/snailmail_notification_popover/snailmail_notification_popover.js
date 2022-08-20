@@ -1,29 +1,10 @@
-odoo.define('snailmail/static/src/components/snailmail_notification_popover/snailmail_notification_popover.js', function (require) {
-'use strict';
+/** @odoo-module **/
+
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
 
 class SnailmailNotificationPopover extends Component {
-
-    /**
-     * @override
-     */
-    constructor(...args) {
-        super(...args);
-        useStore(props => {
-            const message = this.env.models['mail.message'].get(props.messageLocalId);
-            const notifications = message ? message.notifications : [];
-            return {
-                message: message ? message.__state : undefined,
-                notifications: notifications.map(notification => notification ? notification.__state : undefined),
-            };
-        }, {
-            compareDepth: {
-                notifications: 1,
-            },
-        });
-    }
 
     /**
      * @returns {string}
@@ -61,7 +42,7 @@ class SnailmailNotificationPopover extends Component {
      * @returns {mail.message}
      */
     get message() {
-        return this.env.models['mail.message'].get(this.props.messageLocalId);
+        return this.messaging && this.messaging.models['mail.message'].get(this.props.messageLocalId);
     }
 
     /**
@@ -81,6 +62,6 @@ Object.assign(SnailmailNotificationPopover, {
     template: 'snailmail.SnailmailNotificationPopover',
 });
 
-return SnailmailNotificationPopover;
+registerMessagingComponent(SnailmailNotificationPopover);
 
-});
+export default SnailmailNotificationPopover;

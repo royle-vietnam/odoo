@@ -8,18 +8,6 @@ class Alarm(models.Model):
     _name = 'calendar.alarm'
     _description = 'Event Alarm'
 
-    @api.depends('interval', 'duration')
-    def _compute_duration_minutes(self):
-        for alarm in self:
-            if alarm.interval == "minutes":
-                alarm.duration_minutes = alarm.duration
-            elif alarm.interval == "hours":
-                alarm.duration_minutes = alarm.duration * 60
-            elif alarm.interval == "days":
-                alarm.duration_minutes = alarm.duration * 60 * 24
-            else:
-                alarm.duration_minutes = 0
-
     _interval_selection = {'minutes': 'Minutes', 'hours': 'Hours', 'days': 'Days'}
 
     name = fields.Char('Name', translate=True, required=True)
@@ -33,6 +21,32 @@ class Alarm(models.Model):
         'Duration in minutes', store=True,
         search='_search_duration_minutes', compute='_compute_duration_minutes',
         help="Duration in minutes")
+    mail_template_id = fields.Many2one(
+        'mail.template', string="Email Template",
+        domain=[('model', 'in', ['calendar.attendee'])],
+        compute='_compute_mail_template_id', readonly=False, store=True,
+        help="Template used to render mail reminder content.")
+    body = fields.Text("Additional Message", help="Additional message that would be sent with the notification for the reminder")
+
+    @api.depends('interval', 'duration')
+    def _compute_duration_minutes(self):
+        for alarm in self:
+            if alarm.interval == "minutes":
+                alarm.duration_minutes = alarm.duration
+            elif alarm.interval == "hours":
+                alarm.duration_minutes = alarm.duration * 60
+            elif alarm.interval == "days":
+                alarm.duration_minutes = alarm.duration * 60 * 24
+            else:
+                alarm.duration_minutes = 0
+
+    @api.depends('alarm_type', 'mail_template_id')
+    def _compute_mail_template_id(self):
+        for alarm in self:
+            if alarm.alarm_type == 'email' and not alarm.mail_template_id:
+                alarm.mail_template_id = self.env['ir.model.data']._xmlid_to_res_id('calendar.calendar_template_meeting_reminder')
+            elif alarm.alarm_type != 'email' or not alarm.mail_template_id:
+                alarm.mail_template_id = False
 
     def _search_duration_minutes(self, operator, value):
         return [
@@ -49,26 +63,3 @@ class Alarm(models.Model):
             key: value for key, value in self._fields['alarm_type']._description_selection(self.env)
         }[self.alarm_type]
         self.name = "%s - %s %s" % (display_alarm_type, self.duration, display_interval)
-
-    def _update_cron(self):
-        try:
-            cron = self.env['ir.model.data'].sudo().get_object('calendar', 'ir_cron_scheduler_alarm')
-        except ValueError:
-            return False
-        return cron.toggle(model=self._name, domain=[('alarm_type', '=', 'email')])
-
-    @api.model
-    def create(self, values):
-        result = super(Alarm, self).create(values)
-        self._update_cron()
-        return result
-
-    def write(self, values):
-        result = super(Alarm, self).write(values)
-        self._update_cron()
-        return result
-
-    def unlink(self):
-        result = super(Alarm, self).unlink()
-        self._update_cron()
-        return result

@@ -1,9 +1,10 @@
-odoo.define('mail/static/src/components/mobile_messaging_navbar/mobile_messaging_navbar.js', function (require) {
-'use strict';
+/** @odoo-module **/
+
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 
-class MobileMessagingNavbar extends Component {
+export class MobileMessagingNavbar extends Component {
 
     //--------------------------------------------------------------------------
     // Handlers
@@ -45,6 +46,4 @@ Object.assign(MobileMessagingNavbar, {
     template: 'mail.MobileMessagingNavbar',
 });
 
-return MobileMessagingNavbar;
-
-});
+registerMessagingComponent(MobileMessagingNavbar, { propsCompareDepth: { tabs: 2 } });

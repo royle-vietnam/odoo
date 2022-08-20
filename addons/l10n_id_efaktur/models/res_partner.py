@@ -8,7 +8,6 @@ class ResPartner(models.Model):
     """Inherit res.partner object to add NPWP field and Kode Transaksi"""
     _inherit = "res.partner"
 
-    country_code = fields.Char(related='country_id.code', string='Country Code')
     l10n_id_pkp = fields.Boolean(string="ID PKP", compute='_compute_l10n_id_pkp', store=True, readonly=False)
     l10n_id_nik = fields.Char(string='NIK')
     l10n_id_tax_address = fields.Char('Tax Address')
@@ -18,6 +17,7 @@ class ResPartner(models.Model):
             ('02', '02 Kepada Pemungut Bendaharawan (Dinas Kepemerintahan)'),
             ('03', '03 Kepada Pemungut Selain Bendaharawan (BUMN)'),
             ('04', '04 DPP Nilai Lain (PPN 1%)'),
+            ('05', '05 Besaran Tertentu'),
             ('06', '06 Penyerahan Lainnya (Turis Asing)'),
             ('07', '07 Penyerahan yang PPN-nya Tidak Dipungut (Kawasan Ekonomi Khusus/ Batam)'),
             ('08', '08 Penyerahan yang PPN-nya Dibebaskan (Impor Barang Tertentu)'),

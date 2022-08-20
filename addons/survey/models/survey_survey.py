@@ -7,7 +7,7 @@ import uuid
 import werkzeug
 
 from odoo import api, exceptions, fields, models, _
-from odoo.exceptions import AccessError
+from odoo.exceptions import AccessError, UserError
 from odoo.osv import expression
 from odoo.tools import is_html_empty
 
@@ -55,10 +55,7 @@ class Survey(models.Model):
         help="This message will be displayed when survey is completed")
     background_image = fields.Binary("Background Image")
     active = fields.Boolean("Active", default=True)
-    state = fields.Selection(selection=[
-        ('draft', 'Draft'), ('open', 'In Progress'), ('closed', 'Closed')
-    ], string="Survey Stage", default='draft', required=True,
-        group_expand='_read_group_states')
+    user_id = fields.Many2one('res.users', string='Responsible', tracking=True, default=lambda self: self.env.user)
     # questions
     question_and_page_ids = fields.One2many('survey.question', 'survey_id', string='Sections and Questions', copy=True)
     page_ids = fields.One2many('survey.question', string='Pages', compute="_compute_page_and_question_ids")
@@ -92,6 +89,7 @@ class Survey(models.Model):
     answer_count = fields.Integer("Registered", compute="_compute_survey_statistic")
     answer_done_count = fields.Integer("Attempts", compute="_compute_survey_statistic")
     answer_score_avg = fields.Float("Avg Score %", compute="_compute_survey_statistic")
+    answer_duration_avg = fields.Float("Average Duration", compute="_compute_answer_duration_avg", help="Average duration of the survey (in hours)")
     success_count = fields.Integer("Success", compute="_compute_survey_statistic")
     success_ratio = fields.Integer("Success Ratio", compute="_compute_survey_statistic")
     # scoring
@@ -128,8 +126,8 @@ class Survey(models.Model):
     #   - If the certification badge is set, show certification_badge_id_dummy in 'no create' mode.
     #       So it can be edited but not removed or replaced.
     certification_give_badge = fields.Boolean('Give Badge', compute='_compute_certification_give_badge',
-                                              readonly=False, store=True)
-    certification_badge_id = fields.Many2one('gamification.badge', 'Certification Badge')
+                                              readonly=False, store=True, copy=False)
+    certification_badge_id = fields.Many2one('gamification.badge', 'Certification Badge', copy=False)
     certification_badge_id_dummy = fields.Many2one(related='certification_badge_id', string='Certification Badge ')
     # live sessions
     session_state = fields.Selection([
@@ -166,8 +164,6 @@ class Survey(models.Model):
         ('attempts_limit_check', "CHECK( (is_attempts_limited=False) OR (attempts_limit is not null AND attempts_limit > 0) )",
             'The attempts limit needs to be a positive number if the survey has a limited number of attempts.'),
         ('badge_uniq', 'unique (certification_badge_id)', "The badge for each survey should be unique!"),
-        ('give_badge_check', "CHECK(certification_give_badge=False OR (certification_give_badge=True AND certification_badge_id is not null))",
-            'Certification badge must be configured if Give Badge is set.'),
     ]
 
     def _compute_users_can_signup(self):
@@ -194,13 +190,34 @@ class Survey(models.Model):
             if item['scoring_success']:
                 stat[item['survey_id'][0]]['success_count'] += item['__count']
 
-        for survey_id, values in stat.items():
-            avg_total = stat[survey_id].pop('answer_score_avg_total')
-            stat[survey_id]['answer_score_avg'] = avg_total / (stat[survey_id]['answer_done_count'] or 1)
-            stat[survey_id]['success_ratio'] = (stat[survey_id]['success_count'] / (stat[survey_id]['answer_done_count'] or 1.0))*100
+        for survey_stats in stat.values():
+            avg_total = survey_stats.pop('answer_score_avg_total')
+            survey_stats['answer_score_avg'] = avg_total / (survey_stats['answer_done_count'] or 1)
+            survey_stats['success_ratio'] = (survey_stats['success_count'] / (survey_stats['answer_done_count'] or 1.0))*100
 
         for survey in self:
             survey.update(stat.get(survey._origin.id, default_vals))
+
+    @api.depends('user_input_ids.survey_id', 'user_input_ids.start_datetime', 'user_input_ids.end_datetime')
+    def _compute_answer_duration_avg(self):
+        result_per_survey_id = {}
+        if self.ids:
+            self.env.cr.execute(
+                """SELECT survey_id,
+                          avg((extract(epoch FROM end_datetime)) - (extract (epoch FROM start_datetime)))
+                     FROM survey_user_input
+                    WHERE survey_id = any(%s) AND state = 'done'
+                          AND end_datetime IS NOT NULL
+                          AND start_datetime IS NOT NULL
+                 GROUP BY survey_id""",
+                [self.ids]
+            )
+            result_per_survey_id = dict(self.env.cr.fetchall())
+
+        for survey in self:
+            # as avg returns None if nothing found, set 0 if it's the case.
+            survey.answer_duration_avg = (result_per_survey_id.get(survey.id) or 0) / 3600
+
 
     @api.depends('question_and_page_ids')
     def _compute_page_and_question_ids(self):
@@ -294,10 +311,6 @@ class Survey(models.Model):
                not survey.certification:
                 survey.certification_give_badge = False
 
-    def _read_group_states(self, values, domain, order):
-        selection = self.env['survey.survey'].fields_get(allfields=['state'])['state']['selection']
-        return [s[0] for s in selection]
-
     # ------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------
@@ -316,8 +329,8 @@ class Survey(models.Model):
         return result
 
     def copy_data(self, default=None):
-        title = _("%s (copy)") % (self.title)
-        default = dict(default or {}, title=title)
+        new_defaults = {'title': _("%s (copy)") % (self.title)}
+        default = dict(new_defaults, **(default or {}))
         return super(Survey, self).copy_data(default)
 
     def toggle_active(self):
@@ -402,9 +415,7 @@ class Survey(models.Model):
                 raise exceptions.UserError(_('Creating test token is not allowed for you.'))
         else:
             if not self.active:
-                raise exceptions.UserError(_('Creating token for archived surveys is not allowed.'))
-            elif self.state == 'closed':
-                raise exceptions.UserError(_('Creating token for closed surveys is not allowed.'))
+                raise exceptions.UserError(_('Creating token for closed/archived surveys is not allowed.'))
             if self.access_mode == 'authentication':
                 # signup possible -> should have at least a partner to create an account
                 if self.users_can_signup and not user and not partner:
@@ -584,6 +595,17 @@ class Survey(models.Model):
                     return section
             return Question
 
+    def _is_first_page_or_question(self, page_or_question):
+        """ This method checks if the given question or page is the first one to display.
+            If the first section of the survey as a description, this will be the first screen to display.
+            else, the first question will be the first screen to be displayed.
+            This methods is used for survey session management where the host should not be able to go back on the
+            first page or question."""
+        first_section_has_description = self.page_ids and not is_html_empty(self.page_ids[0].description)
+        is_first_page_or_question = (first_section_has_description and page_or_question == self.page_ids[0]) or \
+            (not first_section_has_description and page_or_question == self.question_ids[0])
+        return is_first_page_or_question
+
     def _is_last_page_or_question(self, user_input, page_or_question):
         """ This method checks if the given question or page is the last one.
         This includes conditional questions configuration. If the given question is normally not the last one but
@@ -692,7 +714,7 @@ class Survey(models.Model):
             self.sudo().write({'session_state': 'in_progress'})
             self.sudo().flush(['session_state'])
 
-    def _get_session_next_question(self):
+    def _get_session_next_question(self, go_back):
         self.ensure_one()
 
         if not self.question_ids or not self.env.user.has_group('survey.group_survey_user'):
@@ -701,7 +723,7 @@ class Survey(models.Model):
         most_voted_answers = self._get_session_most_voted_answers()
         return self._get_next_page_or_question(
             most_voted_answers,
-            self.session_question_id.id if self.session_question_id else 0)
+            self.session_question_id.id if self.session_question_id else 0, go_back=go_back)
 
     def _get_session_most_voted_answers(self):
         """ In sessions of survey that has conditional questions, as the survey is passed at the same time by
@@ -801,22 +823,20 @@ class Survey(models.Model):
     # ACTIONS
     # ------------------------------------------------------------
 
-    def action_draft(self):
-        self.write({'state': 'draft'})
-
-    def action_open(self):
-        self.write({'state': 'open'})
-
-    def action_close(self):
-        self.write({'state': 'closed'})
-
     def action_send_survey(self):
         """ Open a window to compose an email, pre-filled with the survey message """
-        # Ensure that this survey has at least one page with at least one question.
-        if (not self.page_ids and self.questions_layout == 'page_per_section') or not self.question_ids:
-            raise exceptions.UserError(_('You cannot send an invitation for a survey that has no questions.'))
+        # Ensure that this survey has at least one question.
+        if not self.question_ids:
+            raise UserError(_('You cannot send an invitation for a survey that has no questions.'))
 
-        if self.state == 'closed':
+        # Ensure that this survey has at least one section with question(s), if question layout is 'One page per section'.
+        if self.questions_layout == 'page_per_section':
+            if not self.page_ids:
+                raise UserError(_('You cannot send an invitation for a "One page per section" survey if the survey has no sections.'))
+            if not self.page_ids.mapped('question_ids'):
+                raise UserError(_('You cannot send an invitation for a "One page per section" survey if the survey only contains empty sections.'))
+
+        if not self.active:
             raise exceptions.UserError(_("You cannot send invitations for closed surveys."))
 
         template = self.env.ref('survey.mail_template_user_input_invite', raise_if_not_found=False)
@@ -874,13 +894,12 @@ class Survey(models.Model):
         return {
             'type': 'ir.actions.act_url',
             'name': "Test Survey",
-            'target': 'self',
+            'target': '_blank',
             'url': '/survey/test/%s' % self.access_token,
         }
 
     def action_survey_user_input_completed(self):
-        action_rec = self.env.ref('survey.action_survey_user_input')
-        action = action_rec.read()[0]
+        action = self.env['ir.actions.act_window']._for_xml_id('survey.action_survey_user_input')
         ctx = dict(self.env.context)
         ctx.update({'search_default_survey_id': self.ids[0],
                     'search_default_completed': 1,
@@ -889,8 +908,7 @@ class Survey(models.Model):
         return action
 
     def action_survey_user_input_certified(self):
-        action_rec = self.env.ref('survey.action_survey_user_input')
-        action = action_rec.read()[0]
+        action = self.env['ir.actions.act_window']._for_xml_id('survey.action_survey_user_input')
         ctx = dict(self.env.context)
         ctx.update({'search_default_survey_id': self.ids[0],
                     'search_default_scoring_success': 1,
@@ -899,8 +917,7 @@ class Survey(models.Model):
         return action
 
     def action_survey_user_input(self):
-        action_rec = self.env.ref('survey.action_survey_user_input')
-        action = action_rec.read()[0]
+        action = self.env['ir.actions.act_window']._for_xml_id('survey.action_survey_user_input')
         ctx = dict(self.env.context)
         ctx.update({'search_default_survey_id': self.ids[0],
                     'search_default_not_test': 1})
@@ -912,7 +929,7 @@ class Survey(models.Model):
         return {
             'type': 'ir.actions.act_url',
             'target': '_blank',
-            'url': '/survey/%s/get_certification_preview' % (self.id)
+            'url': '/survey/%s/certification_preview' % (self.id)
         }
 
     def action_start_session(self):
@@ -938,7 +955,7 @@ class Survey(models.Model):
         return {
             'type': 'ir.actions.act_url',
             'name': "Open Session Manager",
-            'target': 'self',
+            'target': '_blank',
             'url': '/survey/session/manage/%s' % self.access_token
         }
 
@@ -951,7 +968,7 @@ class Survey(models.Model):
 
         self.sudo().write({'session_state': False})
         self.user_input_ids.sudo().write({'state': 'done'})
-        self.env['bus.bus'].sendone(self.access_token, {'type': 'end_session'})
+        self.env['bus.bus']._sendone(self.access_token, 'end_session', {})
 
     def get_start_url(self):
         return '/survey/start/%s' % self.access_token
@@ -1014,6 +1031,9 @@ class Survey(models.Model):
 
     def _create_certification_badge_trigger(self):
         self.ensure_one()
+        if not self.certification_badge_id:
+            raise ValueError(_('Certification Badge is not configured for the survey %(survey_name)s', survey_name=self.title))
+
         goal = self.env['gamification.goal.definition'].create({
             'name': self.title,
             'description': _("%s certification passed", self.title),

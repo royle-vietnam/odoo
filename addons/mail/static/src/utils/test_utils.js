@@ -1,36 +1,40 @@
-odoo.define('mail/static/src/utils/test_utils.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const BusService = require('bus.BusService');
+import BusService from 'bus.BusService';
 
-const {
+import {
     addMessagingToEnv,
     addTimeControlToEnv,
-} = require('mail/static/src/env/test_env.js');
-const ModelManager = require('mail/static/src/model/model_manager.js');
-const ChatWindowService = require('mail/static/src/services/chat_window_service/chat_window_service.js');
-const DialogService = require('mail/static/src/services/dialog_service/dialog_service.js');
-const { nextTick } = require('mail/static/src/utils/utils.js');
-const DiscussWidget = require('mail/static/src/widgets/discuss/discuss.js');
-const MessagingMenuWidget = require('mail/static/src/widgets/messaging_menu/messaging_menu.js');
-const MockModels = require('mail/static/tests/helpers/mock_models.js');
+} from '@mail/env/test_env';
+import { insertAndReplace, replace } from '@mail/model/model_field_command';
+import { ChatWindowService } from '@mail/services/chat_window_service/chat_window_service';
+import { MessagingService } from '@mail/services/messaging/messaging';
+import { makeDeferred } from '@mail/utils/deferred/deferred';
+import { DialogService } from '@mail/services/dialog_service/dialog_service';
+import { getMessagingComponent } from '@mail/utils/messaging_component';
+import { nextTick } from '@mail/utils/utils';
+import { DiscussWidget } from '@mail/widgets/discuss/discuss';
+import { MockModels } from '@mail/../tests/helpers/mock_models';
 
-const AbstractStorageService = require('web.AbstractStorageService');
-const NotificationService = require('web.NotificationService');
-const RamStorage = require('web.RamStorage');
-const {
-    createActionManager,
+import AbstractStorageService from 'web.AbstractStorageService';
+import RamStorage from 'web.RamStorage';
+import {
     createView,
     makeTestPromise,
-    mock: {
-        addMockEnvironment,
-        patch: legacyPatch,
-        unpatch: legacyUnpatch,
-    },
-} = require('web.test_utils');
-const Widget = require('web.Widget');
+    mock,
+} from 'web.test_utils';
+import Widget from 'web.Widget';
+import { createWebClient, getActionManagerServerData } from "@web/../tests/webclient/helpers";
 
+import LegacyRegistry from "web.Registry";
+
+const {
+    addMockEnvironment,
+    patch: legacyPatch,
+    unpatch: legacyUnpatch,
+} = mock;
 const { Component } = owl;
+const { EventBus } = owl.core;
 
 //------------------------------------------------------------------------------
 // Private
@@ -148,33 +152,6 @@ function _useDiscuss(callbacks) {
     });
 }
 
-/**
- * @private
- * @param {Object} callbacks
- * @param {function[]} callbacks.init
- * @param {function[]} callbacks.mount
- * @param {function[]} callbacks.destroy
- * @param {function[]} callbacks.return
- * @returns {Object} update callbacks
- */
-function _useMessagingMenu(callbacks) {
-    const {
-        mount: prevMount,
-        return: prevReturn,
-    } = callbacks;
-    let messagingMenuWidget;
-    return Object.assign({}, callbacks, {
-        mount: prevMount.concat(async ({ selector, widget }) => {
-            messagingMenuWidget = new MessagingMenuWidget(widget, {});
-            await messagingMenuWidget.appendTo($(selector));
-            await messagingMenuWidget.on_attach_callback();
-        }),
-        return: prevReturn.concat(result => {
-            Object.assign(result, { messagingMenuWidget });
-        }),
-    });
-}
-
 //------------------------------------------------------------------------------
 // Public: rendering timers
 //------------------------------------------------------------------------------
@@ -268,12 +245,13 @@ function beforeEach(self) {
     });
 
     data.currentPartnerId = 3;
+    data.currentUserId = 2;
     data['res.partner'].records.push({
         display_name: "Your Company, Mitchell Admin",
         id: data.currentPartnerId,
         name: "Mitchell Admin",
+        user_ids: [data.currentUserId],
     });
-    data.currentUserId = 2;
     data['res.users'].records.push({
         display_name: "Your Company, Mitchell Admin",
         id: data.currentUserId,
@@ -318,15 +296,18 @@ function beforeEach(self) {
         unpatch,
         widget: undefined
     });
+
+    Object.defineProperty(self, 'messaging', {
+        get() {
+            if (!this.env || !this.env.services.messaging) {
+                return undefined;
+            }
+            return this.env.services.messaging.modelManager.messaging;
+        },
+    });
 }
 
 function afterEach(self) {
-    if (self.env) {
-        self.env.bus.off('hide_home_menu', null);
-        self.env.bus.off('show_home_menu', null);
-        self.env.bus.off('will_hide_home_menu', null);
-        self.env.bus.off('will_show_home_menu', null);
-    }
     // The components must be destroyed before the widget, because the
     // widget might destroy the models before destroying the components,
     // and the components might still rely on messaging (or other) record(s).
@@ -338,8 +319,58 @@ function afterEach(self) {
         self.widget.destroy();
         self.widget = undefined;
     }
+    if (self.messaging) {
+        self.messaging.delete();
+    }
     self.env = undefined;
     self.unpatch();
+}
+
+
+function getAfterEvent({ messagingBus }) {
+    /**
+     * Returns a promise resolved after the expected event is received.
+     *
+     * @param {Object} param0
+     * @param {string} param0.eventName event to wait
+     * @param {function} param0.func function which, when called, is expected to
+     *  trigger the event
+     * @param {string} [param0.message] assertion message
+     * @param {function} [param0.predicate] predicate called with event data.
+     *  If not provided, only the event name has to match.
+     * @param {number} [param0.timeoutDelay=5000] how long to wait at most in ms
+     * @returns {Promise}
+     */
+    return async function afterEvent({ eventName, func, message, predicate, timeoutDelay = 5000 }) {
+        // Set up the timeout to reject if the event is not triggered.
+        let timeoutNoEvent;
+        const timeoutProm = new Promise((resolve, reject) => {
+            timeoutNoEvent = setTimeout(() => {
+                let error = message
+                    ? new Error(message)
+                    : new Error(`Timeout: the event ${eventName} was not triggered.`);
+                console.error(error);
+                reject(error);
+            }, timeoutDelay);
+        });
+        // Set up the promise to resolve if the event is triggered.
+        const eventProm = new Promise(resolve => {
+            messagingBus.on(eventName, null, data => {
+                if (!predicate || predicate(data)) {
+                    resolve();
+                }
+            });
+        });
+        // Start the function expected to trigger the event after the
+        // promise has been registered to not miss any potential event.
+        const funcRes = func();
+        // Make them race (first to resolve/reject wins).
+        await Promise.race([eventProm, timeoutProm]);
+        clearTimeout(timeoutNoEvent);
+        // If the event is triggered before the end of the async function,
+        // ensure the function finishes its job before returning.
+        await funcRes;
+    };
 }
 
 /**
@@ -350,19 +381,107 @@ function afterEach(self) {
  * the test, which will happen when `afterEach` is called.
  *
  * @param {Object} self the current QUnit instance
- * @param {Class} Component the component class to create
+ * @param {string} componentName the class name of the component to create
  * @param {Object} param2
  * @param {Object} [param2.props={}] forwarded to component constructor
  * @param {DOM.Element} param2.target mount target for the component
  * @returns {owl.Component} the new component instance
  */
-async function createRootComponent(self, Component, { props = {}, target }) {
+async function createRootMessagingComponent(self, componentName, { props = {}, target }) {
+    const Component = getMessagingComponent(componentName);
     Component.env = self.env;
     const component = new Component(null, props);
     delete Component.env;
     self.components.push(component);
     await afterNextRender(() => component.mount(target));
     return component;
+}
+
+function getCreateComposerComponent({ components, env, modelManager, widget }) {
+    return async function createComposerComponent(composer, props) {
+        const composerView = modelManager.messaging.models['mail.composer_view'].create({
+            qunitTest: insertAndReplace({
+                composer: replace(composer),
+            }),
+        });
+        await createRootMessagingComponent({ components, env }, "Composer", {
+            props: { composerViewLocalId: composerView.localId, ...props },
+            target: widget.el,
+        });
+    };
+}
+
+function getCreateComposerSuggestionComponent({ components, env, modelManager, widget }) {
+    return async function createComposerSuggestionComponent(composer, props) {
+        const composerView = modelManager.messaging.models['mail.composer_view'].create({
+            qunitTest: insertAndReplace({
+                composer: replace(composer),
+            }),
+        });
+        await createRootMessagingComponent({ components, env }, "ComposerSuggestion", {
+            props: { ...props, composerViewLocalId: composerView.localId },
+            target: widget.el,
+        });
+    };
+}
+
+function getCreateMessageComponent({ components, env, modelManager, widget }) {
+    return async function createMessageComponent(message) {
+        const messageView = modelManager.messaging.models['mail.message_view'].create({
+            message: replace(message),
+            qunitTest: insertAndReplace(),
+        });
+        await createRootMessagingComponent({ components, env }, "Message", {
+            props: { messageViewLocalId: messageView.localId },
+            target: widget.el,
+        });
+    };
+}
+
+function getCreateMessagingMenuComponent({ components, env, widget }) {
+    return async function createMessagingMenuComponent() {
+        await createRootMessagingComponent({ components, env }, 'MessagingMenu', {
+            props: {},
+            target: widget.el,
+        });
+    };
+}
+
+function getCreateThreadViewComponent({ afterEvent, components, env, widget }) {
+    return async function createThreadViewComponent(threadView, otherProps = {}, { isFixedSize = false, waitUntilMessagesLoaded = true } = {}) {
+        let target;
+        if (isFixedSize) {
+            // needed to allow scrolling in some tests
+            const div = document.createElement('div');
+            Object.assign(div.style, {
+                display: 'flex',
+                'flex-flow': 'column',
+                height: '300px',
+            });
+            widget.el.append(div);
+            target = div;
+        } else {
+            target = widget.el;
+        }
+        async function func() {
+            return createRootMessagingComponent({ components, env }, "ThreadView", { props: { threadViewLocalId: threadView.localId, ...otherProps }, target });
+        }
+        if (waitUntilMessagesLoaded) {
+            await afterNextRender(() => afterEvent({
+                eventName: 'o-thread-view-hint-processed',
+                func,
+                message: "should wait until thread loaded messages after creating thread view component",
+                predicate: ({ hint, threadViewer }) => {
+                    return (
+                        hint.type === 'messages-loaded' &&
+                        threadViewer.threadView === threadView
+                    );
+                },
+            }));
+        } else {
+            await func();
+        }
+    };
 }
 
 /**
@@ -384,19 +503,18 @@ async function createRootComponent(self, Component, { props = {}, target }) {
  * @param {Object} [param0.env={}]
  * @param {function} [param0.mockFetch]
  * @param {function} [param0.mockRPC]
- * @param {boolean} [param0.hasActionManager=false] if set, use
- *   createActionManager.
+ * @param {boolean} [param0.hasWebClient=false] if set, use
+ *   createWebClient
  * @param {boolean} [param0.hasChatWindow=false] if set, mount chat window
  *   service.
  * @param {boolean} [param0.hasDiscuss=false] if set, mount discuss app.
- * @param {boolean} [param0.hasMessagingMenu=false] if set, mount messaging
- *   menu.
  * @param {boolean} [param0.hasTimeControl=false] if set, all flow of time
  *   with `env.browser.setTimeout` are fully controlled by test itself.
  *     @see addTimeControlToEnv that adds `advanceTime` function in
  *     `env.testUtils`.
  * @param {boolean} [param0.hasView=false] if set, use createView to create a
  *   view instead of a generic widget.
+ * @param {integer} [param0.loadingBaseDelayDuration=0]
  * @param {Deferred|Promise} [param0.messagingBeforeCreationDeferred=Promise.resolve()]
  *   Deferred that let tests block messaging creation and simulate resolution.
  *   Useful for testing working components when messaging is not yet created.
@@ -441,13 +559,13 @@ async function start(param0 = {}) {
     };
     const {
         env: providedEnv,
-        hasActionManager = false,
+        hasWebClient = false,
         hasChatWindow = false,
         hasDialog = false,
         hasDiscuss = false,
-        hasMessagingMenu = false,
         hasTimeControl = false,
         hasView = false,
+        loadingBaseDelayDuration = 0,
         messagingBeforeCreationDeferred = Promise.resolve(),
         waitUntilEvent,
         waitUntilMessagingCondition = 'initialized',
@@ -456,10 +574,9 @@ async function start(param0 = {}) {
         throw Error(`Unknown parameter value ${waitUntilMessagingCondition} for 'waitUntilMessaging'.`);
     }
     delete param0.env;
-    delete param0.hasActionManager;
+    delete param0.hasWebClient;
     delete param0.hasChatWindow;
     delete param0.hasDiscuss;
-    delete param0.hasMessagingMenu;
     delete param0.hasTimeControl;
     delete param0.hasView;
     if (hasChatWindow) {
@@ -471,9 +588,7 @@ async function start(param0 = {}) {
     if (hasDiscuss) {
         callbacks = _useDiscuss(callbacks);
     }
-    if (hasMessagingMenu) {
-        callbacks = _useMessagingMenu(callbacks);
-    }
+    const messagingBus = new EventBus();
     const {
         init: initCallbacks,
         mount: mountCallbacks,
@@ -482,7 +597,7 @@ async function start(param0 = {}) {
     } = callbacks;
     const { debug = false } = param0;
     initCallbacks.forEach(callback => callback(param0));
-
+    const testSetupDoneDeferred = makeDeferred();
     let env = Object.assign(providedEnv || {});
     env.session = Object.assign(
         {
@@ -491,6 +606,7 @@ async function start(param0 = {}) {
         },
         env.session
     );
+    env.isDebug = env.isDebug || (() => true);
     env = addMessagingToEnv(env);
     if (hasTimeControl) {
         env = addTimeControlToEnv(env);
@@ -519,7 +635,40 @@ async function start(param0 = {}) {
             _listenHomeMenu: () => {},
         }),
         local_storage: AbstractStorageService.extend({ storage: new RamStorage() }),
-        notification: NotificationService.extend(),
+        messaging: MessagingService.extend({
+            // test specific values
+            messagingValues: {
+                autofetchPartnerImStatus: false,
+                disableAnimation: true,
+                isQUnitTest: true,
+                loadingBaseDelayDuration,
+                messagingBus,
+            },
+            /**
+             * Override to ensure tests run in debug mode to catch all potential
+             * programming errors and provide better message when they happen.
+             */
+            init(...args) {
+                this._super(...args);
+                this.modelManager.isDebug = true;
+            },
+            /**
+             * Override:
+             * - to ensure the test setup is complete before starting otherwise
+             *   for example the mock server might not be ready yet at init
+             *   messaging,
+             * - to add control on when messaging is created, useful to test
+             *   spinners and race conditions.
+             *
+             * @override
+             */
+            async start() {
+                const _super = this._super.bind(this);
+                await testSetupDoneDeferred;
+                await messagingBeforeCreationDeferred;
+                _super();
+            },
+        }),
     }, param0.services);
 
     const kwargs = Object.assign({}, param0, {
@@ -540,21 +689,54 @@ async function start(param0 = {}) {
                 destroyCallbacks.forEach(callback => callback({ widget }));
                 this._super(...arguments);
                 legacyUnpatch(widget);
-                if (testEnv) {
-                    testEnv.destroyMessaging();
-                }
             }
         });
-    } else if (hasActionManager) {
-        widget = await createActionManager(kwargs);
+    } else if (hasWebClient) {
+        let serverData;
+        if (!kwargs.serverData) {
+            serverData = getActionManagerServerData();
+        } else {
+            serverData = kwargs.serverData;
+            delete kwargs.serverData;
+        }
+
+        if (kwargs.actions) {
+            const actions = {};
+            kwargs.actions.forEach((act) => {
+                actions[act.xml_id || act.id] = act;
+            });
+            Object.assign(serverData.actions, actions);
+            delete kwargs.actions;
+        }
+
+        Object.assign(serverData.views, kwargs.archs);
+        delete kwargs.archs;
+
+        Object.assign(serverData.models, kwargs.data);
+        delete kwargs.data;
+
+        const mockRPC = kwargs.mockRPC;
+        delete kwargs.mockRPC;
+
+        if (kwargs.services) {
+            const serviceRegistry = kwargs.serviceRegistry = new LegacyRegistry();
+            for (const sname in kwargs.services) {
+                serviceRegistry.add(sname, kwargs.services[sname]);
+            }
+            delete kwargs.services;
+        }
+
+        const legacyParams = kwargs;
+        legacyParams.withLegacyMockServer = true;
+        legacyParams.env = env;
+
+        widget = await createWebClient({ serverData, mockRPC, legacyParams });
+
         legacyPatch(widget, {
             destroy() {
                 destroyCallbacks.forEach(callback => callback({ widget }));
                 this._super(...arguments);
                 legacyUnpatch(widget);
-                if (testEnv) {
-                    testEnv.destroyMessaging();
-                }
             }
         });
     } else {
@@ -568,134 +750,50 @@ async function start(param0 = {}) {
                 delete widget.destroy;
                 destroyCallbacks.forEach(callback => callback({ widget }));
                 parent.destroy();
-                if (testEnv) {
-                    testEnv.destroyMessaging();
-                }
             },
         });
     }
-
+    // get the final test env after execution of createView/createWebClient/addMockEnvironment
     testEnv = Component.env;
-
-    /**
-     * Components cannot use web.bus, because they cannot use
-     * EventDispatcherMixin, and webclient cannot easily access env.
-     * Communication between webclient and components by core.bus
-     * (usable by webclient) and messagingBus (usable by components), which
-     * the messaging service acts as mediator since it can easily use both
-     * kinds of buses.
-     */
-    testEnv.bus.on(
-        'hide_home_menu',
-        null,
-        () => testEnv.messagingBus.trigger('hide_home_menu')
-    );
-    testEnv.bus.on(
-        'show_home_menu',
-        null,
-        () => testEnv.messagingBus.trigger('show_home_menu')
-    );
-    testEnv.bus.on(
-        'will_hide_home_menu',
-        null,
-        () => testEnv.messagingBus.trigger('will_hide_home_menu')
-    );
-    testEnv.bus.on(
-        'will_show_home_menu',
-        null,
-        () => testEnv.messagingBus.trigger('will_show_home_menu')
-    );
-
-    /**
-     * Returns a promise resolved after the expected event is received.
-     *
-     * @param {Object} param0
-     * @param {string} param0.eventName event to wait
-     * @param {function} param0.func function which, when called, is expected to
-     *  trigger the event
-     * @param {string} [param0.message] assertion message
-     * @param {function} [param0.predicate] predicate called with event data.
-     *  If not provided, only the event name has to match.
-     * @param {number} [param0.timeoutDelay=5000] how long to wait at most in ms
-     * @returns {Promise}
-     */
-    const afterEvent = (async ({ eventName, func, message, predicate, timeoutDelay = 5000 }) => {
-        // Set up the timeout to reject if the event is not triggered.
-        let timeoutNoEvent;
-        const timeoutProm = new Promise((resolve, reject) => {
-            timeoutNoEvent = setTimeout(() => {
-                let error = message
-                    ? new Error(message)
-                    : new Error(`Timeout: the event ${eventName} was not triggered.`);
-                console.error(error);
-                reject(error);
-            }, timeoutDelay);
-        });
-        // Set up the promise to resolve if the event is triggered.
-        const eventProm = new Promise(resolve => {
-            testEnv.messagingBus.on(eventName, null, data => {
-                if (!predicate || predicate(data)) {
-                    resolve();
-                }
-            });
-        });
-        // Start the function expected to trigger the event after the
-        // promise has been registered to not miss any potential event.
-        const funcRes = func();
-        // Make them race (first to resolve/reject wins).
-        await Promise.race([eventProm, timeoutProm]);
-        clearTimeout(timeoutNoEvent);
-        // If the event is triggered before the end of the async function,
-        // ensure the function finishes its job before returning.
-        await funcRes;
-    });
-
+    const afterEvent = getAfterEvent({ messagingBus });
+    let waitUntilEventPromise;
+    if (waitUntilEvent) {
+        waitUntilEventPromise = afterEvent({ func: () => testSetupDoneDeferred.resolve(), ...waitUntilEvent, });
+    } else {
+        testSetupDoneDeferred.resolve();
+        waitUntilEventPromise = Promise.resolve();
+    }
+    const components = [];
     const result = {
         afterEvent,
+        components,
         env: testEnv,
         mockServer,
         widget,
     };
-
-    const start = async () => {
-        messagingBeforeCreationDeferred.then(async () => {
-            /**
-             * Some models require session data, like locale text direction
-             * (depends on fully loaded translation).
-             */
-            await env.session.is_bound;
-
-            testEnv.modelManager = new ModelManager(testEnv);
-            testEnv.modelManager.start();
-            /**
-             * Create the messaging singleton record.
-             */
-            testEnv.messaging = testEnv.models['mail.messaging'].create();
-            testEnv.messaging.start().then(() =>
-                testEnv.messagingInitializedDeferred.resolve()
-            );
-            testEnv.messagingCreatedPromise.resolve();
-        });
-        if (waitUntilMessagingCondition === 'created') {
-            await testEnv.messagingCreatedPromise;
-        }
-        if (waitUntilMessagingCondition === 'initialized') {
-            await testEnv.messagingInitializedDeferred;
-        }
-
-        if (mountCallbacks.length > 0) {
-            await afterNextRender(async () => {
-                await Promise.all(mountCallbacks.map(callback => callback({ selector, widget })));
-            });
-        }
-        returnCallbacks.forEach(callback => callback(result));
-    };
-    if (waitUntilEvent) {
-        await afterEvent(Object.assign({ func: start }, waitUntilEvent));
-    } else {
-        await start();
+    const { modelManager } = testEnv.services.messaging;
+    if (waitUntilMessagingCondition === 'created') {
+        await modelManager.messagingCreatedPromise;
     }
-    return result;
+    if (waitUntilMessagingCondition === 'initialized') {
+        await modelManager.messagingCreatedPromise;
+        await modelManager.messagingInitializedPromise;
+    }
+    if (mountCallbacks.length > 0) {
+        await afterNextRender(async () => {
+            await Promise.all(mountCallbacks.map(callback => callback({ selector, widget })));
+        });
+    }
+    returnCallbacks.forEach(callback => callback(result));
+    await waitUntilEventPromise;
+    return {
+        ...result,
+        createComposerComponent: getCreateComposerComponent({ components, env: testEnv, modelManager, widget }),
+        createComposerSuggestionComponent: getCreateComposerSuggestionComponent({ components, env: testEnv, modelManager, widget }),
+        createMessageComponent: getCreateMessageComponent({ components, env: testEnv, modelManager, widget }),
+        createMessagingMenuComponent: getCreateMessagingMenuComponent({ components, env: testEnv, widget }),
+        createThreadViewComponent: getCreateThreadViewComponent({ afterEvent, components, env: testEnv, widget }),
+    };
 }
 
 //------------------------------------------------------------------------------
@@ -748,20 +846,36 @@ function pasteFiles(el, files) {
 }
 
 //------------------------------------------------------------------------------
+// Public: DOM utilities
+//------------------------------------------------------------------------------
+
+/**
+ * Determine if a DOM element has been totally scrolled
+ *
+ * A 1px margin of error is given to accomodate subpixel rounding issues and
+ * Element.scrollHeight value being either int or decimal
+ *
+ * @param {DOM.Element} el
+ * @returns {boolean}
+ */
+function isScrolledToBottom(el) {
+    return Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop) <= 1;
+}
+
+//------------------------------------------------------------------------------
 // Export
 //------------------------------------------------------------------------------
 
-return {
+export {
     afterEach,
     afterNextRender,
     beforeEach,
-    createRootComponent,
+    createRootMessagingComponent,
     dragenterFiles,
     dropFiles,
+    isScrolledToBottom,
     nextAnimationFrame,
     nextTick,
     pasteFiles,
     start,
 };
-
-});

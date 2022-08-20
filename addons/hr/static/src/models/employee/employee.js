@@ -1,8 +1,8 @@
-odoo.define('hr/static/src/models/employee/employee.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { attr, one2one } = require('mail/static/src/model/model_field.js');
+import { registerNewModel } from '@mail/model/model_core';
+import { attr, one2one } from '@mail/model/model_field';
+import { insert, unlink } from '@mail/model/model_field_command';
 
 function factory(dependencies) {
 
@@ -25,7 +25,7 @@ function factory(dependencies) {
             if ('user_id' in data) {
                 data2.hasCheckedUser = true;
                 if (!data.user_id) {
-                    data2.user = [['unlink']];
+                    data2.user = unlink();
                 } else {
                     const partnerNameGet = data['user_partner_id'];
                     const partnerData = {
@@ -35,10 +35,10 @@ function factory(dependencies) {
                     const userNameGet = data['user_id'];
                     const userData = {
                         id: userNameGet[0],
-                        partner: [['insert', partnerData]],
+                        partner: insert(partnerData),
                         display_name: userNameGet[1],
                     };
-                    data2.user = [['insert', userData]];
+                    data2.user = insert(userData);
                 }
             }
             return data2;
@@ -63,8 +63,8 @@ function factory(dependencies) {
                     fields,
                 },
             });
-            this.env.models['hr.employee'].insert(employeesData.map(employeeData =>
-                this.env.models['hr.employee'].convertData(employeeData)
+            this.messaging.models['hr.employee'].insert(employeesData.map(employeeData =>
+                this.messaging.models['hr.employee'].convertData(employeeData)
             ));
         }
 
@@ -87,8 +87,8 @@ function factory(dependencies) {
                     fields,
                 },
             });
-            this.env.models['hr.employee'].insert(employeesData.map(employeeData =>
-                this.env.models['hr.employee'].convertData(employeeData)
+            this.messaging.models['hr.employee'].insert(employeesData.map(employeeData =>
+                this.messaging.models['hr.employee'].convertData(employeeData)
             ));
         }
 
@@ -97,7 +97,7 @@ function factory(dependencies) {
          * them if applicable.
          */
         async checkIsUser() {
-            return this.env.models['hr.employee'].performRpcRead({
+            return this.messaging.models['hr.employee'].performRpcRead({
                 ids: [this.id],
                 fields: ['user_id', 'user_partner_id'],
                 context: { active_test: false },
@@ -148,21 +148,10 @@ function factory(dependencies) {
          * Opens the most appropriate view that is a profile for this employee.
          */
         async openProfile() {
-            return this.env.messaging.openDocument({
+            return this.messaging.openDocument({
                 id: this.id,
                 model: 'hr.employee.public',
             });
-        }
-
-        //----------------------------------------------------------------------
-        // Private
-        //----------------------------------------------------------------------
-
-        /**
-         * @override
-         */
-        static _createRecordLocalId(data) {
-            return `${this.modelName}_${data.id}`;
         }
 
     }
@@ -178,7 +167,10 @@ function factory(dependencies) {
         /**
          * Unique identifier for this employee.
          */
-        id: attr(),
+        id: attr({
+            readonly: true,
+            required: true,
+        }),
         /**
          * Partner related to this employee.
          */
@@ -193,12 +185,10 @@ function factory(dependencies) {
             inverse: 'employee',
         }),
     };
-
+    Employee.identifyingFields = ['id'];
     Employee.modelName = 'hr.employee';
 
     return Employee;
 }
 
 registerNewModel('hr.employee', factory);
-
-});

@@ -125,6 +125,7 @@
         <field name="code_digits">6</field>
         <field name="currency_id" ref="base.CLP"/>
         <field name="use_anglo_saxon" eval="True" />
+        <field name="country_id" ref="base.cl"/>
     </record>
 
     <record id="account_11700" model="account.account.template">
@@ -938,6 +939,14 @@
     <record id="account_210740" model="account.account.template">
         <field name="code">210740</field>
         <field name="name">Impuesto Retención Segunda Categoría</field>
+        <field ref="account.data_account_type_current_liabilities" name="user_type_id"/>
+        <field name="reconcile" eval="False"/>
+        <field name="chart_template_id" ref="cl_chart_template"/>
+    </record>
+
+    <record id="account_210715" model="account.account.template">
+        <field name="code">210715</field>
+        <field name="name">IVA Retenido a terceros</field>
         <field ref="account.data_account_type_current_liabilities" name="user_type_id"/>
         <field name="reconcile" eval="False"/>
         <field name="chart_template_id" ref="cl_chart_template"/>

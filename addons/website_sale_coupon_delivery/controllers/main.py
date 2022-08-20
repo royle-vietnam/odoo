@@ -15,6 +15,7 @@ class WebsiteSaleCouponDelivery(WebsiteSaleDelivery):
 
         if order:
             order.recompute_coupon_lines()
+            order.validate_taxes_on_sales_order()
             free_shipping_lines = order._get_free_shipping_lines()
 
         if free_shipping_lines:
@@ -26,6 +27,7 @@ class WebsiteSaleCouponDelivery(WebsiteSaleDelivery):
                 'new_amount_tax': Monetary.value_to_html(order.amount_tax, {'display_currency': currency}),
                 'new_amount_total': Monetary.value_to_html(order.amount_total, {'display_currency': currency}),
                 'new_amount_order_discounted': Monetary.value_to_html(order.reward_amount - amount_free_shipping, {'display_currency': currency}),
+                'new_amount_total_raw': order.amount_total,
             })
         return result
 

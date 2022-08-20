@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+import werkzeug.exceptions
+
 from odoo import api, fields, models
 from odoo.tools.translate import html_translate
 
@@ -17,6 +19,7 @@ class Menu(models.Model):
         menu = self.search([], limit=1, order="sequence DESC")
         return menu.sequence or 0
 
+    @api.depends('mega_menu_content')
     def _compute_field_is_mega_menu(self):
         for menu in self:
             menu.is_mega_menu = bool(menu.mega_menu_content)
@@ -25,8 +28,7 @@ class Menu(models.Model):
         for menu in self:
             if menu.is_mega_menu:
                 if not menu.mega_menu_content:
-                    default_content = self.env['ir.ui.view']._render_template('website.s_mega_menu_multi_menus')
-                    menu.mega_menu_content = default_content.decode()
+                    menu.mega_menu_content = self.env['ir.ui.view']._render_template('website.s_mega_menu_odoo_menu')
             else:
                 menu.mega_menu_content = False
                 menu.mega_menu_classes = False
@@ -94,7 +96,7 @@ class Menu(models.Model):
 
     def write(self, values):
         res = super().write(values)
-        if 'website_id' in values or 'group_ids' in values or 'sequence' in values:
+        if 'website_id' in values or 'group_ids' in values or 'sequence' in values or 'page_id' in values:
             self.clear_caches()
         return res
 
@@ -166,7 +168,7 @@ class Menu(models.Model):
                     menu['id'] = new_id
                 if menu['parent_id'] == old_id:
                     menu['parent_id'] = new_id
-        to_delete = data['to_delete']
+        to_delete = data.get('to_delete')
         if to_delete:
             self.browse(to_delete).unlink()
         for menu in data['data']:
@@ -193,7 +195,12 @@ class Menu(models.Model):
                     menu['page_id'] = page.id
                     menu['url'] = page.url
                 elif menu_id.page_id:
-                    menu_id.page_id.write({'url': menu['url']})
+                    try:
+                        # a page shouldn't have the same url as a controller
+                        self.env['ir.http']._match(menu['url'])
+                        menu_id.page_id = None
+                    except werkzeug.exceptions.NotFound:
+                        menu_id.page_id.write({'url': menu['url']})
             menu_id.write(menu)
 
         return True

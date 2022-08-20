@@ -23,6 +23,14 @@ class AccountInvoiceSend(models.TransientModel):
         domain="[('model', '=', 'account.move')]"
         )
 
+    # View fields
+    move_types = fields.Char(
+        string='Move types',
+        compute='_compute_move_types',
+        readonly=True,
+        help='Technical field containing a textual representation of the selected move types, '
+             'if multiple. It is used to inform the user in the window in such case.')
+
     @api.model
     def default_get(self, fields):
         res = super(AccountInvoiceSend, self).default_get(fields)
@@ -46,24 +54,46 @@ class AccountInvoiceSend(models.TransientModel):
         for wizard in self:
             wizard.composer_id.composition_mode = 'comment' if len(wizard.invoice_ids) == 1 else 'mass_mail'
 
+    @api.onchange('invoice_ids')
+    def _compute_move_types(self):
+        for wizard in self:
+            move_types = False
+
+            if len(wizard.invoice_ids) > 1:
+                moves = self.env['account.move'].browse(self.env.context.get('active_ids'))
+
+                # Get the move types of all selected moves and see if there is more than one of them.
+                # If so, we'll display a warning on the next window about it.
+                move_types_set = set(m.type_name for m in moves)
+
+                if len(move_types_set) > 1:
+                    move_types = ', '.join(move_types_set)
+
+            wizard.move_types = move_types
+
+
     @api.onchange('template_id')
     def onchange_template_id(self):
         for wizard in self:
             if wizard.composer_id:
                 wizard.composer_id.template_id = wizard.template_id.id
                 wizard._compute_composition_mode()
-                wizard.composer_id.onchange_template_id_wrapper()
+                wizard.composer_id._onchange_template_id_wrapper()
 
     @api.onchange('is_email')
     def onchange_is_email(self):
         if self.is_email:
+            res_ids = self._context.get('active_ids')
             if not self.composer_id:
-                res_ids = self._context.get('active_ids')
                 self.composer_id = self.env['mail.compose.message'].create({
                     'composition_mode': 'comment' if len(res_ids) == 1 else 'mass_mail',
                     'template_id': self.template_id.id
                 })
-            self.composer_id.onchange_template_id_wrapper()
+            else:
+                self.composer_id.composition_mode = 'comment' if len(res_ids) == 1 else 'mass_mail'
+                self.composer_id.template_id = self.template_id.id
+                self._compute_composition_mode()
+            self.composer_id._onchange_template_id_wrapper()
 
     @api.onchange('is_email')
     def _compute_invoice_without_email(self):
@@ -86,7 +116,10 @@ class AccountInvoiceSend(models.TransientModel):
     def _send_email(self):
         if self.is_email:
             # with_context : we don't want to reimport the file we just exported.
-            self.composer_id.with_context(no_new_invoice=True, mail_notify_author=self.env.user.partner_id in self.composer_id.partner_ids).send_mail()
+            self.composer_id.with_context(no_new_invoice=True,
+                                          mail_notify_author=self.env.user.partner_id in self.composer_id.partner_ids,
+                                          mailing_document_based=True,
+                                          )._action_send_mail()
             if self.env.context.get('mark_invoice_as_sent'):
                 #Salesman send posted invoice, without the right to write
                 #but they should have the right to change this flag
@@ -123,7 +156,7 @@ class AccountInvoiceSend(models.TransientModel):
 
     def save_as_template(self):
         self.ensure_one()
-        self.composer_id.save_as_template()
+        self.composer_id.action_save_as_template()
         self.template_id = self.composer_id.template_id.id
         action = _reopen(self, self.id, self.model, context=self._context)
         action.update({'name': _('Send Invoice')})

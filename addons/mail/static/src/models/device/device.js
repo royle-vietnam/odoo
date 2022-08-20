@@ -1,8 +1,7 @@
-odoo.define('mail/static/src/models/device/device.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { attr } = require('mail/static/src/model/model_field.js');
+import { registerNewModel } from '@mail/model/model_core';
+import { attr } from '@mail/model/model_field';
 
 function factory(dependencies) {
 
@@ -51,6 +50,8 @@ function factory(dependencies) {
                 globalWindowInnerHeight: this.env.browser.innerHeight,
                 globalWindowInnerWidth: this.env.browser.innerWidth,
                 isMobile: this.env.device.isMobile,
+                isMobileDevice: this.env.device.isMobileDevice,
+                sizeClass: this.env.device.size_class,
             });
         }
     }
@@ -58,14 +59,28 @@ function factory(dependencies) {
     Device.fields = {
         globalWindowInnerHeight: attr(),
         globalWindowInnerWidth: attr(),
+        /**
+         * States whether this device has a small size (note: this field name is not ideal).
+         */
         isMobile: attr(),
+        /**
+         * States whether this device is an actual mobile device.
+         */
+        isMobileDevice: attr(),
+        /**
+         * Size class of the device.
+         *
+         * This is an integer representation of the size.
+         * Useful for conditional based on a device size, including
+         * lower/higher. Device size classes are defined in sizeClasses
+         * attribute.
+         */
+        sizeClass: attr(),
     };
-
+    Device.identifyingFields = ['messaging'];
     Device.modelName = 'mail.device';
 
     return Device;
 }
 
 registerNewModel('mail.device', factory);
-
-});

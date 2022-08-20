@@ -43,7 +43,7 @@ class AccountAnalyticGroup(models.Model):
     parent_id = fields.Many2one('account.analytic.group', string="Parent", ondelete='cascade', domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]")
     parent_path = fields.Char(index=True)
     children_ids = fields.One2many('account.analytic.group', 'parent_id', string="Childrens")
-    complete_name = fields.Char('Complete Name', compute='_compute_complete_name', store=True)
+    complete_name = fields.Char('Complete Name', compute='_compute_complete_name', recursive=True, store=True)
     company_id = fields.Many2one('res.company', string='Company', default=lambda self: self.env.company)
 
     @api.depends('name', 'parent_id.complete_name')
@@ -136,9 +136,9 @@ class AccountAnalyticAccount(models.Model):
     # use auto_join to speed up name_search call
     partner_id = fields.Many2one('res.partner', string='Customer', auto_join=True, tracking=True, check_company=True)
 
-    balance = fields.Monetary(compute='_compute_debit_credit_balance', string='Balance')
-    debit = fields.Monetary(compute='_compute_debit_credit_balance', string='Debit')
-    credit = fields.Monetary(compute='_compute_debit_credit_balance', string='Credit')
+    balance = fields.Monetary(compute='_compute_debit_credit_balance', string='Balance',  groups='account.group_account_readonly')
+    debit = fields.Monetary(compute='_compute_debit_credit_balance', string='Debit', groups='account.group_account_readonly')
+    credit = fields.Monetary(compute='_compute_debit_credit_balance', string='Credit', groups='account.group_account_readonly')
 
     currency_id = fields.Many2one(related="company_id.currency_id", string="Currency", readonly=True)
 
@@ -155,7 +155,7 @@ class AccountAnalyticAccount(models.Model):
 
     @api.model
     def _name_search(self, name, args=None, operator='ilike', limit=100, name_get_uid=None):
-        if operator not in ('ilike', 'like', '=', '=like', '=ilike'):
+        if operator not in ('ilike', 'like', '=', '=like', '=ilike', 'not ilike'):
             return super(AccountAnalyticAccount, self)._name_search(name, args, operator, limit, name_get_uid=name_get_uid)
         args = args or []
         if operator == 'ilike' and not (name or '').strip():
@@ -164,7 +164,8 @@ class AccountAnalyticAccount(models.Model):
             # `partner_id` is in auto_join and the searches using ORs with auto_join fields doesn't work
             # we have to cut the search in two searches ... https://github.com/odoo/odoo/issues/25175
             partner_ids = self.env['res.partner']._search([('name', operator, name)], limit=limit, access_rights_uid=name_get_uid)
-            domain = ['|', '|', ('code', operator, name), ('name', operator, name), ('partner_id', 'in', partner_ids)]
+            domain_operator = '&' if operator == 'not ilike' else '|'
+            domain = [domain_operator, domain_operator, ('code', operator, name), ('name', operator, name), ('partner_id', 'in', partner_ids)]
         return self._search(expression.AND([domain, args]), limit=limit, access_rights_uid=name_get_uid)
 
 
@@ -183,7 +184,7 @@ class AccountAnalyticLine(models.Model):
     amount = fields.Monetary('Amount', required=True, default=0.0)
     unit_amount = fields.Float('Quantity', default=0.0)
     product_uom_id = fields.Many2one('uom.uom', string='Unit of Measure', domain="[('category_id', '=', product_uom_category_id)]")
-    product_uom_category_id = fields.Many2one(related='product_uom_id.category_id', readonly=True)
+    product_uom_category_id = fields.Many2one(related='product_uom_id.category_id', string='UoM Category', readonly=True)
     account_id = fields.Many2one('account.analytic.account', 'Analytic Account', required=True, ondelete='restrict', index=True, check_company=True)
     partner_id = fields.Many2one('res.partner', string='Partner', check_company=True)
     user_id = fields.Many2one('res.users', string='User', default=_default_user)
@@ -191,6 +192,7 @@ class AccountAnalyticLine(models.Model):
     company_id = fields.Many2one('res.company', string='Company', required=True, readonly=True, default=lambda self: self.env.company)
     currency_id = fields.Many2one(related="company_id.currency_id", string="Currency", readonly=True, store=True, compute_sudo=True)
     group_id = fields.Many2one('account.analytic.group', related='account_id.group_id', store=True, readonly=True, compute_sudo=True)
+    category = fields.Selection([('other', 'Other')], default='other')
 
     @api.constrains('company_id', 'account_id')
     def _check_company_id(self):

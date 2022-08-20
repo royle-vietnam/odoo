@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from datetime import timedelta
 from odoo import api, fields, models, _
 from odoo.addons.base.models.res_partner import WARNING_MESSAGE, WARNING_HELP
 from odoo.tools.float_utils import float_round
@@ -95,3 +94,9 @@ class ProductSupplierinfo(models.Model):
     @api.onchange('name')
     def _onchange_name(self):
         self.currency_id = self.name.property_purchase_currency_id.id or self.env.company.currency_id.id
+
+
+class ProductPackaging(models.Model):
+    _inherit = 'product.packaging'
+
+    purchase = fields.Boolean("Purchase", default=True, help="If true, the packaging can be used for purchase orders")

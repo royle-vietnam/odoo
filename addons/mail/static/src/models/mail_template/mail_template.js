@@ -1,8 +1,7 @@
-odoo.define('mail/static/src/models/mail_template/mail_template.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { attr, many2many } = require('mail/static/src/model/model_field.js');
+import { registerNewModel } from '@mail/model/model_core';
+import { attr, many2many } from '@mail/model/model_field';
 
 function factory(dependencies) {
 
@@ -23,8 +22,8 @@ function factory(dependencies) {
                 views: [[false, 'form']],
                 target: 'new',
                 context: {
-                    default_res_id: activity.res_id,
-                    default_model: activity.res_model,
+                    default_res_id: activity.thread.id,
+                    default_model: activity.thread.model,
                     default_use_template: true,
                     default_template_id: this.id,
                     force_email: true,
@@ -34,9 +33,7 @@ function factory(dependencies) {
                 action,
                 options: {
                     on_close: () => {
-                        if (activity.chatter) {
-                            activity.chatter.refresh();
-                        }
+                        activity.thread.refresh();
                     },
                 },
             });
@@ -47,24 +44,11 @@ function factory(dependencies) {
          */
         async send(activity) {
             await this.async(() => this.env.services.rpc({
-                model: activity.res_model,
+                model: activity.thread.model,
                 method: 'activity_send_mail',
-                args: [[activity.res_id], this.id],
+                args: [[activity.thread.id], this.id],
             }));
-            if (activity.chatter) {
-                activity.chatter.refresh();
-            }
-        }
-
-        //----------------------------------------------------------------------
-        // Private
-        //----------------------------------------------------------------------
-
-        /**
-         * @override
-         */
-        static _createRecordLocalId(data) {
-            return `${this.modelName}_${data.id}`;
+            activity.thread.refresh();
         }
 
     }
@@ -73,15 +57,16 @@ function factory(dependencies) {
         activities: many2many('mail.activity', {
             inverse: 'mailTemplates',
         }),
-        id: attr(),
+        id: attr({
+            readonly: true,
+            required: true,
+        }),
         name: attr(),
     };
-
+    MailTemplate.identifyingFields = ['id'];
     MailTemplate.modelName = 'mail.mail_template';
 
     return MailTemplate;
 }
 
 registerNewModel('mail.mail_template', factory);
-
-});

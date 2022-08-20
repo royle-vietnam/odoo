@@ -5,6 +5,7 @@ import base64
 
 from odoo import fields, models, api, _
 from odoo.addons.iap.tools import iap_tools
+from odoo.exceptions import AccessError
 from odoo.tools.safe_eval import safe_eval
 
 DEFAULT_ENDPOINT = 'https://iap-snailmail.odoo.com'
@@ -77,35 +78,40 @@ class SnailmailLetter(models.Model):
         for res in self:
             res.reference = "%s,%s" % (res.model, res.res_id)
 
-    @api.model
-    def create(self, vals):
-        msg_id = self.env[vals['model']].browse(vals['res_id']).message_post(
-            body=_("Letter sent by post with Snailmail"),
-            message_type='snailmail'
-        )
+    @api.model_create_multi
+    def create(self, vals_list):
+        for vals in vals_list:
+            msg_id = self.env[vals['model']].browse(vals['res_id']).message_post(
+                body=_("Letter sent by post with Snailmail"),
+                message_type='snailmail',
+            )
 
-        partner_id = self.env['res.partner'].browse(vals['partner_id'])
-        vals.update({
-            'message_id': msg_id.id,
-            'street': partner_id.street,
-            'street2': partner_id.street2,
-            'zip': partner_id.zip,
-            'city': partner_id.city,
-            'state_id': partner_id.state_id.id,
-            'country_id': partner_id.country_id.id,
-        })
-        letter = super(SnailmailLetter, self).create(vals)
+            partner_id = self.env['res.partner'].browse(vals['partner_id'])
+            vals.update({
+                'message_id': msg_id.id,
+                'street': partner_id.street,
+                'street2': partner_id.street2,
+                'zip': partner_id.zip,
+                'city': partner_id.city,
+                'state_id': partner_id.state_id.id,
+                'country_id': partner_id.country_id.id,
+            })
+        letters = super().create(vals_list)
 
-        self.env['mail.notification'].sudo().create({
-            'mail_message_id': msg_id.id,
-            'res_partner_id': partner_id.id,
-            'notification_type': 'snail',
-            'letter_id': letter.id,
-            'is_read': True,  # discard Inbox notification
-            'notification_status': 'ready',
-        })
+        notification_vals = []
+        for letter in letters:
+            notification_vals.append({
+                'mail_message_id': letter.message_id.id,
+                'res_partner_id': letter.partner_id.id,
+                'notification_type': 'snail',
+                'letter_id': letter.id,
+                'is_read': True,  # discard Inbox notification
+                'notification_status': 'ready',
+            })
 
-        return letter
+        self.env['mail.notification'].sudo().create(notification_vals)
+
+        return letters
 
     def _fetch_attachment(self):
         """
@@ -300,8 +306,9 @@ class SnailmailLetter(models.Model):
         invalid_address_letters = self - valid_address_letters
         invalid_address_letters._snailmail_print_invalid_address()
         if valid_address_letters and immediate:
-            valid_address_letters._snailmail_print_valid_address()
-        self.env.cr.commit()
+            for letter in valid_address_letters:
+                letter._snailmail_print_valid_address()
+                self.env.cr.commit()
 
     def _snailmail_print_invalid_address(self):
         error = 'MISSING_REQUIRED_FIELDS'
@@ -335,7 +342,14 @@ class SnailmailLetter(models.Model):
         endpoint = self.env['ir.config_parameter'].sudo().get_param('snailmail.endpoint', DEFAULT_ENDPOINT)
         timeout = int(self.env['ir.config_parameter'].sudo().get_param('snailmail.timeout', DEFAULT_TIMEOUT))
         params = self._snailmail_create('print')
-        response = iap_tools.iap_jsonrpc(endpoint + PRINT_ENDPOINT, params=params, timeout=timeout)
+        try:
+            response = iap_tools.iap_jsonrpc(endpoint + PRINT_ENDPOINT, params=params, timeout=timeout)
+        except AccessError as ae:
+            for doc in params['documents']:
+                letter = self.browse(doc['letter_id'])
+                letter.state = 'error'
+                letter.error_code = 'UNKNOWN_ERROR'
+            raise ae
         for doc in response['request']['documents']:
             if doc.get('sent') and response['request_code'] == 200:
                 note = _('The document was correctly sent by post.<br>The tracking id is %s', doc['send_id'])
@@ -348,7 +362,7 @@ class SnailmailLetter(models.Model):
             else:
                 error = doc['error'] if response['request_code'] == 200 else response['reason']
 
-                note = _('An error occured when sending the document by post.<br>Error: %s', self._get_error_message(error))
+                note = _('An error occurred when sending the document by post.<br>Error: %s', self._get_error_message(error))
                 letter_data = {
                     'info_msg': note,
                     'state': 'error',

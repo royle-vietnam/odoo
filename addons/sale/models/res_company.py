@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
+import base64
 
 from odoo import api, fields, models, _
+from odoo.modules.module import get_module_resource
 
 
 class ResCompany(models.Model):
@@ -36,6 +38,19 @@ class ResCompany(models.Model):
         action = self.env["ir.actions.actions"]._for_xml_id("sale.action_open_sale_onboarding_payment_acquirer_wizard")
         return action
 
+    def _mark_payment_onboarding_step_as_done(self):
+        """ Override of payment to mark the sale onboarding step as done.
+
+        The payment onboarding step of Sales is only marked as done if it was started from Sales.
+        This prevents incorrectly marking the step as done if another module's payment onboarding
+        step was marked as done.
+
+        :return: None
+        """
+        super()._mark_payment_onboarding_step_as_done()
+        if self.sale_onboarding_payment_method:  # The onboarding step was started from Sales
+            self.set_onboarding_step_done('sale_onboarding_order_confirmation_state')
+
     def _get_sample_sales_order(self):
         """ Get a sample quotation or create one if it does not exist. """
         # use current user as partner
@@ -52,9 +67,13 @@ class ResCompany(models.Model):
             # take any existing product or create one
             product = self.env['product.product'].search([], limit=1)
             if len(product) == 0:
+                default_image_path = get_module_resource('product', 'static/img', 'product_product_13-image.png')
                 product = self.env['product.product'].create({
-                    'name': _('Sample Product')
+                    'name': _('Sample Product'),
+                    'active': False,
+                    'image_1920': base64.b64encode(open(default_image_path, 'rb').read())
                 })
+                product.product_tmpl_id.write({'active': False})
             self.env['sale.order.line'].create({
                 'name': _('Sample Order Line'),
                 'product_id': product.id,
@@ -85,10 +104,10 @@ class ResCompany(models.Model):
             'composition_mode': 'comment'})
 
         # Simulate the onchange (like trigger in form the view)
-        update_values = message_composer.onchange_template_id(template.id, 'comment', 'sale.order', sample_sales_order.id)['value']
+        update_values = message_composer._onchange_template_id(template.id, 'comment', 'sale.order', sample_sales_order.id)['value']
         message_composer.write(update_values)
 
-        message_composer.send_mail()
+        message_composer._action_send_mail()
 
         self.set_onboarding_step_done('sale_onboarding_sample_quotation_state')
 

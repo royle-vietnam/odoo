@@ -9,6 +9,7 @@ import requests
 from werkzeug import urls
 
 from odoo import api, fields, models, _
+from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
 
@@ -120,6 +121,42 @@ class GoogleService(models.AbstractModel):
             raise self.env['res.config.settings'].get_config_warning(error_msg)
 
     @api.model
+    def _get_access_token(self, refresh_token, service, scope):
+        """Fetch the access token thanks to the refresh token."""
+        get_param = self.env['ir.config_parameter'].sudo().get_param
+        client_id = get_param('google_%s_client_id' % service, default=False)
+        client_secret = get_param('google_%s_client_secret' % service, default=False)
+
+        if not client_id or not client_secret:
+            raise UserError(_('Google %s is not yet configured.', service.title()))
+
+        if not refresh_token:
+            raise UserError(_('The refresh token for authentication is not set.'))
+
+        try:
+            result = requests.post(
+                GOOGLE_TOKEN_ENDPOINT,
+                data={
+                    'client_id': client_id,
+                    'client_secret': client_secret,
+                    'refresh_token': refresh_token,
+                    'grant_type': 'refresh_token',
+                    'scope': scope,
+                },
+                headers={'Content-type': 'application/x-www-form-urlencoded'},
+                timeout=TIMEOUT,
+            )
+            result.raise_for_status()
+        except requests.HTTPError:
+            raise UserError(
+                _('Something went wrong during the token generation. Please request again an authorization code.')
+            )
+
+        json_result = result.json()
+
+        return json_result.get('access_token'), json_result.get('expires_in')
+
+    @api.model
     def _do_request(self, uri, params=None, headers=None, method='POST', preuri="https://www.googleapis.com", timeout=TIMEOUT):
         """ Execute the request to Google API. Return a tuple ('HTTP_CODE', 'HTTP_RESPONSE')
             :param uri : the url to contact
@@ -133,7 +170,7 @@ class GoogleService(models.AbstractModel):
         if headers is None:
             headers = {}
 
-        _logger.debug("Uri: %s - Type : %s - Headers: %s - Params : %s !", (uri, method, headers, params))
+        _logger.debug("Uri: %s - Type : %s - Headers: %s - Params : %s !", uri, method, headers, params)
 
         ask_time = fields.Datetime.now()
         try:
@@ -146,14 +183,14 @@ class GoogleService(models.AbstractModel):
             res.raise_for_status()
             status = res.status_code
 
-            if int(status) in (204, 404):  # Page not found, no response
+            if int(status) == 204:  # Page not found, no response
                 response = False
             else:
                 response = res.json()
 
             try:
-                ask_time = datetime.strptime(res.headers.get('date'), "%a, %d %b %Y %H:%M:%S %Z")
-            except:
+                ask_time = datetime.strptime(res.headers.get('date', ''), "%a, %d %b %Y %H:%M:%S %Z")
+            except ValueError:
                 pass
         except requests.HTTPError as error:
             if error.response.status_code in (204, 404):

@@ -3,7 +3,7 @@
 
 {
     'name': 'SMS gateway',
-    'version': '2.1',
+    'version': '2.2',
     'category': 'Hidden/Tools',
     'summary': 'SMS Text Messaging',
     'description': """
@@ -28,20 +28,35 @@ The service is provided by the In App Purchase Odoo platform.
         'views/mail_notification_views.xml',
         'views/res_config_settings_views.xml',
         'views/res_partner_views.xml',
-        'views/assets.xml',
         'views/sms_sms_views.xml',
         'views/sms_template_views.xml',
         'security/ir.model.access.csv',
+        'security/sms_security.xml',
     ],
     'demo': [
         'data/sms_demo.xml',
         'data/mail_demo.xml',
     ],
-    'qweb': [
-        'static/src/bugfix/bugfix.xml',
-        'static/src/components/notification_group/notification_group.xml',
-        'static/src/components/message/message.xml',
-    ],
     'installable': True,
     'auto_install': True,
+    'assets': {
+        'mail.assets_discuss_public': [
+            'sms/static/src/components/*/*',
+            'sms/static/src/models/*/*.js',
+        ],
+        'web.assets_backend': [
+            'sms/static/src/js/fields_phone_widget.js',
+            'sms/static/src/js/fields_sms_widget.js',
+            'sms/static/src/components/*/*.js',
+            'sms/static/src/models/*/*.js',
+        ],
+        'web.qunit_suite_tests': [
+            'sms/static/tests/sms_widget_test.js',
+            'sms/static/src/components/*/tests/*.js',
+        ],
+        'web.assets_qweb': [
+            'sms/static/src/components/*/*.xml',
+        ],
+    },
+    'license': 'LGPL-3',
 }

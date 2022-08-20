@@ -107,6 +107,16 @@ class BaseAutomation(models.Model):
                 }
             }}
 
+        MAIL_STATES = ('email', 'followers', 'next_activity')
+        if self.trigger == 'on_unlink' and self.state in MAIL_STATES:
+            return {'warning': {
+                'title': _("Warning"),
+                'message': _(
+                    "You cannot send an email, add followers or create an activity "
+                    "for a deleted record.  It simply does not work."
+                ),
+            }}
+
     @api.model_create_multi
     def create(self, vals_list):
         for vals in vals_list:
@@ -194,9 +204,10 @@ class BaseAutomation(models.Model):
 
     def _filter_pre(self, records):
         """ Filter the records that satisfy the precondition of action ``self``. """
-        if self.filter_pre_domain and records:
-            domain = [('id', 'in', records.ids)] + safe_eval.safe_eval(self.filter_pre_domain, self._get_eval_context())
-            return records.sudo().search(domain).with_env(records.env)
+        self_sudo = self.sudo()
+        if self_sudo.filter_pre_domain and records:
+            domain = safe_eval.safe_eval(self_sudo.filter_pre_domain, self._get_eval_context())
+            return records.sudo().filtered_domain(domain).with_env(records.env)
         else:
             return records
 
@@ -205,9 +216,10 @@ class BaseAutomation(models.Model):
 
     def _filter_post_export_domain(self, records):
         """ Filter the records that satisfy the postcondition of action ``self``. """
-        if self.filter_domain and records:
-            domain = [('id', 'in', records.ids)] + safe_eval.safe_eval(self.filter_domain, self._get_eval_context())
-            return records.sudo().search(domain).with_env(records.env), domain
+        self_sudo = self.sudo()
+        if self_sudo.filter_domain and records:
+            domain = safe_eval.safe_eval(self_sudo.filter_domain, self._get_eval_context())
+            return records.sudo().filtered_domain(domain).with_env(records.env), domain
         else:
             return records, None
 
@@ -218,7 +230,7 @@ class BaseAutomation(models.Model):
             e.context['exception_class'] = 'base_automation'
             e.context['base_automation'] = {
                 'id': self.id,
-                'name': self.name,
+                'name': self.sudo().name,
             }
 
     def _process(self, records, domain_post=None):
@@ -244,7 +256,8 @@ class BaseAutomation(models.Model):
             records.write(values)
 
         # execute server actions
-        if self.action_server_id:
+        action_server = self.action_server_id
+        if action_server:
             for record in records:
                 # we process the action if any watched field has been modified
                 if self._check_trigger_fields(record):
@@ -255,14 +268,15 @@ class BaseAutomation(models.Model):
                         'domain_post': domain_post,
                     }
                     try:
-                        self.action_server_id.sudo().with_context(**ctx).run()
+                        action_server.sudo().with_context(**ctx).run()
                     except Exception as e:
                         self._add_postmortem_action(e)
                         raise e
 
     def _check_trigger_fields(self, record):
         """ Return whether any of the trigger fields has been modified on ``record``. """
-        if not self.trigger_field_ids:
+        self_sudo = self.sudo()
+        if not self_sudo.trigger_field_ids:
             # all fields are implicit triggers
             return True
 
@@ -280,7 +294,7 @@ class BaseAutomation(models.Model):
                 field.convert_to_cache(record[name], record, validate=False) !=
                 field.convert_to_cache(old_vals[name], record, validate=False)
             )
-        return any(differ(field.name) for field in self.trigger_field_ids)
+        return any(differ(field.name) for field in self_sudo.trigger_field_ids)
 
     def _register_hook(self):
         """ Patch models that should trigger action rules based on creation,
@@ -319,7 +333,7 @@ class BaseAutomation(models.Model):
                 actions = self.env['base.automation']._get_actions(self, ['on_write', 'on_create_or_write'])
                 if not (actions and self):
                     return write.origin(self, vals, **kw)
-                records = self.with_env(actions.env)
+                records = self.with_env(actions.env).filtered('id')
                 # check preconditions on records
                 pre = {action: action._filter_pre(records) for action in actions}
                 # read old values before the update
@@ -328,7 +342,7 @@ class BaseAutomation(models.Model):
                     for old_vals in (records.read(list(vals)) if vals else [])
                 }
                 # call original method
-                write.origin(records, vals, **kw)
+                write.origin(self.with_env(actions.env), vals, **kw)
                 # check postconditions, and execute actions on the records that satisfy them
                 for action in actions.with_context(old_values=old_values):
                     records, domain_post = action._filter_post_export_domain(pre[action])
@@ -389,7 +403,12 @@ class BaseAutomation(models.Model):
             def base_automation_onchange(self):
                 action_rule = self.env['base.automation'].browse(action_rule_id)
                 result = {}
-                server_action = action_rule.action_server_id.with_context(active_model=self._name, onchange_self=self)
+                server_action = action_rule.sudo().action_server_id.with_context(
+                    active_model=self._name,
+                    active_id=self._origin.id,
+                    active_ids=self._origin.ids,
+                    onchange_self=self,
+                )
                 try:
                     res = server_action.run()
                 except Exception as e:
@@ -485,7 +504,7 @@ class BaseAutomation(models.Model):
             domain = []
             context = dict(self._context)
             if action.filter_domain:
-                domain = safe_eval(action.filter_domain, eval_context)
+                domain = safe_eval.safe_eval(action.filter_domain, eval_context)
             records = self.env[action.model_name].with_context(context).search(domain)
 
             # determine when action should occur for the records

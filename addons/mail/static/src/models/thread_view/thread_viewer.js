@@ -1,8 +1,8 @@
-odoo.define('mail/static/src/models/thread_viewer/thread_viewer.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { attr, many2one, one2one } = require('mail/static/src/model/model_field.js');
+import { registerNewModel } from '@mail/model/model_core';
+import { attr, many2one, one2one } from '@mail/model/model_field';
+import { clear, insertAndReplace } from '@mail/model/model_field_command';
 
 function factory(dependencies) {
 
@@ -13,15 +13,45 @@ function factory(dependencies) {
         //----------------------------------------------------------------------
 
         /**
-         * @param {string} scrollTop
+         * @param {integer} scrollHeight
+         * @param {mail.thread_cache} threadCache
          */
-        saveThreadCacheScrollPositionsAsInitial(scrollTop) {
-            if (!this.threadCache) {
+        saveThreadCacheScrollHeightAsInitial(scrollHeight, threadCache) {
+            threadCache = threadCache || this.threadCache;
+            if (!threadCache) {
+                return;
+            }
+            if (this.chatter) {
+                // Initial scroll height is disabled for chatter because it is
+                // too complex to handle correctly and less important
+                // functionally.
+                return;
+            }
+            this.update({
+                threadCacheInitialScrollHeights: Object.assign({}, this.threadCacheInitialScrollHeights, {
+                    [threadCache.localId]: scrollHeight,
+                }),
+            });
+        }
+
+        /**
+         * @param {integer} scrollTop
+         * @param {mail.thread_cache} threadCache
+         */
+        saveThreadCacheScrollPositionsAsInitial(scrollTop, threadCache) {
+            threadCache = threadCache || this.threadCache;
+            if (!threadCache) {
+                return;
+            }
+            if (this.chatter) {
+                // Initial scroll position is disabled for chatter because it is
+                // too complex to handle correctly and less important
+                // functionally.
                 return;
             }
             this.update({
                 threadCacheInitialScrollPositions: Object.assign({}, this.threadCacheInitialScrollPositions, {
-                    [this.threadCache.localId]: scrollTop,
+                    [threadCache.localId]: scrollTop,
                 }),
             });
         }
@@ -32,197 +62,86 @@ function factory(dependencies) {
 
         /**
          * @private
-         * @returns {boolean}
-         */
-        _computeHasThreadView() {
-            if (this.chatter) {
-                return this.chatter.hasThreadView;
-            }
-            if (this.chatWindow) {
-                return this.chatWindow.hasThreadView;
-            }
-            if (this.discuss) {
-                return this.discuss.hasThreadView;
-            }
-            return this.hasThreadView;
-        }
-
-        /**
-         * @private
-         * @returns {string}
-         */
-        _computeStringifiedDomain() {
-            if (this.chatter) {
-                return '[]';
-            }
-            if (this.chatWindow) {
-                return '[]';
-            }
-            if (this.discuss) {
-                return this.discuss.stringifiedDomain;
-            }
-            return this.stringifiedDomain;
-        }
-
-        /**
-         * @private
-         * @returns {mail.thread|undefined}
-         */
-         _computeThread() {
-            if (this.chatter) {
-                if (!this.chatter.thread) {
-                    return [['unlink']];
-                }
-                return [['link', this.chatter.thread]];
-            }
-            if (this.chatWindow) {
-                if (!this.chatWindow.thread) {
-                    return [['unlink']];
-                }
-                return [['link', this.chatWindow.thread]];
-            }
-            if (this.discuss) {
-                if (!this.discuss.thread) {
-                    return [['unlink']];
-                }
-                return [['link', this.discuss.thread]];
-            }
-            return [];
-        }
-
-        /**
-         * @private
-         * @returns {mail.thread_cache|undefined}
-         */
-        _computeThreadCache() {
-            if (!this.thread) {
-                return [['unlink']];
-            }
-            return [['link', this.thread.cache(this.stringifiedDomain)]];
-        }
-
-        /**
-         * @private
          * @returns {mail.thread_viewer|undefined}
          */
         _computeThreadView() {
-            if (!this.hasThreadView) {
-                return [['unlink']];
-            }
-            if (this.threadView) {
-                return [];
-            }
-            return [['create']];
+            return this.hasThreadView ? insertAndReplace() : clear();
         }
 
     }
 
     ThreadViewer.fields = {
-        /**
-         * States the `mail.chatter` managing `this`. This field is computed
-         * through the inverse relation and should be considered read-only.
-         */
         chatter: one2one('mail.chatter', {
             inverse: 'threadViewer',
+            readonly: true,
         }),
-        /**
-         * Serves as compute dependency.
-         */
-        chatterHasThreadView: attr({
-            related: 'chatter.hasThreadView',
-        }),
-        /**
-         * Serves as compute dependency.
-         */
-        chatterThread: many2one('mail.thread', {
-            related: 'chatter.thread',
-        }),
-        /**
-         * States the `mail.chat_window` managing `this`. This field is computed
-         * through the inverse relation and should be considered read-only.
-         */
         chatWindow: one2one('mail.chat_window', {
             inverse: 'threadViewer',
+            readonly: true,
         }),
         /**
-         * Serves as compute dependency.
+         * true if the viewer is in a compact format, like in a chat window.
          */
-        chatWindowHasThreadView: attr({
-            related: 'chatWindow.hasThreadView',
+        compact: attr({
+            default: false,
         }),
-        /**
-         * Serves as compute dependency.
-         */
-        chatWindowThread: many2one('mail.thread', {
-            related: 'chatWindow.thread',
-        }),
-        /**
-         * States the `mail.discuss` managing `this`. This field is computed
-         * through the inverse relation and should be considered read-only.
-         */
         discuss: one2one('mail.discuss', {
             inverse: 'threadViewer',
+            readonly: true,
+        }),
+        discussPublicView: one2one('mail.discuss_public_view', {
+            inverse: 'threadViewer',
+            readonly: true,
         }),
         /**
-         * Serves as compute dependency.
+         * Determines which extra class this thread view component should have.
          */
-        discussHasThreadView: attr({
-            related: 'discuss.hasThreadView',
-        }),
+        extraClass: attr(),
         /**
-         * Serves as compute dependency.
+         * Determines whether this thread viewer has a member list.
+         * Only makes sense if this thread is a channel and if the channel is
+         * not a chat.
          */
-        discussStringifiedDomain: attr({
-            related: 'discuss.stringifiedDomain',
-        }),
-        /**
-         * Serves as compute dependency.
-         */
-        discussThread: many2one('mail.thread', {
-            related: 'discuss.thread',
+        hasMemberList: attr({
+            default: false,
         }),
         /**
          * Determines whether `this.thread` should be displayed.
          */
         hasThreadView: attr({
-            compute: '_computeHasThreadView',
             default: false,
-            dependencies: [
-                'chatterHasThreadView',
-                'chatWindowHasThreadView',
-                'discussHasThreadView',
-            ],
         }),
         /**
-         * Determines the domain to apply when fetching messages for `this.thread`.
+         * Determines whether this thread viewer has a top bar.
          */
-        stringifiedDomain: attr({
-            compute: '_computeStringifiedDomain',
-            default: '[]',
-            dependencies: [
-                'discussStringifiedDomain',
-            ],
+        hasTopbar: attr({
+            default: false,
+        }),
+        /**
+         * Determines the order mode of the messages on this thread viewer.
+         * Either 'asc', or 'desc'.
+         */
+        order: attr({
+            default: 'asc',
         }),
         /**
          * Determines the `mail.thread` that should be displayed by `this`.
          */
-        thread: many2one('mail.thread', {
-            compute: '_computeThread',
-            dependencies: [
-                'chatterThread',
-                'chatWindowThread',
-                'discussThread',
-            ],
-        }),
+        thread: many2one('mail.thread'),
         /**
          * States the `mail.thread_cache` that should be displayed by `this`.
          */
         threadCache: many2one('mail.thread_cache', {
-            compute: '_computeThreadCache',
-            dependencies: [
-                'stringifiedDomain',
-                'thread',
-            ],
+            related: 'thread.cache',
+        }),
+        /**
+         * Determines the initial scroll height of thread caches, which is the
+         * scroll height at the time the last scroll position was saved.
+         * Useful to only restore scroll position when the corresponding height
+         * is available, otherwise the restore makes no sense.
+         */
+        threadCacheInitialScrollHeights: attr({
+            default: {},
         }),
         /**
          * Determines the initial scroll positions of thread caches.
@@ -239,19 +158,14 @@ function factory(dependencies) {
          */
         threadView: one2one('mail.thread_view', {
             compute: '_computeThreadView',
-            dependencies: [
-                'hasThreadView',
-            ],
             inverse: 'threadViewer',
             isCausal: true,
         }),
     };
-
+    ThreadViewer.identifyingFields = [['chatter', 'chatWindow', 'discuss', 'discussPublicView']];
     ThreadViewer.modelName = 'mail.thread_viewer';
 
     return ThreadViewer;
 }
 
 registerNewModel('mail.thread_viewer', factory);
-
-});

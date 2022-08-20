@@ -1,8 +1,8 @@
-odoo.define('mail/static/src/models/message_seen_indicator/message_seen_indicator.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { attr, many2many, many2one, one2many } = require('mail/static/src/model/model_field.js');
+import { registerNewModel } from '@mail/model/model_core';
+import { attr, many2many, many2one } from '@mail/model/model_field';
+import { replace, unlinkAll } from '@mail/model/model_field_command';
 
 function factory(dependencies) {
 
@@ -18,7 +18,7 @@ function factory(dependencies) {
          */
         static recomputeFetchedValues(channel = undefined) {
             const indicatorFindFunction = channel ? localIndicator => localIndicator.thread === channel : undefined;
-            const indicators = this.env.models['mail.message_seen_indicator'].all(indicatorFindFunction);
+            const indicators = this.messaging.models['mail.message_seen_indicator'].all(indicatorFindFunction);
             for (const indicator of indicators) {
                 indicator.update({
                     hasEveryoneFetched: indicator._computeHasEveryoneFetched(),
@@ -34,7 +34,7 @@ function factory(dependencies) {
          */
         static recomputeSeenValues(channel = undefined) {
             const indicatorFindFunction = channel ? localIndicator => localIndicator.thread === channel : undefined;
-            const indicators = this.env.models['mail.message_seen_indicator'].all(indicatorFindFunction);
+            const indicators = this.messaging.models['mail.message_seen_indicator'].all(indicatorFindFunction);
             for (const indicator of indicators) {
                 indicator.update({
                     hasEveryoneSeen: indicator._computeHasEveryoneSeen(),
@@ -51,14 +51,6 @@ function factory(dependencies) {
         //----------------------------------------------------------------------
         // Private
         //----------------------------------------------------------------------
-
-        /**
-         * @override
-         */
-        static _createRecordLocalId(data) {
-            const { channelId, messageId } = data;
-            return `${this.modelName}_${channelId}_${messageId}`;
-        }
 
         /**
          * Manually called as not always called when necessary
@@ -174,7 +166,7 @@ function factory(dependencies) {
          */
         _computePartnersThatHaveFetched() {
             if (!this.message || !this.thread || !this.thread.partnerSeenInfos) {
-                return [['unlink-all']];
+                return unlinkAll();
             }
             const otherPartnersThatHaveFetched = this.thread.partnerSeenInfos
                 .filter(partnerSeenInfo =>
@@ -190,9 +182,9 @@ function factory(dependencies) {
                 )
                 .map(partnerSeenInfo => partnerSeenInfo.partner);
             if (otherPartnersThatHaveFetched.length === 0) {
-                return [['unlink-all']];
+                return unlinkAll();
             }
-            return [['replace', otherPartnersThatHaveFetched]];
+            return replace(otherPartnersThatHaveFetched);
         }
 
         /**
@@ -204,7 +196,7 @@ function factory(dependencies) {
          */
         _computePartnersThatHaveSeen() {
             if (!this.message || !this.thread || !this.thread.partnerSeenInfos) {
-                return [['unlink-all']];
+                return unlinkAll();
             }
             const otherPartnersThatHaveSeen = this.thread.partnerSeenInfos
                 .filter(partnerSeenInfo =>
@@ -219,140 +211,61 @@ function factory(dependencies) {
                     partnerSeenInfo.lastSeenMessage.id >= this.message.id)
                 .map(partnerSeenInfo => partnerSeenInfo.partner);
             if (otherPartnersThatHaveSeen.length === 0) {
-                return [['unlink-all']];
+                return unlinkAll();
             }
-            return [['replace', otherPartnersThatHaveSeen]];
-        }
-
-        /**
-         * @private
-         * @returns {mail.message}
-         */
-        _computeMessage() {
-            return [['insert', { id: this.messageId }]];
-        }
-
-        /**
-         * @private
-         * @returns {mail.thread}
-         */
-        _computeThread() {
-            return [['insert', {
-                id: this.channelId,
-                model: 'mail.channel',
-            }]];
+            return replace(otherPartnersThatHaveSeen);
         }
     }
 
     MessageSeenIndicator.modelName = 'mail.message_seen_indicator';
 
     MessageSeenIndicator.fields = {
-        /**
-         * The id of the channel this seen indicator is related to.
-         *
-         * Should write on this field to set relation between the channel and
-         * this seen indicator, not on `thread`.
-         *
-         * Reason for not setting the relation directly is the necessity to
-         * uniquely identify a seen indicator based on channel and message from data.
-         * Relational data are list of commands, which is problematic to deduce
-         * identifying records.
-         *
-         * TODO: task-2322536 (normalize relational data) & task-2323665
-         * (required fields) should improve and let us just use the relational
-         * fields.
-         */
-        channelId: attr(),
         hasEveryoneFetched: attr({
             compute: '_computeHasEveryoneFetched',
             default: false,
-            dependencies: ['messageAuthor', 'messageId', 'threadPartnerSeenInfos'],
         }),
         hasEveryoneSeen: attr({
             compute: '_computeHasEveryoneSeen',
             default: false,
-            dependencies: ['messageAuthor', 'messageId', 'threadPartnerSeenInfos'],
         }),
         hasSomeoneFetched: attr({
             compute: '_computeHasSomeoneFetched',
             default: false,
-            dependencies: ['messageAuthor', 'messageId', 'threadPartnerSeenInfos'],
         }),
         hasSomeoneSeen: attr({
             compute: '_computeHasSomeoneSeen',
             default: false,
-            dependencies: ['messageAuthor', 'messageId', 'threadPartnerSeenInfos'],
         }),
         id: attr(),
         isMessagePreviousToLastCurrentPartnerMessageSeenByEveryone: attr({
             compute: '_computeIsMessagePreviousToLastCurrentPartnerMessageSeenByEveryone',
             default: false,
-            dependencies: [
-                'messageId',
-                'threadLastCurrentPartnerMessageSeenByEveryone',
-            ],
         }),
         /**
          * The message concerned by this seen indicator.
-         * This is automatically computed based on messageId field.
-         * @see messageId
          */
         message: many2one('mail.message', {
-            compute: '_computeMessage',
-            dependencies: [
-                'messageId',
-            ],
+            inverse: 'messageSeenIndicators',
+            readonly: true,
+            required: true,
         }),
-        messageAuthor: many2one('mail.partner', {
-            related: 'message.author',
-        }),
-        /**
-         * The id of the message this seen indicator is related to.
-         *
-         * Should write on this field to set relation between the channel and
-         * this seen indicator, not on `message`.
-         *
-         * Reason for not setting the relation directly is the necessity to
-         * uniquely identify a seen indicator based on channel and message from data.
-         * Relational data are list of commands, which is problematic to deduce
-         * identifying records.
-         *
-         * TODO: task-2322536 (normalize relational data) & task-2323665
-         * (required fields) should improve and let us just use the relational
-         * fields.
-         */
-        messageId: attr(),
         partnersThatHaveFetched: many2many('mail.partner', {
             compute: '_computePartnersThatHaveFetched',
-            dependencies: ['messageAuthor', 'messageId', 'threadPartnerSeenInfos'],
         }),
         partnersThatHaveSeen: many2many('mail.partner', {
             compute: '_computePartnersThatHaveSeen',
-            dependencies: ['messageAuthor', 'messageId', 'threadPartnerSeenInfos'],
         }),
         /**
          * The thread concerned by this seen indicator.
-         * This is automatically computed based on channelId field.
-         * @see channelId
          */
         thread: many2one('mail.thread', {
-            compute: '_computeThread',
-            dependencies: [
-                'channelId',
-            ],
-            inverse: 'messageSeenIndicators'
-        }),
-        threadPartnerSeenInfos: one2many('mail.thread_partner_seen_info', {
-            related: 'thread.partnerSeenInfos',
-        }),
-        threadLastCurrentPartnerMessageSeenByEveryone: many2one('mail.message', {
-            related: 'thread.lastCurrentPartnerMessageSeenByEveryone',
+            inverse: 'messageSeenIndicators',
+            readonly: true,
+            required: true,
         }),
     };
-
+    MessageSeenIndicator.identifyingFields = ['thread', 'message'];
     return MessageSeenIndicator;
 }
 
 registerNewModel('mail.message_seen_indicator', factory);
-
-});

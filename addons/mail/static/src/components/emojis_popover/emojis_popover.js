@@ -1,11 +1,12 @@
-odoo.define('mail/static/src/components/emojis_popover/emojis_popover.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const emojis = require('mail.emojis');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
+import { useUpdate } from '@mail/component_hooks/use_update/use_update';
+import emojis from '@mail/js/emojis';
 
 const { Component } = owl;
 
-class EmojisPopover extends Component {
+export class EmojisPopover extends Component {
 
     /**
      * @param {...any} args
@@ -13,15 +14,7 @@ class EmojisPopover extends Component {
     constructor(...args) {
         super(...args);
         this.emojis = emojis;
-    }
-
-
-    mounted() {
-        this._update();
-    }
-
-    patched() {
-        this._update();
+        useUpdate({ func: () => this._update() });
     }
 
     //--------------------------------------------------------------------------
@@ -50,10 +43,7 @@ class EmojisPopover extends Component {
      * @returns {boolean}
      */
     contains(node) {
-        if (!this.el) {
-            return false;
-        }
-        return this.el.contains(node);
+        return Boolean(this.el && this.el.contains(node));
     }
 
     //--------------------------------------------------------------------------
@@ -78,6 +68,4 @@ Object.assign(EmojisPopover, {
     template: 'mail.EmojisPopover',
 });
 
-return EmojisPopover;
-
-});
+registerMessagingComponent(EmojisPopover);

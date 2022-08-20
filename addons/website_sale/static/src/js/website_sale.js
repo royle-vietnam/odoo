@@ -148,13 +148,14 @@ odoo.define('website_sale.website_sale', function (require) {
 var core = require('web.core');
 var config = require('web.config');
 var publicWidget = require('web.public.widget');
-var VariantMixin = require('sale.VariantMixin');
+var VariantMixin = require('website_sale.VariantMixin');
 var wSaleUtils = require('website_sale.utils');
-const wUtils = require('website.utils');
+const cartHandlerMixin = wSaleUtils.cartHandlerMixin;
 require("web.zoomodoo");
+const {extraMenuUpdateCallbacks} = require('website.content.menu');
+const dom = require('web.dom');
 
-
-publicWidget.registry.WebsiteSale = publicWidget.Widget.extend(VariantMixin, {
+publicWidget.registry.WebsiteSale = publicWidget.Widget.extend(VariantMixin, cartHandlerMixin, {
     selector: '.oe_website_sale',
     events: _.extend({}, VariantMixin.events || {}, {
         'change form .js_product:first input[name="add_qty"]': '_onChangeAddQuantity',
@@ -172,10 +173,11 @@ publicWidget.registry.WebsiteSale = publicWidget.Widget.extend(VariantMixin, {
         'change select[name="country_id"]': '_onChangeCountry',
         'change #shipping_use_same': '_onChangeShippingUseSame',
         'click .toggle_summary': '_onToggleSummary',
-        'click #add_to_cart, #buy_now, #products_grid .o_wsale_product_btn .a-submit': 'async _onClickAdd',
+        'click #add_to_cart, .o_we_buy_now, #products_grid .o_wsale_product_btn .a-submit': 'async _onClickAdd',
         'click input.js_product_change': 'onChangeVariant',
         'change .js_main_product [data-attribute_exclusions]': 'onChangeVariant',
-        'change oe_optional_products_modal [data-attribute_exclusions]': 'onChangeVariant',
+        'change oe_advanced_configurator_modal [data-attribute_exclusions]': 'onChangeVariant',
+        'click .o_product_page_reviews_link': '_onClickReviewsLink',
     }),
 
     /**
@@ -195,11 +197,10 @@ publicWidget.registry.WebsiteSale = publicWidget.Widget.extend(VariantMixin, {
     /**
      * @override
      */
-    start: function () {
-        var self = this;
-        var def = this._super.apply(this, arguments);
+    start() {
+        const def = this._super(...arguments);
 
-        this._applyHash();
+        this._applyHashFromSearch();
 
         _.each(this.$('div.js_product'), function (product) {
             $('input.js_product_change', product).first().trigger('change');
@@ -218,11 +219,12 @@ publicWidget.registry.WebsiteSale = publicWidget.Widget.extend(VariantMixin, {
 
         this._startZoom();
 
-        window.addEventListener('hashchange', function (e) {
-            self._applyHash();
-            self.triggerVariantChange($(self.el));
+        window.addEventListener('hashchange', () => {
+            this._applyHash();
+            this.triggerVariantChange(this.$el);
         });
 
+        this.getRedirectOption();
         return def;
     },
     /**
@@ -259,7 +261,7 @@ publicWidget.registry.WebsiteSale = publicWidget.Widget.extend(VariantMixin, {
                         $toSelect.prop('selected', true);
                     }
                 });
-                this._changeColorAttribute();
+                this._changeAttribute(['.css_attribute_color', '.o_variant_pills']);
             }
         }
     },
@@ -277,14 +279,17 @@ publicWidget.registry.WebsiteSale = publicWidget.Widget.extend(VariantMixin, {
         history.replaceState(undefined, undefined, '#attr=' + attributeIds.join(','));
     },
     /**
-     * Set the checked color active.
+     * Set the checked values active.
      *
      * @private
+     * @param {Array} valueSelectors Selectors
      */
-    _changeColorAttribute: function () {
-        $('.css_attribute_color').removeClass("active")
-                                 .filter(':has(input:checked)')
-                                 .addClass("active");
+    _changeAttribute: function (valueSelectors) {
+        _.each(valueSelectors, function (selector) {
+            $(selector).removeClass("active")
+                       .filter(':has(input:checked)')
+                       .addClass("active");
+        });
     },
     /**
      * @private
@@ -316,21 +321,11 @@ publicWidget.registry.WebsiteSale = publicWidget.Widget.extend(VariantMixin, {
             if (!data.cart_quantity) {
                 return window.location = '/shop/cart';
             }
-            wSaleUtils.updateCartNavBar(data);
             $input.val(data.quantity);
-            $('.js_quantity[data-line-id='+line_id+']').val(data.quantity).html(data.quantity);
+            $('.js_quantity[data-line-id='+line_id+']').val(data.quantity).text(data.quantity);
 
-            if (data.warning) {
-                var cart_alert = $('.oe_cart').parent().find('#data_warning');
-                if (cart_alert.length === 0) {
-                    $('.oe_cart').prepend('<div class="alert alert-danger alert-dismissable" role="alert" id="data_warning">'+
-                            '<button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button> ' + data.warning + '</div>');
-                }
-                else {
-                    cart_alert.html('<button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button> ' + data.warning);
-                }
-                $input.val(data.quantity);
-            }
+            wSaleUtils.updateCartNavBar(data);
+            wSaleUtils.showWarning(data.warning);
         });
     },
     /**
@@ -383,10 +378,14 @@ publicWidget.registry.WebsiteSale = publicWidget.Widget.extend(VariantMixin, {
                 });
             }
 
-            $("label[for='zip']").toggleClass('label-optional', !data.zip_required);
-            $("label[for='state_id']").toggleClass('label-optional', !data.state_required);
-            $("label[for='zip']").get(0).toggleAttribute('required', !!data.zip_required);
-            $("label[for='state_id']").get(0).toggleAttribute('required', !!data.state_required);
+            if ($("label[for='zip']").length) {
+                $("label[for='zip']").toggleClass('label-optional', !data.zip_required);
+                $("label[for='zip']").get(0).toggleAttribute('required', !!data.zip_required);
+            }
+            if ($("label[for='zip']").length) {
+                $("label[for='state_id']").toggleClass('label-optional', !data.state_required);
+                $("label[for='state_id']").get(0).toggleAttribute('required', !!data.state_required);
+            }
         });
     },
     /**
@@ -469,8 +468,16 @@ publicWidget.registry.WebsiteSale = publicWidget.Widget.extend(VariantMixin, {
      */
     _onClickAdd: function (ev) {
         ev.preventDefault();
-        this.isBuyNow = $(ev.currentTarget).attr('id') === 'buy_now';
-        return this._handleAdd($(ev.currentTarget).closest('form'));
+        var def = () => {
+            this.getCartHandlerOptions(ev);
+            return this._handleAdd($(ev.currentTarget).closest('form'));
+        };
+        if ($('.js_add_cart_variants').children().length) {
+            return this._getCombinationInfo(ev).then(() => {
+                return !$(ev.target).closest('.js_product').hasClass("css_not_available") ? def() : Promise.resolve();
+            });
+        }
+        return def();
     },
     /**
      * Initializes the optional products modal
@@ -516,23 +523,26 @@ publicWidget.registry.WebsiteSale = publicWidget.Widget.extend(VariantMixin, {
 
     /**
      * Add custom variant values and attribute values that do not generate variants
-     * in the form data and trigger submit.
+     * in the params to submit form if 'stay on page' option is disabled, or call
+     * '_addToCartInPage' otherwise.
      *
      * @private
-     * @returns {Promise} never resolved
+     * @returns {Promise}
      */
     _submitForm: function () {
-        let params = this.rootProduct;
-        params.add_qty = params.quantity;
+        const params = this.rootProduct;
 
-        params.product_custom_attribute_values = JSON.stringify(params.product_custom_attribute_values);
-        params.no_variant_attribute_values = JSON.stringify(params.no_variant_attribute_values);
-        
-        if (this.isBuyNow) {
-            params.express = true;
+        const $product = $('#product_detail');
+        const productTrackingInfo = $product.data('product-tracking-info');
+        if (productTrackingInfo) {
+            productTrackingInfo.quantity = params.quantity;
+            $product.trigger('add_to_cart_event', [productTrackingInfo]);
         }
 
-        return wUtils.sendRequest('/shop/cart/update', params);
+        params.add_qty = params.quantity;
+        params.product_custom_attribute_values = JSON.stringify(params.product_custom_attribute_values);
+        params.no_variant_attribute_values = JSON.stringify(params.no_variant_attribute_values);
+        return this.addToCart(params);
     },
     /**
      * @private
@@ -684,7 +694,7 @@ publicWidget.registry.WebsiteSale = publicWidget.Widget.extend(VariantMixin, {
     _toggleDisable: function ($parent, isCombinationPossible) {
         VariantMixin._toggleDisable.apply(this, arguments);
         $parent.find("#add_to_cart").toggleClass('disabled', !isCombinationPossible);
-        $parent.find("#buy_now").toggleClass('disabled', !isCombinationPossible);
+        $parent.find(".o_we_buy_now").toggleClass('disabled', !isCombinationPossible);
     },
     /**
      * Write the properties of the form elements in the DOM to prevent the
@@ -714,6 +724,33 @@ publicWidget.registry.WebsiteSale = publicWidget.Widget.extend(VariantMixin, {
         $('.toggle_summary_div').toggleClass('d-none');
         $('.toggle_summary_div').removeClass('d-xl-block');
     },
+    /**
+     * @private
+     */
+    _applyHashFromSearch() {
+        const params = $.deparam(window.location.search.slice(1));
+        if (params.attrib) {
+            const dataValueIds = [];
+            for (const attrib of [].concat(params.attrib)) {
+                const attribSplit = attrib.split('-');
+                const attribValueSelector = `.js_variant_change[name="ptal-${attribSplit[0]}"][value="${attribSplit[1]}"]`;
+                const attribValue = this.el.querySelector(attribValueSelector);
+                if (attribValue !== null) {
+                    dataValueIds.push(attribValue.dataset.value_id);
+                }
+            }
+            if (dataValueIds.length) {
+                history.replaceState(undefined, undefined, `#attr=${dataValueIds.join(',')}`);
+            }
+        }
+        this._applyHash();
+    },
+    /**
+     * @private
+     */
+    _onClickReviewsLink: function () {
+        $('#o_product_page_reviews_content').collapse('show');
+    },
 });
 
 publicWidget.registry.WebsiteSaleLayout = publicWidget.Widget.extend({
@@ -732,6 +769,10 @@ publicWidget.registry.WebsiteSaleLayout = publicWidget.Widget.extend({
      * @param {Event} ev
      */
     _onApplyShopLayoutChange: function (ev) {
+        const wysiwyg = this.options.wysiwyg;
+        if (wysiwyg) {
+            wysiwyg.odooEditor.observerUnactive('_onApplyShopLayoutChange');
+        }
         var switchToList = $(ev.currentTarget).find('.o_wsale_apply_list input').is(':checked');
         if (!this.editableMode) {
             this._rpc({
@@ -750,6 +791,9 @@ publicWidget.registry.WebsiteSaleLayout = publicWidget.Widget.extend({
         $grid.toggleClass('o_wsale_layout_list', switchToList);
         void $grid[0].offsetWidth;
         $grid.find('*').css('transition', '');
+        if (wysiwyg) {
+            wysiwyg.odooEditor.observerActive('_onApplyShopLayoutChange');
+        }
     },
 });
 
@@ -798,6 +842,178 @@ publicWidget.registry.websiteSaleCart = publicWidget.Widget.extend({
     _onClickDeleteProduct: function (ev) {
         ev.preventDefault();
         $(ev.currentTarget).closest('tr').find('.js_quantity').val(0).trigger('change');
+    },
+});
+
+publicWidget.registry.websiteSaleCarouselProduct = publicWidget.Widget.extend({
+    selector: '#o-carousel-product',
+    disabledInEditableMode: false,
+    events: {
+        'wheel .o_carousel_product_indicators': '_onMouseWheel',
+    },
+
+    /**
+     * @override
+     */
+    async start() {
+        await this._super(...arguments);
+        this._updateCarouselPosition();
+        extraMenuUpdateCallbacks.push(this._updateCarouselPosition.bind(this));
+        if (this.$target.find('.carousel-indicators').length > 0) {
+            this.$target.on('slide.bs.carousel.carousel_product_slider', this._onSlideCarouselProduct.bind(this));
+            $(window).on('resize.carousel_product_slider', _.throttle(this._onSlideCarouselProduct.bind(this), 150));
+            this._updateJustifyContent();
+        }
+    },
+    /**
+     * @override
+     */
+    destroy() {
+        this.$target.css('top', '');
+        this.$target.off('.carousel_product_slider');
+        this._super(...arguments);
+    },
+
+    //--------------------------------------------------------------------------
+    // Private
+    //--------------------------------------------------------------------------
+
+    /**
+     * @private
+     */
+    _updateCarouselPosition() {
+        this.$target.css('top', dom.scrollFixedOffset() + 5);
+    },
+
+    //--------------------------------------------------------------------------
+    // Handlers
+    //--------------------------------------------------------------------------
+
+    /**
+     * Center the selected indicator to scroll the indicators list when it
+     * overflows.
+     * 
+     * @private
+     * @param {Event} ev
+     */
+    _onSlideCarouselProduct: function (ev) {
+        const isReversed = this.$target.css('flex-direction') === "column-reverse";
+        const isLeftIndicators = this.$target.hasClass('o_carousel_product_left_indicators');
+        const $indicatorsDiv = isLeftIndicators ? this.$target.find('.o_carousel_product_indicators') : this.$target.find('.carousel-indicators');
+        let indicatorIndex = $(ev.relatedTarget).index();
+        indicatorIndex = indicatorIndex > -1 ? indicatorIndex : this.$target.find('li.active').index();
+        const $indicator = $indicatorsDiv.find('[data-slide-to=' + indicatorIndex + ']');
+        const indicatorsDivSize = isLeftIndicators && !isReversed ? $indicatorsDiv.outerHeight() : $indicatorsDiv.outerWidth();
+        const indicatorSize = isLeftIndicators && !isReversed ? $indicator.outerHeight() : $indicator.outerWidth();
+        const indicatorPosition = isLeftIndicators && !isReversed ? $indicator.position().top : $indicator.position().left;
+        const scrollSize = isLeftIndicators && !isReversed ? $indicatorsDiv[0].scrollHeight : $indicatorsDiv[0].scrollWidth;
+        let indicatorsPositionDiff = (indicatorPosition + (indicatorSize/2)) - (indicatorsDivSize/2);
+        indicatorsPositionDiff = Math.min(indicatorsPositionDiff, scrollSize - indicatorsDivSize);
+        this._updateJustifyContent();
+        const indicatorsPositionX = isLeftIndicators && !isReversed ? '0' : '-' + indicatorsPositionDiff;
+        const indicatorsPositionY = isLeftIndicators && !isReversed ? '-' + indicatorsPositionDiff : '0';
+        const translate3D = indicatorsPositionDiff > 0 ? "translate3d(" + indicatorsPositionX + "px," + indicatorsPositionY + "px,0)" : '';
+        $indicatorsDiv.css("transform", translate3D);
+    },
+    /**
+     * @private
+     */
+     _updateJustifyContent: function () {
+        const $indicatorsDiv = this.$target.find('.carousel-indicators');
+        $indicatorsDiv.css('justify-content', 'start');
+        if (config.device.size_class <= config.device.SIZES.MD) {
+            if (($indicatorsDiv.children().last().position().left + this.$target.find('li').outerWidth()) < $indicatorsDiv.outerWidth()) {
+                $indicatorsDiv.css('justify-content', 'center');
+            }
+        }
+    },
+    /**
+     * @private
+     * @param {Event} ev
+     */
+    _onMouseWheel: function (ev) {
+        ev.preventDefault();
+        if (ev.originalEvent.deltaY > 0) {
+            this.$target.carousel('next');
+        } else {
+            this.$target.carousel('prev');
+        }
+    },
+});
+
+publicWidget.registry.websiteSaleProductPageReviews = publicWidget.Widget.extend({
+    selector: '#o_product_page_reviews',
+    disabledInEditableMode: false,
+
+    /**
+     * @override
+     */
+    async start() {
+        await this._super(...arguments);
+        this._updateChatterComposerPosition();
+        extraMenuUpdateCallbacks.push(this._updateChatterComposerPosition.bind(this));
+    },
+    /**
+     * @override
+     */
+    destroy() {
+        this.$target.find('.o_portal_chatter_composer').css('top', '');
+        this._super(...arguments);
+    },
+
+    //--------------------------------------------------------------------------
+    // Private
+    //--------------------------------------------------------------------------
+
+    /**
+     * @private
+     */
+    _updateChatterComposerPosition() {
+        this.$target.find('.o_portal_chatter_composer').css('top', dom.scrollFixedOffset() + 20);
+    },
+});
+
+return {
+    WebsiteSale: publicWidget.registry.WebsiteSale,
+    WebsiteSaleLayout: publicWidget.registry.WebsiteSaleLayout,
+    websiteSaleCart: publicWidget.registry.websiteSaleCart,
+    WebsiteSaleCarouselProduct: publicWidget.registry.websiteSaleCarouselProduct,
+    WebsiteSaleProductPageReviews: publicWidget.registry.websiteSaleProductPageReviews,
+};
+
+});
+
+odoo.define('website_sale.price_range_option', function (require) {
+'use strict';
+
+const publicWidget = require('web.public.widget');
+
+publicWidget.registry.multirangePriceSelector = publicWidget.Widget.extend({
+    selector: '#o_wsale_price_range_option',
+    events: {
+        'newRangeValue input[type="range"]': '_onPriceRangeSelected',
+    },
+
+    //----------------------------------------------------------------------
+    // Handlers
+    //----------------------------------------------------------------------
+
+    /**
+     * @private
+     * @param {Event} ev
+     */
+    _onPriceRangeSelected(ev) {
+        const range = ev.currentTarget;
+        const search = $.deparam(window.location.search.substring(1));
+        delete search.min_price;
+        delete search.max_price;
+        if (parseFloat(range.min) !== range.valueLow) {
+            search['min_price'] = range.valueLow;
+        }
+        if (parseFloat(range.max) !== range.valueHigh) {
+            search['max_price'] = range.valueHigh;
+        }
+        window.location.search = $.param(search);
     },
 });
 });

@@ -26,6 +26,7 @@ var PosDB = core.Class.extend({
         this.product_by_id = {};
         this.product_by_barcode = {};
         this.product_by_category_id = {};
+        this.product_packaging_by_barcode = {};
 
         this.partner_sorted = [];
         this.partner_by_id = {};
@@ -216,6 +217,14 @@ var PosDB = core.Class.extend({
             }
         }
     },
+    add_packagings: function(product_packagings){
+        var self = this;
+        _.map(product_packagings, function (product_packaging) {
+            if (_.find(self.product_by_id, {'id': product_packaging.product_id[0]})) {
+                self.product_packaging_by_barcode[product_packaging.barcode] = product_packaging;
+            }
+        });
+    },
     _partner_search_string: function(partner){
         var str =  partner.name || '';
         if(partner.barcode){
@@ -236,7 +245,7 @@ var PosDB = core.Class.extend({
         if(partner.vat){
             str += '|' + partner.vat;
         }
-        str = '' + partner.id + ':' + str.replace(':','') + '\n';
+        str = '' + partner.id + ':' + str.replace(':', '').replace(/\n/g, ' ') + '\n';
         return str;
     },
     add_partners: function(partners){
@@ -354,16 +363,19 @@ var PosDB = core.Class.extend({
     get_product_by_barcode: function(barcode){
         if(this.product_by_barcode[barcode]){
             return this.product_by_barcode[barcode];
-        } else {
-            return undefined;
+        } else if (this.product_packaging_by_barcode[barcode]) {
+            return this.product_by_id[this.product_packaging_by_barcode[barcode].product_id[0]];
         }
+        return undefined;
     },
     get_product_by_category: function(category_id){
         var product_ids  = this.product_by_category_id[category_id];
         var list = [];
         if (product_ids) {
             for (var i = 0, len = Math.min(product_ids.length, this.limit); i < len; i++) {
-                list.push(this.product_by_id[product_ids[i]]);
+                const product = this.product_by_id[product_ids[i]];
+                if (!(product.active && product.available_in_pos)) continue;
+                list.push(product);
             }
         }
         return list;
@@ -385,7 +397,9 @@ var PosDB = core.Class.extend({
             var r = re.exec(this.category_search_string[category_id]);
             if(r){
                 var id = Number(r[1]);
-                results.push(this.get_product_by_id(id));
+                const product = this.get_product_by_id(id);
+                if (!(product.active && product.available_in_pos)) continue;
+                results.push(product);
             }else{
                 break;
             }
@@ -495,14 +509,14 @@ var PosDB = core.Class.extend({
     },
     /**
      * Return the orders with requested ids if they are unpaid.
-     * @param {array<number>} ids order_ids.
+     * @param {array<string>} ids order_ids (uid).
      * @return {array<object>} list of orders.
      */
     get_unpaid_orders_to_sync: function(ids){
         var saved = this.load('unpaid_orders',[]);
         var orders = [];
         saved.forEach(function(o) {
-            if (ids.includes(o.id) && (o.data.server_id || o.data.lines.length)){
+            if (ids.includes(o.id)){
                 orders.push(o);
             }
         });

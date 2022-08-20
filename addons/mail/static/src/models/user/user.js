@@ -1,24 +1,12 @@
-odoo.define('mail/static/src/models/user/user.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { attr, one2one } = require('mail/static/src/model/model_field.js');
+import { registerNewModel } from '@mail/model/model_core';
+import { attr, one2one } from '@mail/model/model_field';
+import { insert, unlink } from '@mail/model/model_field_command';
 
 function factory(dependencies) {
 
     class User extends dependencies['mail.model'] {
-
-        /**
-         * @override
-         */
-        _willDelete() {
-            if (this.env.messaging) {
-                if (this === this.env.messaging.currentUser) {
-                    this.env.messaging.update({ currentUser: [['unlink']] });
-                }
-            }
-            return super._willDelete(...arguments);
-        }
 
         //----------------------------------------------------------------------
         // Public
@@ -36,14 +24,14 @@ function factory(dependencies) {
             }
             if ('partner_id' in data) {
                 if (!data.partner_id) {
-                    data2.partner = [['unlink']];
+                    data2.partner = unlink();
                 } else {
                     const partnerNameGet = data['partner_id'];
                     const partnerData = {
                         display_name: partnerNameGet[1],
                         id: partnerNameGet[0],
                     };
-                    data2.partner = [['insert', partnerData]];
+                    data2.partner = insert(partnerData);
                 }
             }
             return data2;
@@ -67,9 +55,9 @@ function factory(dependencies) {
                     context,
                     fields,
                 },
-            });
-            return this.env.models['mail.user'].insert(usersData.map(userData =>
-                this.env.models['mail.user'].convertData(userData)
+            }, { shadow: true });
+            return this.messaging.models['mail.user'].insert(usersData.map(userData =>
+                this.messaging.models['mail.user'].convertData(userData)
             ));
         }
 
@@ -77,7 +65,7 @@ function factory(dependencies) {
          * Fetches the partner of this user.
          */
         async fetchPartner() {
-            return this.env.models['mail.user'].performRpcRead({
+            return this.messaging.models['mail.user'].performRpcRead({
                 ids: [this.id],
                 fields: ['partner_id'],
                 context: { active_test: false },
@@ -107,15 +95,17 @@ function factory(dependencies) {
                 return;
             }
             // in other cases a chat would be valid, find it or try to create it
-            let chat = this.env.models['mail.thread'].find(thread =>
+            let chat = this.messaging.models['mail.thread'].find(thread =>
                 thread.channel_type === 'chat' &&
                 thread.correspondent === this.partner &&
                 thread.model === 'mail.channel' &&
                 thread.public === 'private'
             );
-            if (!chat) {
+            if (!chat || !chat.isPinned) {
+                // if chat is not pinned then it has to be pinned client-side
+                // and server-side, which is a side effect of following rpc
                 chat = await this.async(() =>
-                    this.env.models['mail.thread'].performRpcCreateChat({
+                    this.messaging.models['mail.thread'].performRpcCreateChat({
                         partnerIds: [this.partner.id],
                     })
                 );
@@ -177,13 +167,6 @@ function factory(dependencies) {
         //----------------------------------------------------------------------
 
         /**
-         * @override
-         */
-        static _createRecordLocalId(data) {
-            return `${this.modelName}_${data.id}`;
-        }
-
-        /**
          * @private
          * @returns {string|undefined}
          */
@@ -201,46 +184,37 @@ function factory(dependencies) {
     }
 
     User.fields = {
-        id: attr(),
+        id: attr({
+            readonly: true,
+            required: true,
+        }),
+        /**
+         * Determines whether this user is an internal user. An internal user is
+         * a member of the group `base.group_user`. This is the inverse of the
+         * `share` field in python.
+         */
+        isInternalUser: attr(),
         display_name: attr({
             compute: '_computeDisplayName',
-            dependencies: [
-                'display_name',
-                'partnerDisplayName',
-            ],
         }),
         model: attr({
             default: 'res.user',
         }),
         nameOrDisplayName: attr({
             compute: '_computeNameOrDisplayName',
-            dependencies: [
-                'display_name',
-                'partnerNameOrDisplayName',
-            ]
         }),
         partner: one2one('mail.partner', {
             inverse: 'user',
         }),
         /**
-         * Serves as compute dependency.
+         * Id of this user's res.users.settings record.
          */
-        partnerDisplayName: attr({
-            related: 'partner.display_name',
-        }),
-        /**
-         * Serves as compute dependency.
-         */
-        partnerNameOrDisplayName: attr({
-            related: 'partner.nameOrDisplayName',
-        }),
+        resUsersSettingsId: attr(),
     };
-
+    User.identifyingFields = ['id'];
     User.modelName = 'mail.user';
 
     return User;
 }
 
 registerNewModel('mail.user', factory);
-
-});

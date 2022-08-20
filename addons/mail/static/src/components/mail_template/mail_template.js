@@ -1,26 +1,10 @@
-odoo.define('mail/static/src/components/mail_template/mail_template.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 
-class MailTemplate extends Component {
-
-    /**
-     * @override
-     */
-    constructor(...args) {
-        super(...args);
-        useStore(props => {
-            const activity = this.env.models['mail.activity'].get(props.activityLocalId);
-            const mailTemplate = this.env.models['mail.mail_template'].get(props.mailTemplateLocalId);
-            return {
-                activity: activity ? activity.__state : undefined,
-                mailTemplate: mailTemplate ? mailTemplate.__state : undefined,
-            };
-        });
-    }
+export class MailTemplate extends Component {
 
     //--------------------------------------------------------------------------
     // Public
@@ -30,14 +14,14 @@ class MailTemplate extends Component {
      * @returns {mail.activity}
      */
     get activity() {
-        return this.env.models['mail.activity'].get(this.props.activityLocalId);
+        return this.messaging && this.messaging.models['mail.activity'].get(this.props.activityLocalId);
     }
 
     /**
      * @returns {mail.mail_template}
      */
     get mailTemplate() {
-        return this.env.models['mail.mail_template'].get(this.props.mailTemplateLocalId);
+        return this.messaging && this.messaging.models['mail.mail_template'].get(this.props.mailTemplateLocalId);
     }
 
     //--------------------------------------------------------------------------
@@ -74,6 +58,4 @@ Object.assign(MailTemplate, {
     template: 'mail.MailTemplate',
 });
 
-return MailTemplate;
-
-});
+registerMessagingComponent(MailTemplate);

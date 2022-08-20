@@ -8,10 +8,11 @@ import email.message
 import re
 import threading
 
-from odoo.tests.common import BaseCase, SavepointCase, TransactionCase
+from odoo.addons.base.models.ir_mail_server import extract_rfc2822_addresses
+from odoo.tests.common import BaseCase, TransactionCase
 from odoo.tools import (
     is_html_empty, html_sanitize, append_content_to_html, plaintext2html,
-    email_split,
+    email_split, email_domain_normalize,
     misc, formataddr,
     prepend_html_content,
 )
@@ -32,24 +33,6 @@ class TestSanitizer(BaseCase):
         for content, expected in cases:
             html = html_sanitize(content)
             self.assertEqual(html, expected, 'html_sanitize is broken')
-
-    def test_mako(self):
-        cases = [
-            ('''<p>Some text</p>
-<% set signup_url = object.get_signup_url() %>
-% if signup_url:
-<p>
-    You can access this document and pay online via our Customer Portal:
-</p>''', '''<p>Some text</p>
-<% set signup_url = object.get_signup_url() %>
-% if signup_url:
-<p>
-    You can access this document and pay online via our Customer Portal:
-</p>''')
-        ]
-        for content, expected in cases:
-            html = html_sanitize(content, silent=False)
-            self.assertEqual(html, expected, 'html_sanitize: broken mako management')
 
     def test_evil_malicious_code(self):
         # taken from https://www.owasp.org/index.php/XSS_Filter_Evasion_Cheat_Sheet#Tests
@@ -195,11 +178,25 @@ class TestSanitizer(BaseCase):
         for ext in test_mail_examples.HOTMAIL_1_OUT:
             self.assertIn(ext, html)
 
+    def test_quote_outlook_html(self):
+        html = html_sanitize(test_mail_examples.QUOTE_OUTLOOK_HTML)
+        for ext in test_mail_examples.QUOTE_OUTLOOK_HTML_IN:
+            self.assertIn(ext, html)
+        for ext in test_mail_examples.QUOTE_OUTLOOK_HTML_OUT:
+            self.assertIn(ext, html)
+
     def test_quote_thunderbird_html(self):
         html = html_sanitize(test_mail_examples.QUOTE_THUNDERBIRD_HTML)
         for ext in test_mail_examples.QUOTE_THUNDERBIRD_HTML_IN:
             self.assertIn(ext, html)
         for ext in test_mail_examples.QUOTE_THUNDERBIRD_HTML_OUT:
+            self.assertIn(ext, html)
+
+    def test_quote_yahoo_html(self):
+        html = html_sanitize(test_mail_examples.QUOTE_YAHOO_HTML)
+        for ext in test_mail_examples.QUOTE_YAHOO_HTML_IN:
+            self.assertIn(ext, html)
+        for ext in test_mail_examples.QUOTE_YAHOO_HTML_OUT:
             self.assertIn(ext, html)
 
     def test_quote_basic_text(self):
@@ -328,11 +325,21 @@ class TestHtmlTools(BaseCase):
         for content in void_strings_samples:
             self.assertTrue(is_html_empty(content))
 
-        void_html_samples = ['<p><br></p>', '<p><br> </p>', '<p><br /></p >']
+        void_html_samples = [
+            '<p><br></p>', '<p><br> </p>', '<p><br /></p >',
+            '<p style="margin: 4px"></p>',
+            '<div style="margin: 4px"></div>',
+            '<p class="oe_testing"><br></p>',
+            '<p><span style="font-weight: bolder;"><font style="color: rgb(255, 0, 0);" class=" "></font></span><br></p>',
+        ]
         for content in void_html_samples:
             self.assertTrue(is_html_empty(content), 'Failed with %s' % content)
 
-        valid_html_samples = ['<p><br>1</p>', '<p>1<br > </p>']
+        valid_html_samples = [
+            '<p><br>1</p>', '<p>1<br > </p>', '<p style="margin: 4px">Hello World</p>',
+            '<div style="margin: 4px"><p>Hello World</p></div>',
+            '<p><span style="font-weight: bolder;"><font style="color: rgb(255, 0, 0);" class=" ">W</font></span><br></p>',
+        ]
         for content in valid_html_samples:
             self.assertFalse(is_html_empty(content))
 
@@ -425,8 +432,25 @@ class TestEmailTools(BaseCase):
                 with self.subTest(pair=pair, charset=charset):
                     self.assertEqual(formataddr(pair, charset), expected)
 
+    def test_extract_rfc2822_addresses(self):
+        tests = [
+            ('"Admin" <admin@example.com>', ['admin@example.com']),
+            ('"Admin" <admin@example.com>, Demo <demo@test.com>', ['admin@example.com', 'demo@test.com']),
+            ('admin@example.com', ['admin@example.com']),
+            ('"Admin" <admin@example.com>, Demo <malformed email>', ['admin@example.com']),
+            ('admin@éxample.com', ['admin@xn--xample-9ua.com']),
+        ]
 
-class EmailConfigCase(SavepointCase):
+        for (rfc2822_email, expected) in tests:
+            self.assertEqual(extract_rfc2822_addresses(rfc2822_email), expected)
+
+    def test_email_domain_normalize(self):
+        self.assertEqual(email_domain_normalize("Test.Com"), "test.com", "Should have normalized the domain")
+        self.assertEqual(email_domain_normalize("email@test.com"), False, "The domain is not valid, should return False")
+        self.assertEqual(email_domain_normalize(False), False, "The domain is not valid, should return False")
+
+
+class EmailConfigCase(TransactionCase):
     @patch.dict("odoo.tools.config.options", {"email_from": "settings@example.com"})
     def test_default_email_from(self, *args):
         """Email from setting is respected."""
@@ -464,6 +488,7 @@ class TestEmailMessage(TransactionCase):
             """SMTP stub"""
             def __init__(this):
                 this.email_sent = False
+                this.from_filter = 'example.com'
 
             # Python 3 before 3.7.4
             def sendmail(this, smtp_from, smtp_to_list, message_str,
@@ -487,6 +512,6 @@ class TestEmailMessage(TransactionCase):
         msg['References'] = '<345227342212345.1596730777.324691772483620-example-30453-other.reference@test-123.example.com>'
 
         smtp = FakeSMTP()
-        self.patch(threading.currentThread(), 'testing', False)
+        self.patch(threading.current_thread(), 'testing', False)
         self.env['ir.mail_server'].send_email(msg, smtp_session=smtp)
         self.assertTrue(smtp.email_sent)

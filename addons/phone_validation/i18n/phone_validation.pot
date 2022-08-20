@@ -4,10 +4,10 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: Odoo Server saas~13.5\n"
+"Project-Id-Version: Odoo Server saas~14.5\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2020-09-01 07:29+0000\n"
-"PO-Revision-Date: 2020-09-01 07:29+0000\n"
+"POT-Creation-Date: 2021-09-14 10:29+0000\n"
+"PO-Revision-Date: 2021-09-14 10:29+0000\n"
 "Last-Translator: \n"
 "Language-Team: \n"
 "MIME-Version: 1.0\n"
@@ -77,9 +77,7 @@ msgstr ""
 
 #. module: phone_validation
 #: model_terms:ir.actions.act_window,help:phone_validation.phone_blacklist_action
-msgid ""
-"Blacklisted phone numbers means that the recipient won't receive SMS "
-"Marketing anymore."
+msgid "Blacklisted phone numbers won't receive SMS Mailings anymore."
 msgstr ""
 
 #. module: phone_validation
@@ -110,11 +108,8 @@ msgid "Discard"
 msgstr ""
 
 #. module: phone_validation
-#: model:ir.model.fields,field_description:phone_validation.field_mail_thread_phone__display_name
 #: model:ir.model.fields,field_description:phone_validation.field_phone_blacklist__display_name
 #: model:ir.model.fields,field_description:phone_validation.field_phone_blacklist_remove__display_name
-#: model:ir.model.fields,field_description:phone_validation.field_phone_validation_mixin__display_name
-#: model:ir.model.fields,field_description:phone_validation.field_res_partner__display_name
 msgid "Display Name"
 msgstr ""
 
@@ -132,23 +127,20 @@ msgid "Followers"
 msgstr ""
 
 #. module: phone_validation
-#: model:ir.model.fields,field_description:phone_validation.field_mail_thread_phone__message_channel_ids
-#: model:ir.model.fields,field_description:phone_validation.field_phone_blacklist__message_channel_ids
-msgid "Followers (Channels)"
-msgstr ""
-
-#. module: phone_validation
 #: model:ir.model.fields,field_description:phone_validation.field_mail_thread_phone__message_partner_ids
 #: model:ir.model.fields,field_description:phone_validation.field_phone_blacklist__message_partner_ids
 msgid "Followers (Partners)"
 msgstr ""
 
 #. module: phone_validation
-#: model:ir.model.fields,field_description:phone_validation.field_mail_thread_phone__id
+#: model:ir.model.fields,field_description:phone_validation.field_mail_thread_phone__has_message
+#: model:ir.model.fields,field_description:phone_validation.field_phone_blacklist__has_message
+msgid "Has Message"
+msgstr ""
+
+#. module: phone_validation
 #: model:ir.model.fields,field_description:phone_validation.field_phone_blacklist__id
 #: model:ir.model.fields,field_description:phone_validation.field_phone_blacklist_remove__id
-#: model:ir.model.fields,field_description:phone_validation.field_phone_validation_mixin__id
-#: model:ir.model.fields,field_description:phone_validation.field_res_partner__id
 msgid "ID"
 msgstr ""
 
@@ -215,11 +207,8 @@ msgid "Is Follower"
 msgstr ""
 
 #. module: phone_validation
-#: model:ir.model.fields,field_description:phone_validation.field_mail_thread_phone____last_update
 #: model:ir.model.fields,field_description:phone_validation.field_phone_blacklist____last_update
 #: model:ir.model.fields,field_description:phone_validation.field_phone_blacklist_remove____last_update
-#: model:ir.model.fields,field_description:phone_validation.field_phone_validation_mixin____last_update
-#: model:ir.model.fields,field_description:phone_validation.field_res_partner____last_update
 msgid "Last Modified on"
 msgstr ""
 
@@ -324,8 +313,15 @@ msgid "Phone Number"
 msgstr ""
 
 #. module: phone_validation
-#: model:ir.model,name:phone_validation.model_phone_validation_mixin
-msgid "Phone Validation Mixin"
+#: model:ir.model.fields,field_description:phone_validation.field_mail_thread_phone__phone_mobile_search
+msgid "Phone/Mobile"
+msgstr ""
+
+#. module: phone_validation
+#: code:addons/phone_validation/models/mail_thread_phone.py:0
+#, python-format
+msgid ""
+"Please enter at least 3 characters when searching a Phone/Mobile number."
 msgstr ""
 
 #. module: phone_validation

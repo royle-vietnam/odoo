@@ -4,10 +4,10 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: Odoo Server saas~13.5\n"
+"Project-Id-Version: Odoo Server saas~14.5\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2020-09-01 07:29+0000\n"
-"PO-Revision-Date: 2020-09-01 07:29+0000\n"
+"POT-Creation-Date: 2021-09-14 10:28+0000\n"
+"PO-Revision-Date: 2021-09-14 10:28+0000\n"
 "Last-Translator: \n"
 "Language-Team: \n"
 "MIME-Version: 1.0\n"
@@ -135,11 +135,6 @@ msgid "Company"
 msgstr ""
 
 #. module: membership
-#: model:ir.model.fields,help:membership.field_membership_membership_line__company_id
-msgid "Company related to this journal"
-msgstr ""
-
-#. module: membership
 #: model:ir.ui.menu,name:membership.menu_marketing_config_association
 msgid "Configuration"
 msgstr ""
@@ -211,13 +206,9 @@ msgid "Date until which membership remains active."
 msgstr ""
 
 #. module: membership
-#: model:ir.model.fields,field_description:membership.field_account_move__display_name
-#: model:ir.model.fields,field_description:membership.field_account_move_line__display_name
 #: model:ir.model.fields,field_description:membership.field_membership_invoice__display_name
 #: model:ir.model.fields,field_description:membership.field_membership_membership_line__display_name
-#: model:ir.model.fields,field_description:membership.field_product_template__display_name
 #: model:ir.model.fields,field_description:membership.field_report_membership__display_name
-#: model:ir.model.fields,field_description:membership.field_res_partner__display_name
 msgid "Display Name"
 msgstr ""
 
@@ -283,13 +274,9 @@ msgid "Group by..."
 msgstr ""
 
 #. module: membership
-#: model:ir.model.fields,field_description:membership.field_account_move__id
-#: model:ir.model.fields,field_description:membership.field_account_move_line__id
 #: model:ir.model.fields,field_description:membership.field_membership_invoice__id
 #: model:ir.model.fields,field_description:membership.field_membership_membership_line__id
-#: model:ir.model.fields,field_description:membership.field_product_template__id
 #: model:ir.model.fields,field_description:membership.field_report_membership__id
-#: model:ir.model.fields,field_description:membership.field_res_partner__id
 msgid "ID"
 msgstr ""
 
@@ -366,13 +353,9 @@ msgid "Journal Item"
 msgstr ""
 
 #. module: membership
-#: model:ir.model.fields,field_description:membership.field_account_move____last_update
-#: model:ir.model.fields,field_description:membership.field_account_move_line____last_update
 #: model:ir.model.fields,field_description:membership.field_membership_invoice____last_update
 #: model:ir.model.fields,field_description:membership.field_membership_membership_line____last_update
-#: model:ir.model.fields,field_description:membership.field_product_template____last_update
 #: model:ir.model.fields,field_description:membership.field_report_membership____last_update
-#: model:ir.model.fields,field_description:membership.field_res_partner____last_update
 msgid "Last Modified on"
 msgstr ""
 
@@ -419,6 +402,7 @@ msgstr ""
 #: model:ir.model.fields,field_description:membership.field_product_template__membership
 #: model:ir.model.fields,field_description:membership.field_res_partner__member_lines
 #: model:ir.model.fields,field_description:membership.field_res_users__member_lines
+#: model_terms:ir.ui.view,arch_db:membership.report_membership_view_tree
 #: model_terms:ir.ui.view,arch_db:membership.view_partner_form
 #: model_terms:ir.ui.view,arch_db:membership.view_report_membership_graph1
 #: model_terms:ir.ui.view,arch_db:membership.view_report_membership_pivot
@@ -584,6 +568,11 @@ msgid "Pending Amount"
 msgstr ""
 
 #. module: membership
+#: model_terms:ir.ui.view,arch_db:membership.membership_products_form
+msgid "Product Name"
+msgstr ""
+
+#. module: membership
 #: model:ir.model,name:membership.model_product_template
 msgid "Product Template"
 msgstr ""
@@ -626,6 +615,26 @@ msgstr ""
 #. module: membership
 #: model_terms:ir.ui.view,arch_db:membership.view_res_partner_member_filter
 msgid "Starting Date Of Membership"
+msgstr ""
+
+#. module: membership
+#: model_terms:ir.ui.view,arch_db:membership.report_membership_view_tree
+msgid "Sum of # Invoiced"
+msgstr ""
+
+#. module: membership
+#: model_terms:ir.ui.view,arch_db:membership.report_membership_view_tree
+msgid "Sum of # Paid"
+msgstr ""
+
+#. module: membership
+#: model_terms:ir.ui.view,arch_db:membership.report_membership_view_tree
+msgid "Sum of Earned Amount"
+msgstr ""
+
+#. module: membership
+#: model_terms:ir.ui.view,arch_db:membership.report_membership_view_tree
+msgid "Sum of Quantity"
 msgstr ""
 
 #. module: membership

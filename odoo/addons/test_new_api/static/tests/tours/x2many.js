@@ -288,7 +288,7 @@ odoo.define('web.test.x2many', function (require) {
     }, { // add message ddd
         content: "create new message ddd",
         trigger: '.tab-pane:eq(0) .o_field_x2many_list_row_add a',
-        extra_trigger: '.tab-pane:eq(0) .o_field_widget tbody tr:has(td:containsExact(d))',
+        extra_trigger: '.o_form_editable .tab-pane:eq(0) .o_field_widget tbody tr:has(td:containsExact(d))',
     }, {
         content: "select another user",
         trigger: '.o_field_many2one .o_input_dropdown > input',
@@ -328,9 +328,6 @@ odoo.define('web.test.x2many', function (require) {
         trigger: '.o_cp_buttons .o_form_button_cancel',
         extra_trigger: '.tab-pane:eq(0) .o_field_widget tbody:has(tr td:containsExact(ddd))',
         run: 'click',
-    }, {
-        content: "confirm cancel change",
-        trigger: '.modal-footer button:contains(Ok)',
     },
 
     /////////////////////////////////////////////////////////////////////////////////////////////
@@ -339,15 +336,15 @@ odoo.define('web.test.x2many', function (require) {
 
     {
         content: "switch to the second form view to test one2many with editable list (toggle menu dropdown)",
-        trigger: 'nav .o_menu_sections .dropdown-toggle:containsExact(Discussions), li.o_extra_menu_items a i.fa-plus',
+        trigger: 'button[data-menu-xmlid="test_new_api.menu_main"], li.o_extra_menu_items a i.fa-plus',
         extra_trigger: '.tab-pane:eq(0) .o_field_widget tbody .o_data_row:eq(2)',
     }, {
         content: "switch to the second form view to test one2many with editable list (open submenu)",
-        trigger: 'nav .o_menu_sections .dropdown-item:contains(Discussions 2)',
+        trigger: '.dropdown-item[data-menu-xmlid="test_new_api.menu_discussions_2"]',
     }, {
         content: "select previous created record",
         trigger: 'td:contains(test_trigger):last',
-        extra_trigger: '.breadcrumb-item:containsExact(Discussions 2)',
+        extra_trigger: '.breadcrumb-item:contains(Discussions 2)',
     }, {
         content: "click on edit",
         trigger: '.o_cp_buttons .o_form_button_edit',
@@ -430,7 +427,7 @@ odoo.define('web.test.x2many', function (require) {
     }, { // add message eee
         content: "create new message eee",
         trigger: '.tab-pane:eq(0) .o_field_x2many_list_row_add a',
-        extra_trigger: 'a[data-toggle="tab"].active:contains(Messages)',
+        extra_trigger: '.o_form_editable a[data-toggle="tab"].active:contains(Messages)',
     }, {
         content: "change text value",
         trigger: 'textarea[name="body"]:first',
@@ -456,11 +453,11 @@ odoo.define('web.test.x2many', function (require) {
 
     {
         content: "switch to the third form view to test onchange changing one2many (toggle menu dropdown)",
-        trigger: 'nav .o_menu_sections .dropdown-toggle:containsExact(Discussions), li.o_extra_menu_items a i.fa-plus',
+        trigger: 'button[data-menu-xmlid="test_new_api.menu_main"], li.o_extra_menu_items a i.fa-plus',
         extra_trigger: '.tab-pane:eq(0) .o_field_widget tbody .o_data_row:eq(2)',
     }, {
         content: "switch to the thied form view to test onchange changing one2many (open submenu)",
-        trigger: 'nav .o_menu_sections .dropdown-item:contains(Discussions 3)',
+        trigger: '.dropdown-item[data-menu-xmlid="test_new_api.menu_discussions_3"]',
     }, {
         content: "wait web client",
         trigger: '.breadcrumb:contains(Discussions 3)',
@@ -501,8 +498,5 @@ odoo.define('web.test.x2many', function (require) {
         content: "cancel change",
         trigger: '.o_cp_buttons .o_form_button_cancel',
         run: 'click',
-    }, {
-        content: "confirm cancel change",
-        trigger: '.modal-footer button:contains(Ok)',
     }]);
 });

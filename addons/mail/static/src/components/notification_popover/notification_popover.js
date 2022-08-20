@@ -1,29 +1,10 @@
-odoo.define('mail/static/src/components/notification_popover/notification_popover.js', function (require) {
-'use strict';
+/** @odoo-module **/
+
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
 
-class NotificationPopover extends Component {
-
-    /**
-     * @override
-     */
-    constructor(...args) {
-        super(...args);
-        useStore(props => {
-            const notifications = props.notificationLocalIds.map(
-                notificationLocalId => this.env.models['mail.notification'].get(notificationLocalId)
-            );
-            return {
-                notifications: notifications.map(notification => notification ? notification.__state : undefined),
-            };
-        }, {
-            compareDepth: {
-                notifications: 1,
-            },
-        });
-    }
+export class NotificationPopover extends Component {
 
     /**
      * @returns {string}
@@ -67,8 +48,11 @@ class NotificationPopover extends Component {
      * @returns {mail.notification[]}
      */
     get notifications() {
+        if (!this.messaging) {
+            return [];
+        }
         return this.props.notificationLocalIds.map(
-            notificationLocalId => this.env.models['mail.notification'].get(notificationLocalId)
+            notificationLocalId => this.messaging.models['mail.notification'].get(notificationLocalId)
         );
     }
 
@@ -84,6 +68,4 @@ Object.assign(NotificationPopover, {
     template: 'mail.NotificationPopover',
 });
 
-return NotificationPopover;
-
-});
+registerMessagingComponent(NotificationPopover, { propsCompareDepth: { notificationLocalIds: 1 } });

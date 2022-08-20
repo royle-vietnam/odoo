@@ -37,14 +37,29 @@
         <field name="name">fleet.vehicle.cost.view.graph</field>
         <field name="model">fleet.vehicle.cost.report</field>
         <field name="arch" type="xml">
-            <graph string="Fleet Costs Analysis" type="bar" sample="1">
-                <field name="date_start" type="row" interval="month"/>
-                <field name="cost_type" type="row"/>
+            <graph string="Fleet Costs Analysis" sample="1">
+                <field name="date_start" interval="month"/>
+                <field name="cost_type"/>
                 <field name="cost" type="measure"/>
             </graph>
         </field>
     </record>
 
+    <record id="fleet_vechicle_costs_report_view_tree" model="ir.ui.view">
+        <field name="name">fleet.vehicle.cost.report.view.tree</field>
+        <field name="model">fleet.vehicle.cost.report</field>
+        <field name="arch" type="xml">
+            <tree string="Fleet Costs Analysis">
+                <field name="name"/>
+                <field name="driver_id" optional="show"/>
+                <field name="fuel_type" optional="hide"/>
+                <field name="date_start" optional="show"/>
+                <field name="cost" optional="show" sum="Sum of Cost"/>
+                <field name="cost_type" optional="show"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </tree>
+        </field>
+    </record>
 
  <record id="fleet_costs_reporting_action" model="ir.actions.act_window">
       <field name="name">Costs Analysis</field>

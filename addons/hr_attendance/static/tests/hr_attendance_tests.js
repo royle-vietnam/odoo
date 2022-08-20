@@ -24,6 +24,7 @@ QUnit.module('HR Attendance', {
                     user_id: {string: 'user ID', type: 'integer'},
                     barcode: {string:'barcode', type: 'integer'},
                     hours_today: {string:'Hours today', type: 'float'},
+                    overtime: {string: 'Overtime', type: 'float'},
                 },
                 records: [{
                     id: 1,
@@ -84,7 +85,9 @@ QUnit.module('HR Attendance', {
             data: this.data,
             session: {
                 uid: 1,
-                company_id: 1,
+                user_context: {
+                    allowed_company_ids: [1],
+                }
             },
             mockRPC: function(route, args) {
                 if (args.method === 'attendance_scan' && args.model === 'hr.employee') {
@@ -179,7 +182,7 @@ QUnit.module('HR Attendance', {
         assert.strictEqual(clientActions.length, 3, 'Number of clientActions must = 3.');
         assert.strictEqual(rpcCount, 2, 'RPC call should have been done only twice.');
 
-        _.each(clientActions, function(clientAction) {
+        _.each(clientActions.reverse(), function(clientAction) {
             clientAction.destroy();
         });
     });

@@ -1,33 +1,10 @@
-odoo.define('mail/static/src/components/message_author_prefix/message_author_prefix.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 
-class MessageAuthorPrefix extends Component {
-
-    /**
-     * @override
-     */
-    constructor(...args) {
-        super(...args);
-        useStore(props => {
-            const message = this.env.models['mail.message'].get(props.messageLocalId);
-            const author = message ? message.author : undefined;
-            const thread = props.threadLocalId
-                ? this.env.models['mail.thread'].get(props.threadLocalId)
-                : undefined;
-            return {
-                author: author ? author.__state : undefined,
-                currentPartner: this.env.messaging.currentPartner
-                    ? this.env.messaging.currentPartner.__state
-                    : undefined,
-                message: message ? message.__state : undefined,
-                thread: thread ? thread.__state : undefined,
-            };
-        });
-    }
+export class MessageAuthorPrefix extends Component {
 
     //--------------------------------------------------------------------------
     // Public
@@ -37,14 +14,14 @@ class MessageAuthorPrefix extends Component {
      * @returns {mail.message}
      */
     get message() {
-        return this.env.models['mail.message'].get(this.props.messageLocalId);
+        return this.messaging && this.messaging.models['mail.message'].get(this.props.messageLocalId);
     }
 
     /**
      * @returns {mail.thread|undefined}
      */
     get thread() {
-        return this.env.models['mail.thread'].get(this.props.threadLocalId);
+        return this.messaging && this.messaging.models['mail.thread'].get(this.props.threadLocalId);
     }
 
 }
@@ -60,6 +37,4 @@ Object.assign(MessageAuthorPrefix, {
     template: 'mail.MessageAuthorPrefix',
 });
 
-return MessageAuthorPrefix;
-
-});
+registerMessagingComponent(MessageAuthorPrefix);

@@ -1,9 +1,8 @@
-odoo.define('im_livechat/static/tests/helpers/mock_server.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-require('mail.MockServer'); // ensure mail overrides are applied first
+import '@mail/../tests/helpers/mock_server'; // ensure mail overrides are applied first
 
-const MockServer = require('web.MockServer');
+import MockServer from 'web.MockServer';
 
 MockServer.include({
     //--------------------------------------------------------------------------
@@ -80,23 +79,6 @@ MockServer.include({
         const mailChannel = this._getRecords('mail.channel', [['uuid', '=', uuid]])[0];
         this._mockMailChannelNotifyTyping([mailChannel.id], is_typing, context);
     },
-    /**
-     * @override
-     */
-    _mockRouteMailInitMessaging() {
-        const initMessaging = this._super(...arguments);
-
-        const livechats = this._getRecords('mail.channel', [
-            ['channel_type', '=', 'livechat'],
-            ['is_pinned', '=', true],
-            ['members', 'in', this.currentPartnerId],
-        ]);
-        initMessaging.channel_slots.channel_livechat = this._mockMailChannelChannelInfo(
-            livechats.map(channel => channel.id)
-        );
-
-        return initMessaging;
-    },
 
     //--------------------------------------------------------------------------
     // Private Mocked Methods
@@ -141,7 +123,7 @@ MockServer.include({
     /**
      * @override
      */
-    _mockMailChannelChannelInfo(ids, extra_info) {
+    _mockMailChannelChannelInfo(ids) {
         const channelInfos = this._super(...arguments);
         for (const channelInfo of channelInfos) {
             const channel = this._getRecords('mail.channel', [['id', '=', channelInfo.id]])[0];
@@ -213,7 +195,6 @@ MockServer.include({
             'channel_type': 'livechat',
             'name': membersName.join(' '),
             'public': 'private',
-            'mass_mailing': false, // email_send
         };
     },
     /**
@@ -258,6 +239,19 @@ MockServer.include({
         this._mockMailChannel_broadcast([mailChannelId], [operator.partner_id]);
         return this._mockMailChannelChannelInfo([mailChannelId])[0];
     },
-});
-
+    /**
+     * @override
+     */
+    _mockResPartner_GetChannelsAsMember(ids) {
+        const partner = this._getRecords('res.partner', [['id', 'in', ids]])[0];
+        const livechats = this._getRecords('mail.channel', [
+            ['channel_type', '=', 'livechat'],
+            ['is_pinned', '=', true],
+            ['members', 'in', partner.id],
+        ]);
+        return [
+            ...this._super(ids),
+            ...livechats,
+        ];
+    },
 });

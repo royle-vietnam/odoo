@@ -1,11 +1,10 @@
-odoo.define('hr/static/src/models/partner/partner.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const {
+import {
     registerInstancePatchModel,
     registerFieldPatchModel,
-} = require('mail/static/src/model/model_core.js');
-const { attr, one2one } = require('mail/static/src/model/model_field.js');
+} from '@mail/model/model_core';
+import { attr, one2one } from '@mail/model/model_field';
 
 registerInstancePatchModel('mail.partner', 'hr/static/src/models/partner/partner.js', {
     //--------------------------------------------------------------------------
@@ -17,7 +16,7 @@ registerInstancePatchModel('mail.partner', 'hr/static/src/models/partner/partner
      * applicable.
      */
     async checkIsEmployee() {
-        await this.async(() => this.env.models['hr.employee'].performRpcSearchRead({
+        await this.async(() => this.messaging.models['hr.employee'].performRpcSearchRead({
             context: { active_test: false },
             domain: [['user_partner_id', '=', this.id]],
             fields: ['user_id', 'user_partner_id'],
@@ -58,6 +57,4 @@ registerFieldPatchModel('mail.partner', 'hr/static/src/models/partner/partner.js
     hasCheckedEmployee: attr({
         default: false,
     }),
-});
-
 });

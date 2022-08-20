@@ -1,12 +1,22 @@
-odoo.define('mail/static/src/components/file_uploader/file_uploader.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const core = require('web.core');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
+import { replace } from '@mail/model/model_field_command';
+
+import core from 'web.core';
 
 const { Component } = owl;
 const { useRef } = owl.hooks;
 
-class FileUploader extends Component {
+const geAttachmentNextTemporaryId = (function () {
+    let tmpId = 0;
+    return () => {
+        tmpId -= 1;
+        return tmpId;
+    };
+})();
+
+export class FileUploader extends Component {
 
     /**
      * @override
@@ -15,34 +25,35 @@ class FileUploader extends Component {
         super(...args);
         this._fileInputRef = useRef('fileInput');
         this._fileUploadId = _.uniqueId('o_FileUploader_fileupload');
-        this._onAttachmentUploaded = this._onAttachmentUploaded.bind(this);
-    }
-
-    mounted() {
-        $(window).on(this._fileUploadId, this._onAttachmentUploaded);
-    }
-
-    willUnmount() {
-        $(window).off(this._fileUploadId);
     }
 
     //--------------------------------------------------------------------------
     // Public
     //--------------------------------------------------------------------------
 
+    get composerView() {
+        return this.messaging.models['mail.composer_view'].get(this.props.composerViewLocalId);
+    }
+
     /**
      * @param {FileList|Array} files
      * @returns {Promise}
      */
     async uploadFiles(files) {
-        await this._unlinkExistingAttachments(files);
-        this._createTemporaryAttachments(files);
-        await this._performUpload(files);
+        await this._performUpload({
+            composer: this.composerView && this.composerView.composer,
+            files,
+            thread: this.thread,
+        });
         this._fileInputRef.el.value = '';
     }
 
     openBrowserFileUploader() {
         this._fileInputRef.el.click();
+    }
+
+    get thread() {
+        return this.messaging.models['mail.thread'].get(this.props.threadLocalId);
     }
 
     //--------------------------------------------------------------------------
@@ -51,88 +62,70 @@ class FileUploader extends Component {
 
     /**
      * @private
-     * @param {Object} fileData
-     * @returns {mail.attachment}
-     */
-     _createAttachment(fileData) {
-        return this.env.models['mail.attachment'].create(Object.assign(
-            {},
-            fileData,
-            this.props.newAttachmentExtraData
-        ));
-    }
-
-    /**
-     * @private
-     * @param {File} file
+     * @param {Object} param0
+     * @param {mail.composer} param0.composer
+     * @param {File} param0.file
+     * @param {mail.thread} param0.thread
      * @returns {FormData}
      */
-    _createFormData(file) {
-        let formData = new window.FormData();
-        formData.append('callback', this._fileUploadId);
+    _createFormData({ composer, file, thread }) {
+        const formData = new window.FormData();
         formData.append('csrf_token', core.csrf_token);
-        formData.append('id', this.props.uploadId);
-        formData.append('model', this.props.uploadModel);
+        formData.append('is_pending', Boolean(composer));
+        formData.append('thread_id', thread && thread.id);
+        formData.append('thread_model', thread && thread.model);
         formData.append('ufile', file, file.name);
         return formData;
     }
 
     /**
      * @private
-     * @param {FileList|Array} files
-     */
-    _createTemporaryAttachments(files) {
-        for (const file of files) {
-            this._createAttachment({
-                filename: file.name,
-                isTemporary: true,
-                name: file.name
-            });
-        }
-    }
-    /**
-     * @private
-     * @param {FileList|Array} files
+     * @param {Object} param0
+     * @param {mail.composer} param0.composer
+     * @param {FileList|Array} param0.files
+     * @param {mail.thread} param0.thread
      * @returns {Promise}
      */
-    async _performUpload(files) {
+    async _performUpload({ composer, files, thread }) {
+        const uploadingAttachments = new Map();
         for (const file of files) {
-            const uploadingAttachment = this.env.models['mail.attachment'].find(attachment =>
-                attachment.isTemporary &&
-                attachment.filename === file.name
-            );
-
+            uploadingAttachments.set(file, this.messaging.models['mail.attachment'].insert({
+                composer: composer && replace(composer),
+                filename: file.name,
+                id: geAttachmentNextTemporaryId(),
+                isUploading: true,
+                mimetype: file.type,
+                name: file.name,
+                originThread: (!composer && thread) ? replace(thread) : undefined,
+            }));
+        }
+        for (const file of files) {
+            const uploadingAttachment = uploadingAttachments.get(file);
+            if (!uploadingAttachment.exists()) {
+                // This happens when a pending attachment is being deleted by user before upload.
+                continue;
+            }
+            if ((composer && !composer.exists()) || (thread && !thread.exists())) {
+                return;
+            }
             try {
-                const response = await this.env.browser.fetch('/web/binary/upload_attachment', {
+                const response = await this.env.browser.fetch('/mail/attachment/upload', {
                     method: 'POST',
-                    body: this._createFormData(file),
+                    body: this._createFormData({ composer, file, thread }),
                     signal: uploadingAttachment.uploadingAbortController.signal,
                 });
-                let html = await response.text();
-                const template = document.createElement('template');
-                template.innerHTML = html.trim();
-                window.eval(template.content.firstChild.textContent);
+                const attachmentData = await response.json();
+                if (uploadingAttachment.exists()) {
+                    uploadingAttachment.delete();
+                }
+                if ((composer && !composer.exists()) || (thread && !thread.exists())) {
+                    return;
+                }
+                this._onAttachmentUploaded({ attachmentData, composer, thread });
             } catch (e) {
                 if (e.name !== 'AbortError') {
                     throw e;
                 }
-            }
-        }
-    }
-
-    /**
-     * @private
-     * @param {FileList|Array} files
-     * @returns {Promise}
-     */
-    async _unlinkExistingAttachments(files) {
-        for (const file of files) {
-            const attachment = this.props.attachmentLocalIds
-                .map(attachmentLocalId => this.env.models['mail.attachment'].get(attachmentLocalId))
-                .find(attachment => attachment.name === file.name && attachment.size === file.size);
-            // if the files already exits, delete the file before upload
-            if (attachment) {
-                attachment.remove();
             }
         }
     }
@@ -143,40 +136,25 @@ class FileUploader extends Component {
 
     /**
      * @private
-     * @param {jQuery.Event} ev
-     * @param {...Object} filesData
+     * @param {Object} param0
+     * @param {Object} attachmentData
+     * @param {mail.composer} param0.composer
+     * @param {mail.thread} param0.thread
      */
-    async _onAttachmentUploaded(ev, ...filesData) {
-        for (const fileData of filesData) {
-            const { error, filename, id, mimetype, name, size } = fileData;
-            if (error || !id) {
-                this.env.services['notification'].notify({
-                    type: 'danger',
-                    message: owl.utils.escape(error),
-                });
-                const relatedTemporaryAttachments = this.env.models['mail.attachment']
-                    .find(attachment =>
-                        attachment.filename === filename &&
-                        attachment.isTemporary
-                    );
-                for (const attachment of relatedTemporaryAttachments) {
-                    attachment.delete();
-                }
-                return;
-            }
-            // FIXME : needed to avoid problems on uploading
-            // Without this the useStore selector of component could be not called
-            // E.g. in attachment_box_tests.js
-            await new Promise(resolve => setTimeout(resolve));
-            const attachment = this._createAttachment({
-                filename,
-                id,
-                mimetype,
-                name,
-                size,
+    _onAttachmentUploaded({ attachmentData, composer, thread }) {
+        if (attachmentData.error || !attachmentData.id) {
+            this.env.services['notification'].notify({
+                type: 'danger',
+                message: attachmentData.error,
             });
-            this.trigger('o-attachment-created', { attachment });
+            return;
         }
+        const attachment = this.messaging.models['mail.attachment'].insert({
+            composer: composer && replace(composer),
+            originThread: (!composer && thread) ? replace(thread) : undefined,
+            ...attachmentData,
+        });
+        this.trigger('o-attachment-created', { attachment });
     }
 
     /**
@@ -194,25 +172,17 @@ class FileUploader extends Component {
 }
 
 Object.assign(FileUploader, {
-    defaultProps: {
-        uploadId: 0,
-        uploadModel: 'mail.compose.message'
-    },
     props: {
-        attachmentLocalIds: {
-            type: Array,
-            element: String,
-        },
-        newAttachmentExtraData: {
-            type: Object,
+        composerViewLocalId: {
+            type: String,
             optional: true,
         },
-        uploadId: Number,
-        uploadModel: String,
+        threadLocalId: {
+            type: String,
+            optional: true,
+        },
     },
     template: 'mail.FileUploader',
 });
 
-return FileUploader;
-
-});
+registerMessagingComponent(FileUploader);

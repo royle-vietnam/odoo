@@ -1,17 +1,16 @@
-odoo.define('website.root', function (require) {
-'use strict';
+/** @odoo-module alias=website.root */
 
-const ajax = require('web.ajax');
-const {_t} = require('web.core');
-var Dialog = require('web.Dialog');
-const KeyboardNavigationMixin = require('web.KeyboardNavigationMixin');
-const session = require('web.session');
-var publicRootData = require('web.public.root');
-require("web.zoomodoo");
+import ajax from 'web.ajax';
+import { _t } from 'web.core';
+import KeyboardNavigationMixin from 'web.KeyboardNavigationMixin';
+import {Markup} from 'web.utils';
+import session from 'web.session';
+import publicRootData from 'web.public.root';
+import "web.zoomodoo";
+import { FullscreenIndication } from '@website/js/widgets/fullscreen_indication';
 
-var websiteRootRegistry = publicRootData.publicRootRegistry;
-
-var WebsiteRoot = publicRootData.PublicRoot.extend(KeyboardNavigationMixin, {
+export const WebsiteRoot = publicRootData.PublicRoot.extend(KeyboardNavigationMixin, {
+    // TODO remove KeyboardNavigationMixin in master
     events: _.extend({}, KeyboardNavigationMixin.events, publicRootData.PublicRoot.prototype.events || {}, {
         'click .js_change_lang': '_onLangChangeClick',
         'click .js_publish_management .js_publish_btn': '_onPublishBtnClick',
@@ -23,6 +22,7 @@ var WebsiteRoot = publicRootData.PublicRoot.extend(KeyboardNavigationMixin, {
         'gmap_api_key_request': '_onGMapAPIKeyRequest',
         'ready_to_clean_for_save': '_onWidgetsStopRequest',
         'seo_object_request': '_onSeoObjectRequest',
+        'will_remove_snippet': '_onWidgetsStopRequest',
     }),
 
     /**
@@ -32,8 +32,19 @@ var WebsiteRoot = publicRootData.PublicRoot.extend(KeyboardNavigationMixin, {
         this.isFullscreen = false;
         KeyboardNavigationMixin.init.call(this, {
             autoAccessKeys: false,
+            skipRenderOverlay: true,
         });
         return this._super(...arguments);
+    },
+    /**
+     * @override
+     */
+    willStart: async function () {
+        this.fullscreenIndication = new FullscreenIndication(this);
+        return Promise.all([
+            this._super(...arguments),
+            this.fullscreenIndication.appendTo(document.body),
+        ]);
     },
     /**
      * @override
@@ -139,18 +150,16 @@ var WebsiteRoot = publicRootData.PublicRoot.extend(KeyboardNavigationMixin, {
 
                 if (!key) {
                     if (!editableMode && session.is_admin) {
+                        const message = _t("Cannot load google map.");
+                        const urlTitle = _t("Check your configuration.");
                         this.displayNotification({
                             type: 'warning',
                             sticky: true,
                             message:
-                                $('<div/>').append(
-                                    $('<span/>', {text: _t("Cannot load google map.")}),
-                                    $('<br/>'),
-                                    $('<a/>', {
-                                        href: "/web#action=website.action_website_configuration",
-                                        text: _t("Check your configuration."),
-                                    }),
-                                )[0].outerHTML,
+                                Markup`<div>
+                                    <span>${message}</span><br/>
+                                    <a href="/web#action=website.action_website_configuration">${urlTitle}</a>
+                                </div>`,
                         });
                     }
                     resolve(false);
@@ -170,6 +179,11 @@ var WebsiteRoot = publicRootData.PublicRoot.extend(KeyboardNavigationMixin, {
      */
     _toggleFullscreen(state) {
         this.isFullscreen = state;
+        if (this.isFullscreen) {
+            this.fullscreenIndication.show();
+        } else {
+            this.fullscreenIndication.hide();
+        }
         document.body.classList.add('o_fullscreen_transition');
         document.body.classList.toggle('o_fullscreen', this.isFullscreen);
         document.body.style.overflowX = 'hidden';
@@ -293,31 +307,9 @@ var WebsiteRoot = publicRootData.PublicRoot.extend(KeyboardNavigationMixin, {
             },
         })
         .then(function (result) {
-            $data.toggleClass("css_unpublished css_published");
+            $data.toggleClass("css_published", result).toggleClass("css_unpublished", !result);
             $data.find('input').prop("checked", result);
             $data.parents("[data-publish]").attr("data-publish", +result ? 'on' : 'off');
-            if (result) {
-                self.displayNotification({
-                    type: 'success',
-                    message: $data.data('description') ?
-                        _.str.sprintf(_t("You've published your %s."), $data.data('description')) :
-                        _t("Published with success."),
-                });
-            }
-        })
-        .guardedCatch(function (err, data) {
-            data = data || {statusText: err.message.message};
-            return new Dialog(self, {
-                title: data.data ? data.data.arguments[0] : "",
-                $content: $('<div/>', {
-                    html: (data.data ? data.data.arguments[1] : data.statusText)
-                        + '<br/>'
-                        + _.str.sprintf(
-                            _t('It might be possible to edit the relevant items or fix the issue in <a href="%s">the classic Odoo interface</a>'),
-                            '/web#model=' + $data.data('object') + '&id=' + $data.data('id')
-                        ),
-                }),
-            }).open();
         });
     },
     /**
@@ -327,12 +319,12 @@ var WebsiteRoot = publicRootData.PublicRoot.extend(KeyboardNavigationMixin, {
     _onWebsiteSwitch: function (ev) {
         var websiteId = ev.currentTarget.getAttribute('website-id');
         var websiteDomain = ev.currentTarget.getAttribute('domain');
-        var url = window.location.href;
+        let url = `/website/force/${websiteId}`;
         if (websiteDomain && window.location.hostname !== websiteDomain) {
-            var path = window.location.pathname + window.location.search + window.location.hash;
-            url = websiteDomain + path;
+            url = websiteDomain + url;
         }
-        window.location.href = $.param.querystring(url, {'fw': websiteId});
+        const path = window.location.pathname + window.location.search + window.location.hash;
+        window.location.href = $.param.querystring(url, {'path': path});
     },
     /**
      * @private
@@ -357,8 +349,6 @@ var WebsiteRoot = publicRootData.PublicRoot.extend(KeyboardNavigationMixin, {
     },
 });
 
-return {
+export default {
     WebsiteRoot: WebsiteRoot,
-    websiteRootRegistry: websiteRootRegistry,
 };
-});

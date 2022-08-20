@@ -6,7 +6,6 @@ odoo.define('partner_autocomplete.tests', function (require) {
     var testUtils = require("web.test_utils");
     var AutocompleteField = require('partner.autocomplete.fieldchar');
     var PartnerField = require('partner.autocomplete.many2one');
-    var NotificationService = require('web.NotificationService');
 
     var createView = testUtils.createView;
 
@@ -80,8 +79,8 @@ odoo.define('partner_autocomplete.tests', function (require) {
                     _getClearbitSuggestions: function (value) {
                         return this._getOdooSuggestions(value);
                     },
-                    do_notify: function (title, message, sticky, className) {
-                        return this.displayNotification({
+                    displayNotification: function ({ title, message, sticky }) {
+                        return this._super({
                             type: 'warning',
                             title: title,
                             message: message,
@@ -131,7 +130,7 @@ odoo.define('partner_autocomplete.tests', function (require) {
                         country_id: {string: "Country", type: "integer", searchable: true},
                         comment: {string: "Comment", type: "char", searchable: true},
                         vat: {string: "Vat", type: "char", searchable: true},
-                        is_company: {string: "Is comapny", type: "bool", searchable: true},
+                        is_company: {string: "Is company", type: "bool", searchable: true},
                         partner_gid: {string: "Company data ID", type: "integer", searchable: true},
                     },
                     records: [],
@@ -207,7 +206,7 @@ odoo.define('partner_autocomplete.tests', function (require) {
                 '<field name="vat"/>' +
                 '</form>',
             mockRPC: function (route) {
-                if (route === "/web/static/src/img/placeholder.png"
+                if (route === "/web/static/img/placeholder.png"
                     || route === "odoo.com/logo.png"
                     || route === "data:image/png;base64,odoobase64") { // land here as it is not valid base64 content
                     return Promise.resolve();
@@ -280,7 +279,7 @@ odoo.define('partner_autocomplete.tests', function (require) {
                 '<field name="vat"/>' +
                 '</form>',
             mockRPC: function (route) {
-                if (route === "/web/static/src/img/placeholder.png"
+                if (route === "/web/static/img/placeholder.png"
                     || route === "odoo.com/logo.png"
                     || route === "data:image/png;base64,odoobase64") { // land here as it is not valid base64 content
                     return Promise.resolve();
@@ -377,7 +376,7 @@ odoo.define('partner_autocomplete.tests', function (require) {
     });
 
     QUnit.test("Partner autocomplete : Notify not enough credits", async function (assert) {
-        assert.expect(1);
+        assert.expect(2);
 
         enrichData = {
             error: true,
@@ -394,7 +393,12 @@ odoo.define('partner_autocomplete.tests', function (require) {
                 '<field name="name" widget="field_partner_autocomplete"/>' +
                 '</form>',
             services: {
-                notification: NotificationService,
+                notification: {
+                    notify(notification) {
+                        assert.equal(notification.type, "warning");
+                        assert.equal(notification.className, "o_partner_autocomplete_test_notify");
+                    },
+                },
             },
             mockRPC: function (route, args) {
                 if (args.method === "get_credits_url"){
@@ -412,9 +416,6 @@ odoo.define('partner_autocomplete.tests', function (require) {
 
             var $dropdown = form.$(".o_field_partner_autocomplete .dropdown-menu:visible");
             await testUtils.dom.click($dropdown.find("a").first());
-
-            var $notify = $(".o_partner_autocomplete_test_notify");
-            assert.isVisible($notify, "there should be an 'Insufficient Credit' notification");
 
             form.destroy();
     });

@@ -1,10 +1,10 @@
-odoo.define('im_livechat/static/src/models/thread/thread.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const {
+import {
     registerClassPatchModel,
     registerInstancePatchModel,
-} = require('mail/static/src/model/model_core.js');
+} from '@mail/model/model_core';
+import { insert, link, unlink } from '@mail/model/model_field_command';
 
 registerClassPatchModel('mail.thread', 'im_livechat/static/src/models/thread/thread.js', {
 
@@ -39,19 +39,19 @@ registerClassPatchModel('mail.thread', 'im_livechat/static/src/models/thread/thr
                  * of polluting the database, it is therefore acceptable and
                  * easier to handle one temporary partner per channel.
                  */
-                data2.members.push(['unlink', this.env.messaging.publicPartner]);
-                const partner = this.env.models['mail.partner'].create(
+                data2.members.push(unlink(this.messaging.publicPartners));
+                const partner = this.messaging.models['mail.partner'].create(
                     Object.assign(
-                        this.env.models['mail.partner'].convertData(data.livechat_visitor),
-                        { id: this.env.models['mail.partner'].getNextPublicId() }
+                        this.messaging.models['mail.partner'].convertData(data.livechat_visitor),
+                        { id: this.messaging.models['mail.partner'].getNextPublicId() }
                     )
                 );
-                data2.members.push(['link', partner]);
-                data2.correspondent = [['link', partner]];
+                data2.members.push(link(partner));
+                data2.correspondent = link(partner);
             } else {
-                const partnerData = this.env.models['mail.partner'].convertData(data.livechat_visitor);
-                data2.members.push(['insert', partnerData]);
-                data2.correspondent = [['insert', partnerData]];
+                const partnerData = this.messaging.models['mail.partner'].convertData(data.livechat_visitor);
+                data2.members.push(insert(partnerData));
+                data2.correspondent = insert(partnerData);
             }
         }
         return data2;
@@ -59,6 +59,19 @@ registerClassPatchModel('mail.thread', 'im_livechat/static/src/models/thread/thr
 });
 
 registerInstancePatchModel('mail.thread', 'im_livechat/static/src/models/thread/thread.js', {
+    //----------------------------------------------------------------------
+    // Public
+    //----------------------------------------------------------------------
+
+    /**
+     * @override
+     */
+    getMemberName(partner) {
+        if (this.channel_type === 'livechat' && partner.livechat_username) {
+            return partner.livechat_username;
+        }
+        return this._super(partner);
+    },
 
     //----------------------------------------------------------------------
     // Private
@@ -70,7 +83,7 @@ registerInstancePatchModel('mail.thread', 'im_livechat/static/src/models/thread/
     _computeCorrespondent() {
         if (this.channel_type === 'livechat') {
             // livechat correspondent never change: always the public member.
-            return [];
+            return;
         }
         return this._super();
     },
@@ -89,9 +102,35 @@ registerInstancePatchModel('mail.thread', 'im_livechat/static/src/models/thread/
     /**
      * @override
      */
+    _computeHasInviteFeature() {
+        if (this.channel_type === 'livechat') {
+            return true;
+        }
+        return this._super();
+    },
+    /**
+     * @override
+     */
+    _computeHasMemberListFeature() {
+        if (this.channel_type === 'livechat') {
+            return true;
+        }
+        return this._super();
+    },
+    /**
+     * @override
+     */
     _computeIsChatChannel() {
         return this.channel_type === 'livechat' || this._super();
     },
-});
-
+    /**
+     * @override
+     */
+    _getDiscussSidebarCategory() {
+        switch (this.channel_type) {
+            case 'livechat':
+                return this.messaging.discuss.categoryLivechat;
+        }
+        return this._super();
+    }
 });

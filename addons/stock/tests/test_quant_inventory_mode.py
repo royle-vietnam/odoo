@@ -2,11 +2,11 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from odoo.addons.mail.tests.common import mail_new_test_user
-from odoo.tests.common import SavepointCase
+from odoo.tests.common import Form, TransactionCase
 from odoo.exceptions import AccessError, UserError
 
 
-class TestEditableQuant(SavepointCase):
+class TestEditableQuant(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super(TestEditableQuant, cls).setUpClass()
@@ -63,7 +63,7 @@ class TestEditableQuant(SavepointCase):
             'product_id': self.product.id,
             'location_id': self.stock.id,
             'inventory_quantity': 24
-        })
+        }).action_apply_inventory()
         quants = self.env['stock.quant'].search([
             ('product_id', '=', self.product.id),
             ('quantity', '>', 0),
@@ -100,6 +100,7 @@ class TestEditableQuant(SavepointCase):
             'location_id': self.room1.id,
             'inventory_quantity': 24,
         })
+        second_quant.action_apply_inventory()
         quants = self.env['stock.quant'].search([
             ('product_id', '=', self.product.id),
             ('quantity', '>', 0),
@@ -115,10 +116,10 @@ class TestEditableQuant(SavepointCase):
         self.assertEqual(len(stock_move), 1)
 
     def test_create_quant_3(self):
-        """ Try to create a quant with `inventory_quantity` but not in inventory mode.
-        Creates two quants not in inventory mode:
+        """ Try to create a quant with `inventory_quantity` but without applying it.
+        Creates two quants:
           - One with `quantity` (this one must be OK)
-          - One with `inventory_quantity` (this one must be null)
+          - One with `inventory_quantity` (this one will have null quantity)
         """
         valid_quant = self.env['stock.quant'].create({
             'product_id': self.product.id,
@@ -152,6 +153,7 @@ class TestEditableQuant(SavepointCase):
             'location_id': self.room1.id,
             'inventory_quantity': 20,
         })
+        inventoried_quant.action_apply_inventory()
         with self.assertRaises(UserError):
             invalid_quant = self.env['stock.quant'].with_context(inventory_mode=True).create({
                 'product_id': self.product.id,
@@ -171,6 +173,7 @@ class TestEditableQuant(SavepointCase):
             'quantity': 12,
         })
         quant.inventory_quantity = 24
+        quant.action_apply_inventory()
         self.assertEqual(quant.quantity, 24)
         stock_move = self.env['stock.move'].search([
             ('product_id', '=', self.product.id),
@@ -187,6 +190,7 @@ class TestEditableQuant(SavepointCase):
             'quantity': 12,
         })
         quant.inventory_quantity = 8
+        quant.action_apply_inventory()
         self.assertEqual(quant.quantity, 8)
         stock_move = self.env['stock.move'].search([
             ('product_id', '=', self.product.id),
@@ -219,4 +223,74 @@ class TestEditableQuant(SavepointCase):
 
         # Try to write on quant with permission
         quant.with_user(user_admin).write({'inventory_quantity': 8})
+        quant.action_apply_inventory()
         self.assertEqual(quant.quantity, 8)
+
+    def test_edit_quant_4(self):
+        """ Update the quantity with the inventory report mode """
+        default_wh = self.env['stock.warehouse'].search([('company_id', '=', self.env.company.id)], limit=1)
+        default_stock_location = default_wh.lot_stock_id
+        quant = self.Quant.create({
+            'product_id': self.product.id,
+            'location_id': default_stock_location.id,
+            'inventory_quantity': 100,
+        })
+        quant.action_apply_inventory()
+        self.assertEqual(self.product.qty_available, 100)
+        quant.with_context(inventory_report_mode=True).inventory_quantity_auto_apply = 75
+        self.assertEqual(self.product.qty_available, 75)
+        quant.with_context(inventory_report_mode=True).inventory_quantity_auto_apply = 75
+        self.assertEqual(self.product.qty_available, 75)
+        smls = self.env['stock.move.line'].search([('product_id', '=', self.product.id)])
+        self.assertRecordValues(smls, [
+            {'qty_done': 100},
+            {'qty_done': 25},
+            {'qty_done': 0},
+        ])
+
+    def test_edit_quant_5(self):
+        """ Create a quant with inventory mode and check that the inventory adjustment reason
+            is used as a reference in the `stock.move` """
+        default_wh = self.env['stock.warehouse'].search([('company_id', '=', self.env.company.id)], limit=1)
+        default_stock_location = default_wh.lot_stock_id
+        quant = self.Quant.create({
+            'product_id': self.product.id,
+            'location_id': default_stock_location.id,
+            'inventory_quantity': 1,
+        })
+        form_wizard = Form(self.env['stock.inventory.adjustment.name'].with_context(
+            default_quant_ids=quant.ids
+        ))
+        form_wizard.inventory_adjustment_name = "Inventory Adjustment - Test"
+        form_wizard.save().action_apply()
+        self.assertTrue(self.env['stock.move'].search([('reference', '=', 'Inventory Adjustment - Test')], limit=1))
+
+    def test_sn_warning(self):
+        """ Checks that a warning is given when reusing an existing SN
+        in inventory mode.
+        """
+
+        sn1 = self.env['stock.production.lot'].create({
+            'name': 'serial1',
+            'product_id': self.product_tracked_sn.id,
+            'company_id': self.env.company.id,
+        })
+
+        self.Quant.create({
+            'product_id': self.product_tracked_sn.id,
+            'location_id': self.room1.id,
+            'inventory_quantity': 1,
+            'lot_id': sn1.id
+        }).action_apply_inventory()
+
+        dupe_sn = self.Quant.create({
+            'product_id': self.product_tracked_sn.id,
+            'location_id': self.room2.id,
+            'inventory_quantity': 1,
+            'lot_id': sn1.id
+        })
+        dupe_sn.action_apply_inventory()
+        warning = False
+        warning = dupe_sn._onchange_serial_number()
+        self.assertTrue(warning, 'Reuse of existing serial number not detected')
+        self.assertEqual(list(warning.keys())[0], 'warning', 'Warning message was not returned')

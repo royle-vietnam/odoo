@@ -1,8 +1,8 @@
 odoo.define('crm.form_rainbowman_tests', function (require) {
     "use strict";
 
-    var CrmFormView = require('crm.crm_form').CrmFormView;
-    var CrmKanbanView = require('crm.crm_kanban').CrmKanbanView;
+    var CrmFormView = require('@crm/js/crm_form')[Symbol.for("default")].CrmFormView;
+    var CrmKanbanView = require('@crm/js/crm_kanban')[Symbol.for("default")].CrmKanbanView;
     var testUtils = require('web.test_utils');
     var createView = testUtils.createView;
 
@@ -109,6 +109,30 @@ odoo.define('crm.form_rainbowman_tests', function (require) {
             const form = await createView(this.testFormView);
 
             await testUtils.dom.click(form.$(".o_statusbar_status button[data-value='3']"));
+            assert.verifySteps(['Go, go, go! Congrats for your first deal.']);
+
+            form.destroy();
+        });
+
+        QUnit.test("first lead won, click on statusbar in edit mode then save", async function (assert) {
+            assert.expect(3);
+
+            const form = await createView(_.extend(this.testFormView, {
+                res_id: 6,
+                mockRPC: async function (route, args) {
+                    const result = await this._super(...arguments);
+                    if (args.model === 'crm.lead' && args.method === 'get_rainbowman_message') {
+                        assert.step(result || "no rainbowman");
+                    }
+                    return result;
+                },
+                viewOptions: {mode: 'edit'}
+            }));
+
+            await testUtils.dom.click(form.$(".o_statusbar_status button[data-value='3']"));
+            assert.verifySteps([]); // no message displayed yet
+
+            await testUtils.form.clickSave(form);
             assert.verifySteps(['Go, go, go! Congrats for your first deal.']);
 
             form.destroy();

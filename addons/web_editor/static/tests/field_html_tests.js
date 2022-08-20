@@ -2,19 +2,39 @@ odoo.define('web_editor.field_html_tests', function (require) {
 "use strict";
 
 var ajax = require('web.ajax');
+var FormController = require('web.FormController');
 var FormView = require('web.FormView');
 var testUtils = require('web.test_utils');
 var weTestUtils = require('web_editor.test_utils');
 var core = require('web.core');
 var Wysiwyg = require('web_editor.wysiwyg');
 var MediaDialog = require('wysiwyg.widgets.MediaDialog');
+var LinkDialog = require('wysiwyg.widgets.LinkDialog');
+var FieldHtml = require('web_editor.field.html');
+
+const { registerCleanup } = require("@web/../tests/helpers/cleanup");
+const { legacyExtraNextTick, patchWithCleanup } = require("@web/../tests/helpers/utils");
 
 var _t = core._t;
+
+let _formResolveTestPromise;
+FormController.include({
+    _setEditMode: async function () {
+        await this._super.apply(this, arguments);
+        if (_formResolveTestPromise) {
+            _formResolveTestPromise();
+        }
+    }
+});
 
 QUnit.module('web_editor', {}, function () {
 
     QUnit.module('field html', {
         beforeEach: function () {
+            this.linkDialogTestHtml = '<p><a href="https://www.external.com" target="_blank">External website</a></p>' +
+                                      '<p><a href="' + window.location.href + '/test">This website</a></p>' +
+                                      '<p>New external link</p><p>New internal link</p>';
+
             this.data = weTestUtils.wysiwygData({
                 'note.note': {
                     fields: {
@@ -37,6 +57,55 @@ QUnit.module('web_editor', {}, function () {
                         display_name: "first record",
                         header: "<p>  &nbsp;&nbsp;  <br>   </p>",
                         body: "<p>toto toto toto</p><p>tata</p>",
+                    }, {
+                        id: 2,
+                        display_name: "second record",
+                        header: "<p>Hello World</p>",
+                        body: '<p><a href="https://www.external.com" target="_blank">External website</a></p>',
+                    }, {
+                        id: 3,
+                        display_name: "third record",
+                        header: "<p>Hello World</p>",
+                        body: '<p><a href="' + window.location.href + '/test">This website</a></p>',
+                    }, {
+                        id: 4,
+                        display_name: "fourth record",
+                        header: "<p>Hello World</p>",
+                        body: '<p>New external link</p>',
+                    }, {
+                        id: 5,
+                        display_name: "fifth record",
+                        header: "<p>Hello World</p>",
+                        body: '<p>New internal link</p>',
+                    }, {
+                        id: 6,
+                        display_name: "sixth record",
+                        header: "<p>Hello World</p>",
+                        body: `
+<div class="o_form_sheet_bg">
+  <div class="clearfix position-relative o_form_sheet" style="width: 1140px;">
+    <div class="o_notebook">
+      <div class="tab-content">
+        <div class="tab-pane active" id="notebook_page_820">
+          <div class="oe_form_field oe_form_field_html o_field_widget" name="description" style="margin-bottom: 5px;">
+            hacky code to test
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>`,
+                    }, {
+                        id: 7,
+                        display_name: "seventh record",
+                        header: "<p>Hello World</p>",
+                        body: `
+<p class="a">
+    a
+</p>
+<p class="b o_not_editable">
+    b
+</p>`,
                     }],
                 },
                 'mass.mailing': {
@@ -122,8 +191,9 @@ QUnit.module('web_editor', {}, function () {
             assert.strictEqual($field.attr('style'), 'height: 100px',
                 "should have applied the style correctly");
 
+            const promise = new Promise((resolve) => _formResolveTestPromise = resolve);
             await testUtils.form.clickEdit(form);
-            await testUtils.nextTick();
+            await promise;
             $field = form.$('.oe_form_field[name="body"]');
             assert.strictEqual($field.find('.note-editable').html(),
                 '<p>toto toto toto</p><p>tata</p>',
@@ -132,8 +202,29 @@ QUnit.module('web_editor', {}, function () {
             form.destroy();
         });
 
-        QUnit.test('check if required field is set', async function (assert) {
+        QUnit.test('notebooks defined inside HTML field widgets are ignored when calling setLocalState', async function (assert) {
             assert.expect(1);
+
+            var form = await testUtils.createView({
+                View: FormView,
+                model: 'note.note',
+                data: this.data,
+                arch: '<form>' +
+                    '<field name="body" widget="html" style="height: 100px"/>' +
+                    '</form>',
+                res_id: 6,
+            });
+            // check that there is no error on clicking Edit
+            const promise = new Promise((resolve) => _formResolveTestPromise = resolve);
+            await testUtils.form.clickEdit(form);
+            await promise;
+            assert.containsOnce(form, '.o_form_editable');
+
+            form.destroy();
+        });
+
+        QUnit.test('check if required field is set', async function (assert) {
+            assert.expect(3);
 
             var form = await testUtils.createView({
                 View: FormView,
@@ -147,18 +238,15 @@ QUnit.module('web_editor', {}, function () {
 
             testUtils.mock.intercept(form, 'call_service', function (ev) {
                 if (ev.data.service === 'notification') {
-                    assert.deepEqual(ev.data.args[0], {
-                        "className": undefined,
-                        "message": "<ul><li>Header</li></ul>",
-                        "sticky": undefined,
-                        "title": "Invalid fields:",
-                        "type": "danger"
-                      });
+                    assert.strictEqual(ev.data.args[0].title, 'Invalid fields:');
+                    assert.strictEqual(ev.data.args[0].message.toString(), '<ul><li>Header</li></ul>');
+                    assert.strictEqual(ev.data.args[0].type, 'danger');
                 }
             }, true);
 
+            const promise = new Promise((resolve) => _formResolveTestPromise = resolve);
             await testUtils.form.clickEdit(form);
-            await testUtils.nextTick();
+            await promise;
             await testUtils.dom.click(form.$('.o_form_button_save'));
 
             form.destroy();
@@ -177,12 +265,6 @@ QUnit.module('web_editor', {}, function () {
                 res_id: 1,
             });
 
-            // Summernote needs a RootWidget to set as parent of the ColorPaletteWidget. In the
-            // tests, there is no RootWidget, so we set it here to the parent of the form view, which
-            // can act as RootWidget, as it will honor rpc requests correctly (to the MockServer).
-            const rootWidget = odoo.__DEBUG__.services['root.widget'];
-            odoo.__DEBUG__.services['root.widget'] = form.getParent();
-
             await testUtils.form.clickEdit(form);
             var $field = form.$('.oe_form_field[name="body"]');
 
@@ -191,12 +273,13 @@ QUnit.module('web_editor', {}, function () {
             Wysiwyg.setRange(pText, 1, pText, 10);
             // text is selected
 
-            var range = Wysiwyg.getRange($field[0]);
+            var range = Wysiwyg.getRange();
+
             assert.strictEqual(range.sc, pText,
                 "should select the text");
 
             async function openColorpicker(selector) {
-                const $colorpicker = $field.find(selector);
+                const $colorpicker = $(selector);
                 const openingProm = new Promise(resolve => {
                     $colorpicker.one('shown.bs.dropdown', () => resolve());
                 });
@@ -204,43 +287,43 @@ QUnit.module('web_editor', {}, function () {
                 return openingProm;
             }
 
-            await openColorpicker('.note-toolbar .note-back-color-preview');
-            assert.ok($field.find('.note-back-color-preview').hasClass('show'),
+            await new Promise((resolve)=>setTimeout(resolve, 50));
+            await openColorpicker('#toolbar .note-back-color-preview');
+            assert.ok($('.note-back-color-preview').hasClass('show'),
                 "should display the color picker");
 
-            await testUtils.dom.click($field.find('.note-toolbar .note-back-color-preview .o_we_color_btn[style="background-color:#00FFFF;"]'));
+            await testUtils.dom.click($('#toolbar .note-back-color-preview .o_we_color_btn[style="background-color:#00FFFF;"]'));
 
             assert.ok(!$field.find('.note-back-color-preview').hasClass('show'),
                 "should close the color picker");
 
             assert.strictEqual($field.find('.note-editable').html(),
-                '<p>t<font style="background-color: rgb(0, 255, 255);">oto toto&nbsp;</font>toto</p><p>tata</p>',
+                '<p>t<font style="background-color: rgb(0, 255, 255);">oto toto </font>toto</p><p>tata</p>',
                 "should have rendered the field correctly in edit");
 
-            var fontContent = $field.find('.note-editable font').contents()[0];
+            var fontElement = $field.find('.note-editable font')[0];
             var rangeControl = {
-                sc: fontContent,
+                sc: fontElement,
                 so: 0,
-                ec: fontContent,
-                eo: fontContent.length,
+                ec: fontElement,
+                eo: 1,
             };
-            range = Wysiwyg.getRange($field[0]);
+            range = Wysiwyg.getRange();
             assert.deepEqual(_.pick(range, 'sc', 'so', 'ec', 'eo'), rangeControl,
                 "should select the text after color change");
 
             // select the text
             pText = $field.find('.note-editable p').first().contents()[2];
-            Wysiwyg.setRange(fontContent, 5, pText, 2);
+            Wysiwyg.setRange(fontElement.firstChild, 5, pText, 2);
             // text is selected
 
-            await openColorpicker('.note-toolbar .note-back-color-preview');
-            await testUtils.dom.click($field.find('.note-toolbar .note-back-color-preview .o_we_color_btn.bg-o-color-3'));
+            await openColorpicker('#toolbar .note-back-color-preview');
+            await testUtils.dom.click($('#toolbar .note-back-color-preview .o_we_color_btn.bg-o-color-3'));
 
             assert.strictEqual($field.find('.note-editable').html(),
-                '<p>t<font style="background-color: rgb(0, 255, 255);">oto t</font><font style="" class="bg-o-color-3">oto&nbsp;</font><font class="bg-o-color-3" style="">to</font>to</p><p>tata</p>',
+                '<p>t<font style="background-color: rgb(0, 255, 255);">oto t</font><font style="" class="bg-o-color-3">oto to</font>to</p><p>tata</p>',
                 "should have rendered the field correctly in edit");
 
-            odoo.__DEBUG__.services['root.widget'] = rootWidget;
             form.destroy();
         });
 
@@ -286,9 +369,12 @@ QUnit.module('web_editor', {}, function () {
             });
 
             var pText = $field.find('.note-editable p').first().contents()[0];
-            Wysiwyg.setRange(pText, 1);
+            Wysiwyg.setRange(pText, 1, pText, 2);
 
-            await testUtils.dom.click($field.find('.note-toolbar .note-insert button:has(.fa-file-image-o)'));
+            await new Promise((resolve) => setTimeout(resolve));
+
+            const wysiwyg = $field.find('.note-editable').data('wysiwyg');
+            wysiwyg.openMediaDialog();
 
             // load static xml file (dialog, media dialog, unsplash image widget)
             await defMediaDialog;
@@ -338,9 +424,10 @@ QUnit.module('web_editor', {}, function () {
             });
 
             var pText = $field.find('.note-editable p').first().contents()[0];
-            Wysiwyg.setRange(pText, 1);
+            Wysiwyg.setRange(pText, 1, pText, 2);
 
-            await testUtils.dom.click($field.find('.note-toolbar .note-insert button:has(.fa-file-image-o)'));
+            const wysiwyg = $field.find('.note-editable').data('wysiwyg');
+            wysiwyg.openMediaDialog();
 
             // load static xml file (dialog, media dialog, unsplash image widget)
             await defMediaDialog;
@@ -351,7 +438,7 @@ QUnit.module('web_editor', {}, function () {
             var $editable = form.$('.oe_form_field[name="body"] .note-editable');
 
             assert.strictEqual($editable.data('wysiwyg').getValue(),
-                '<p>t<span class="fa fa-glass"></span>oto toto toto</p><p>tata</p>',
+                '<p>t<span class="fa fa-glass"></span>to toto toto</p><p>tata</p>',
                 "should have the image in the dom");
 
             testUtils.mock.unpatch(MediaDialog);
@@ -359,8 +446,227 @@ QUnit.module('web_editor', {}, function () {
             form.destroy();
         });
 
+        QUnit.test('link dialog - external link - no edit', async function (assert) {
+            assert.expect(2);
+
+            const form = await testUtils.createView({
+                View: FormView,
+                model: 'note.note',
+                data: this.data,
+                arch: '<form>' +
+                    '<field name="body" widget="html" style="height: 100px"/>' +
+                    '</form>',
+                res_id: 2,
+            });
+            let $field = form.$('.oe_form_field[name="body"]');
+            assert.strictEqual($field.children('.o_readonly').html(),
+                '<p><a href="https://www.external.com" target="_blank" rel="noreferrer">External website</a></p>',
+                "should have rendered a div with correct content in readonly");
+
+            const promise = new Promise((resolve) => _formResolveTestPromise = resolve);
+            await testUtils.form.clickEdit(form);
+            await promise;
+            $field = form.$('.oe_form_field[name="body"]');
+            // the dialog load some xml assets
+            const defLinkDialog = testUtils.makeTestPromise();
+            testUtils.mock.patch(LinkDialog, {
+                init: function () {
+                    this._super.apply(this, arguments);
+                    this.opened(defLinkDialog.resolve.bind(defLinkDialog));
+                }
+            });
+
+            let pText = $field.find('.note-editable p').first().contents()[0];
+            Wysiwyg.setRange(pText.firstChild, 0, pText.firstChild, pText.firstChild.length);
+            await testUtils.dom.triggerEvent($('#toolbar #create-link'), 'click');
+            // load static xml file (dialog, link dialog)
+            await defLinkDialog;
+            $('.modal .tab-content .tab-pane').removeClass('fade'); // to be sync in test
+            await testUtils.dom.click($('.modal .modal-footer button:contains(Save)'));
+
+            await testUtils.form.clickSave(form);
+
+            $field = form.$('.oe_form_field[name="body"]');
+            assert.strictEqual($field.children('.o_readonly').html(),
+                '<p><a href="https://www.external.com" target="_blank" rel="noreferrer">External website</a></p>',
+                "the link shouldn't change");
+
+            testUtils.mock.unpatch(LinkDialog);
+            form.destroy();
+        });
+
+        QUnit.test('link dialog - internal link - no edit', async function (assert) {
+            assert.expect(2);
+
+            const form = await testUtils.createView({
+                View: FormView,
+                model: 'note.note',
+                data: this.data,
+                arch: '<form>' +
+                    '<field name="body" widget="html" style="height: 100px"/>' +
+                    '</form>',
+                res_id: 3,
+            });
+            let $field = form.$('.oe_form_field[name="body"]');
+            assert.strictEqual($field.children('.o_readonly').html(),
+                '<p><a href="' + window.location.href.replace(/&/g, "&amp;") + '/test">This website</a></p>',
+                "should have rendered a div with correct content in readonly");
+
+            const promise = new Promise((resolve) => _formResolveTestPromise = resolve);
+            await testUtils.form.clickEdit(form);
+            await promise;
+            $field = form.$('.oe_form_field[name="body"]');
+            // the dialog load some xml assets
+            const defLinkDialog = testUtils.makeTestPromise();
+            testUtils.mock.patch(LinkDialog, {
+                init: function () {
+                    this._super.apply(this, arguments);
+                    this.opened(defLinkDialog.resolve.bind(defLinkDialog));
+                }
+            });
+
+            let pText = $field.find('.note-editable p').first().contents()[0];
+            Wysiwyg.setRange(pText.firstChild, 0, pText.firstChild, pText.firstChild.length);
+            await testUtils.dom.triggerEvent($('#toolbar #create-link'), 'click');
+            // load static xml file (dialog, link dialog)
+            await defLinkDialog;
+            $('.modal .tab-content .tab-pane').removeClass('fade'); // to be sync in test
+            await testUtils.dom.click($('.modal input#o_link_dialog_url_strip_domain'));
+            await testUtils.dom.click($('.modal .modal-footer button:contains(Save)'));
+
+            await testUtils.form.clickSave(form);
+
+            $field = form.$('.oe_form_field[name="body"]');
+            assert.strictEqual($field.children('.o_readonly').html(),
+                '<p><a href="' + window.location.href.replace(/&/g, "&amp;") + '/test">This website</a></p>',
+                "the link shouldn't change");
+
+            testUtils.mock.unpatch(LinkDialog);
+            form.destroy();
+        });
+
+        QUnit.test('link dialog - external link - new', async function (assert) {
+            assert.expect(2);
+
+            const form = await testUtils.createView({
+                View: FormView,
+                model: 'note.note',
+                data: this.data,
+                arch: '<form>' +
+                    '<field name="body" widget="html" style="height: 100px"/>' +
+                    '</form>',
+                res_id: 4,
+            });
+            let $field = form.$('.oe_form_field[name="body"]');
+            assert.strictEqual($field.children('.o_readonly').html(), '<p>New external link</p>',
+                "should have rendered a div with correct content in readonly");
+
+            const promise = new Promise((resolve) => _formResolveTestPromise = resolve);
+            await testUtils.form.clickEdit(form);
+            await promise;
+            $field = form.$('.oe_form_field[name="body"]');
+            // the dialog load some xml assets
+            const defLinkDialog = testUtils.makeTestPromise();
+            testUtils.mock.patch(LinkDialog, {
+                init: function () {
+                    this._super.apply(this, arguments);
+                    this.opened(defLinkDialog.resolve.bind(defLinkDialog));
+                }
+            });
+
+            let pText = $field.find('.note-editable p').first().contents()[0];
+            Wysiwyg.setRange(pText, 0, pText, pText.length);
+            await testUtils.dom.triggerEvent($('#toolbar #create-link'), 'click');
+            // load static xml file (dialog, link dialog)
+            await defLinkDialog;
+            $('.modal .tab-content .tab-pane').removeClass('fade'); // to be sync in test
+            $('input#o_link_dialog_url_input').val('www.test.com');
+            await testUtils.dom.click($('.modal .modal-footer button:contains(Save)'));
+
+            await testUtils.form.clickSave(form);
+
+            $field = form.$('.oe_form_field[name="body"]');
+            assert.strictEqual($field.children('.o_readonly').html(),
+                '<p><a href="http://www.test.com" target="_blank" rel="noreferrer">New external link</a></p>',
+                "the link should be created with the right format");
+
+            testUtils.mock.unpatch(LinkDialog);
+            form.destroy();
+        });
+
+
+        QUnit.test('link dialog - internal link - new', async function (assert) {
+            assert.expect(3);
+
+            const form = await testUtils.createView({
+                View: FormView,
+                model: 'note.note',
+                data: this.data,
+                arch: '<form>' +
+                    '<field name="body" widget="html" style="height: 100px"/>' +
+                    '</form>',
+                res_id: 5,
+            });
+            let $field = form.$('.oe_form_field[name="body"]');
+            assert.strictEqual($field.children('.o_readonly').html(), '<p>New internal link</p>',
+                "should have rendered a div with correct content in readonly");
+
+            let promise = new Promise((resolve) => _formResolveTestPromise = resolve);
+            await testUtils.form.clickEdit(form);
+            await promise;
+            $field = form.$('.oe_form_field[name="body"]');
+            // the dialog load some xml assets
+            const defLinkDialog = testUtils.makeTestPromise();
+            testUtils.mock.patch(LinkDialog, {
+                init: function () {
+                    this._super.apply(this, arguments);
+                    this.opened(defLinkDialog.resolve.bind(defLinkDialog));
+                }
+            });
+
+            let pText = $field.find('.note-editable p').first().contents()[0];
+            Wysiwyg.setRange(pText, 0, pText, pText.length);
+            await testUtils.dom.triggerEvent($('#toolbar #create-link'), 'click');
+            // load static xml file (dialog, link dialog)
+            await defLinkDialog;
+            $('.modal .tab-content .tab-pane').removeClass('fade'); // to be sync in test
+            const $input = $('input#o_link_dialog_url_input');
+            await testUtils.fields.editAndTrigger($input, window.location.href + '/test', ["change"]);
+            $('.modal input#o_link_dialog_url_strip_domain').click();
+            await testUtils.dom.click($('.modal .modal-footer button:contains(Save)'));
+
+            await testUtils.form.clickSave(form);
+
+            $field = form.$('.oe_form_field[name="body"]');
+            assert.strictEqual($field.children('.o_readonly').html(),
+                '<p><a href="' + window.location.href.replace(/&/g, "&amp;") + '/test">New internal link</a></p>',
+                "the link should be created with the right format");
+
+            promise = new Promise((resolve) => _formResolveTestPromise = resolve);
+            await testUtils.form.clickEdit(form);
+            await promise;
+
+            $field = form.$('.oe_form_field[name="body"]');
+            pText = $field.find('.note-editable a').eq(0).contents()[0];
+            Wysiwyg.setRange(pText, 0, pText, pText.length);
+            await testUtils.dom.triggerEvent($('#toolbar #create-link'), 'click');
+            // load static xml file (dialog, link dialog)
+            await defLinkDialog;
+            $('.modal .tab-content .tab-pane').removeClass('fade'); // to be sync in test
+            await testUtils.dom.click($('.modal .modal-footer button:contains(Save)'));
+            await testUtils.form.clickSave(form);
+
+            $field = form.$('.oe_form_field[name="body"]');
+            assert.strictEqual($field.children('.o_readonly').html(),
+                '<p><a href="' + window.location.href.slice(window.location.origin.length).replace(/&/g, "&amp;") + '/test">New internal link</a></p>',
+                "the link should be created with the right format");
+
+            testUtils.mock.unpatch(LinkDialog);
+            form.destroy();
+        });
+
         QUnit.test('save', async function (assert) {
-            assert.expect(1);
+            assert.expect(0);
 
             var form = await testUtils.createView({
                 View: FormView,
@@ -381,29 +687,140 @@ QUnit.module('web_editor', {}, function () {
                 },
             });
             await testUtils.form.clickEdit(form);
-            var $field = form.$('.oe_form_field[name="body"]');
-
-            // select the text
-            var pText = $field.find('.note-editable p').first().contents()[0];
-            Wysiwyg.setRange(pText, 1, pText, 10);
-            // text is selected
-
-            async function openColorpicker(selector) {
-                const $colorpicker = $field.find(selector);
-                const openingProm = new Promise(resolve => {
-                    $colorpicker.one('shown.bs.dropdown', () => resolve());
-                });
-                await testUtils.dom.click($colorpicker.find('button:first'));
-                return openingProm;
-            }
-
-            await openColorpicker('.note-toolbar .note-back-color-preview');
-            await testUtils.dom.click($field.find('.note-toolbar .note-back-color-preview .o_we_color_btn.bg-o-color-3'));
-
             await testUtils.form.clickSave(form);
 
             form.destroy();
         });
+
+        QUnit.test('Quick Edition: click on link inside html field', async function (assert) {
+            assert.expect(6);
+
+            this.data['note.note'].records[0]['body'] = '<p><a href="#">hello</a> world</p>';
+
+            const MULTI_CLICK_DELAY = 6498651354; // arbitrary large number to identify setTimeout calls
+            let quickEditCB;
+            let quickEditTimeoutId;
+            let nextId = 1;
+            const originalSetTimeout = window.setTimeout;
+            const originalClearTimeout = window.clearTimeout;
+            patchWithCleanup(window, {
+                setTimeout(fn, delay) {
+                    if (delay === MULTI_CLICK_DELAY) {
+                        quickEditCB = fn;
+                        quickEditTimeoutId = `quick_edit_${nextId++}`;
+                        return quickEditTimeoutId;
+                    } else {
+                        return originalSetTimeout(...arguments);
+                    }
+                },
+                clearTimeout(id) {
+                    if (id === quickEditTimeoutId) {
+                        quickEditCB = undefined;
+                    } else {
+                        return originalClearTimeout(...arguments);
+                    }
+                },
+            });
+
+            const form = await testUtils.createView({
+                View: FormView,
+                model: 'note.note',
+                data: this.data,
+                arch: '<form>' +
+                    '<field name="body" widget="html" style="height: 100px"/>' +
+                    '</form>',
+                formMultiClickTime: MULTI_CLICK_DELAY,
+                res_id: 1,
+            });
+
+            assert.containsOnce(form, '.o_form_view.o_form_readonly');
+
+            await testUtils.dom.click(form.$('.oe_form_field[name="body"] a'));
+            await testUtils.nextTick();
+            assert.strictEqual(quickEditCB, undefined, "no quickEdit callback should have been set");
+            assert.containsOnce(form, '.o_form_view.o_form_readonly');
+
+            await testUtils.dom.click(form.$('.oe_form_field[name="body"] p'));
+            await testUtils.nextTick();
+            assert.containsOnce(form, '.o_form_view.o_form_readonly');
+            assert.ok(quickEditCB, "quickEdit callback should have been set");
+            quickEditCB();
+            await testUtils.nextTick();
+            await legacyExtraNextTick();
+            assert.containsOnce(form, '.o_form_view.o_form_editable');
+
+            form.destroy();
+        });
+
+        QUnit.test('.o_not_editable should be contenteditable=false', async function (assert) {
+            assert.expect(8);
+
+            const form = await testUtils.createView({
+                View: FormView,
+                model: 'note.note',
+                data: this.data,
+                arch: '<form>' +
+                    '<field name="body" widget="html" style="height: 100px"/>' +
+                    '</form>',
+                res_id: 7,
+            });
+
+            const waitForMutation = (element) => {
+                let currentResolve;
+                const promise = new Promise((resolve)=>{
+                    currentResolve = resolve;
+                });
+                const observer = new MutationObserver((records) => {
+                    currentResolve();
+                    observer.disconnect();
+                });
+                observer.observe(element, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                });
+                return promise;
+            }
+
+            assert.equal(form.$('.b').attr('contenteditable'), undefined);
+
+            let promise = new Promise((resolve) => _formResolveTestPromise = resolve);
+            await testUtils.form.clickEdit(form);
+            await promise;
+            assert.equal(form.$('.b').attr('contenteditable'), 'false');
+            await testUtils.form.clickSave(form);
+            assert.equal(form.$('.b').attr('contenteditable'), undefined);
+
+            // edit a second time
+            promise = new Promise((resolve) => _formResolveTestPromise = resolve);
+            await testUtils.form.clickEdit(form);
+            await promise;
+            await testUtils.nextTick();
+
+            // adding an element with o_not_editable
+            form.$('.b').after($(`<div class="c o_not_editable">c</div>`));
+            await waitForMutation(form.$('.c')[0]);
+            assert.equal(form.$('.c').attr('contenteditable'), 'false');
+
+            // changing the class o_not_editable back and forth
+            form.$('.a').addClass('o_not_editable');
+            await waitForMutation(form.$('.a')[0]);
+            assert.equal(form.$('.a').attr('contenteditable'), 'false');
+            form.$('.a').removeClass('o_not_editable');
+            await waitForMutation(form.$('.a')[0]);
+            assert.equal(form.$('.a').attr('contenteditable'), undefined);
+
+            // changing the class o_not_editable back and forth again
+            form.$('.a').addClass('o_not_editable');
+            await waitForMutation(form.$('.a')[0]);
+            assert.equal(form.$('.a').attr('contenteditable'), 'false');
+            form.$('.a').removeClass('o_not_editable');
+            await waitForMutation(form.$('.a')[0]);
+            assert.equal(form.$('.a').attr('contenteditable'), undefined);
+
+            form.destroy();
+        });
+
 
         QUnit.module('cssReadonly');
 
@@ -418,6 +835,7 @@ QUnit.module('web_editor', {}, function () {
                     '<field name="body" widget="html" style="height: 100px" options="{\'cssReadonly\': \'template.assets\'}"/>' +
                     '</form>',
                 res_id: 1,
+                debug: 1,
             });
             var $field = form.$('.oe_form_field[name="body"]');
             var $iframe = $field.find('iframe.o_readonly');
@@ -434,9 +852,7 @@ QUnit.module('web_editor', {}, function () {
             await testUtils.form.clickEdit(form);
 
             $field = form.$('.oe_form_field[name="body"]');
-            assert.strictEqual($field.find('.note-editable').html(),
-                '<p>toto toto toto</p><p>tata</p>',
-                "should have rendered the field correctly in edit");
+            assert.strictEqual($field.find('#iframe_target').length, 0);
 
             form.destroy();
         });

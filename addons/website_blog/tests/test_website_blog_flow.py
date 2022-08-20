@@ -82,8 +82,8 @@ class TestWebsiteBlogFlow(TestWebsiteBlogCommon):
                 'blog.post',
                 self.test_blog_post.id,
                 'Test message blog post',
-                attachment_ids=str(attachment.id),
-                attachment_tokens=attachment.access_token
+                attachment_ids=[attachment.id],
+                attachment_tokens=[attachment.access_token]
             )
 
         self.assertTrue(self.env['mail.message'].sudo().search(
@@ -102,9 +102,17 @@ class TestWebsiteBlogFlow(TestWebsiteBlogCommon):
                 'blog.post',
                 self.test_blog_post.id,
                 'Test message blog post',
-                attachment_ids=str(second_attachment.id),
-                attachment_tokens='wrong_token'
+                attachment_ids=[second_attachment.id],
+                attachment_tokens=['wrong_token']
             )
 
         self.assertFalse(self.env['mail.message'].sudo().search(
             [('model', '=', 'blog.post'), ('attachment_ids', 'in', second_attachment.ids)]))
+
+    def test_website_blog_teaser_content(self):
+        """ Make sure that the content of the post is correctly rendered in
+            proper plain text. """
+
+        self.test_blog_post.content = "<h2>Test Content</h2>"
+
+        self.assertEqual(self.test_blog_post.teaser, "Test Content...")

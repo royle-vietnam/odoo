@@ -2,13 +2,10 @@
 
 import re
 
-import collections
+from collections.abc import Iterable
 
 from odoo import api, fields, models, _
 from odoo.osv import expression
-from odoo.exceptions import UserError
-
-import werkzeug.urls
 
 def sanitize_account_number(acc_number):
     if acc_number:
@@ -107,6 +104,10 @@ class ResPartnerBank(models.Model):
         """ To be overridden by subclasses in order to support other account_types.
         """
         return 'bank'
+    
+    def name_get(self):
+        return [(acc.id, '{} - {}'.format(acc.acc_number, acc.bank_id.name) if acc.bank_id else acc.acc_number)
+                for acc in self]
 
     @api.model
     def _search(self, args, offset=0, limit=None, order=None, count=False, access_rights_uid=None):
@@ -116,7 +117,7 @@ class ResPartnerBank(models.Model):
             if args[pos][0] == 'acc_number':
                 op = args[pos][1]
                 value = args[pos][2]
-                if not isinstance(value, str) and isinstance(value, collections.Iterable):
+                if not isinstance(value, str) and isinstance(value, Iterable):
                     value = [sanitize_account_number(i) for i in value]
                 else:
                     value = sanitize_account_number(value)

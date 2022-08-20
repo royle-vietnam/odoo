@@ -1,11 +1,10 @@
 odoo.define('point_of_sale.Chrome', function(require) {
     'use strict';
 
-    const { useState, useRef, useContext } = owl.hooks;
+    const { useState, useRef, useContext, useExternalListener } = owl.hooks;
     const { debounce } = owl.utils;
     const { loadCSS } = require('web.ajax');
     const { useListener } = require('web.custom_hooks');
-    const { CrashManager } = require('web.CrashManager');
     const { BarcodeEvents } = require('barcodes.BarcodeEvents');
     const PosComponent = require('point_of_sale.PosComponent');
     const NumberBuffer = require('point_of_sale.NumberBuffer');
@@ -13,6 +12,10 @@ odoo.define('point_of_sale.Chrome', function(require) {
     const Registries = require('point_of_sale.Registries');
     const IndependentToOrderScreen = require('point_of_sale.IndependentToOrderScreen');
     const contexts = require('point_of_sale.PosContext');
+    const { identifyError, posbus } = require('point_of_sale.utils');
+    const { odooExceptionTitleMap } = require("@web/core/errors/error_dialogs");
+    const { ConnectionLostError, ConnectionAbortedError, RPCError } = require('@web/core/network/rpc_service');
+    const { useBus } = require("@web/core/utils/hooks");
 
     // This is kind of a trick.
     // We get a reference to the whole exports so that
@@ -26,14 +29,19 @@ odoo.define('point_of_sale.Chrome', function(require) {
     class Chrome extends PopupControllerMixin(PosComponent) {
         constructor() {
             super(...arguments);
+            useExternalListener(window, 'beforeunload', this._onBeforeUnload);
             useListener('show-main-screen', this.__showScreen);
             useListener('toggle-debug-widget', debounce(this._toggleDebugWidget, 100));
+            useListener('toggle-mobile-searchbar', this._toggleMobileSearchBar);
             useListener('show-temp-screen', this.__showTempScreen);
             useListener('close-temp-screen', this.__closeTempScreen);
             useListener('close-pos', this._closePos);
             useListener('loading-skip-callback', () => this._loadingSkipCallback());
             useListener('play-sound', this._onPlaySound);
             useListener('set-sync-status', this._onSetSyncStatus);
+            useListener('show-notification', this._onShowNotification);
+            useListener('close-notification', this._onCloseNotification);
+            useBus(posbus, 'start-cash-control', this.openCashControl);
             NumberBuffer.activate();
 
             this.chromeContext = useContext(contexts.chrome);
@@ -41,8 +49,14 @@ odoo.define('point_of_sale.Chrome', function(require) {
             this.state = useState({
                 uiState: 'LOADING', // 'LOADING' | 'READY' | 'CLOSING'
                 debugWidgetIsShown: true,
+                mobileSearchBarIsShown: false,
                 hasBigScrollBars: false,
                 sound: { src: null },
+                notification: {
+                    isShown: false,
+                    message: '',
+                    duration: 2000,
+                }
             });
 
             this.loading = useState({
@@ -88,6 +102,16 @@ odoo.define('point_of_sale.Chrome', function(require) {
         get clientScreenButtonIsShown() {
             return this.env.pos.config.iface_customer_facing_display;
         }
+
+        /**
+         * Used to give the `state.mobileSearchBarIsShown` value to main screen props
+         */
+        get mainScreenPropsFielded() {
+            return Object.assign({}, this.mainScreenProps, {
+                mobileSearchBarIsShown: this.state.mobileSearchBarIsShown,
+            });
+        }
+
         /**
          * Startup screen can be based on pos config so the startup screen
          * is only determined after pos data is completely loaded.
@@ -127,7 +151,11 @@ odoo.define('point_of_sale.Chrome', function(require) {
                 };
                 this.env.pos = new models.PosModel(posModelDefaultAttributes);
                 await this.env.pos.ready;
+                // Load the saved `env.pos.toRefundLines` from localStorage when
+                // the PosModel is ready.
+                Object.assign(this.env.pos.toRefundLines, this.env.pos.db.load('TO_REFUND_LINES') || {});
                 this._buildChrome();
+                this._closeOtherTabs();
                 this.env.pos.set(
                     'selectedCategoryId',
                     this.env.pos.config.iface_start_categ_id
@@ -179,6 +207,16 @@ odoo.define('point_of_sale.Chrome', function(require) {
             }
         }
 
+        openCashControl() {
+            if (this.shouldShowCashControl()) {
+                this.showPopup('CashOpeningPopup', { notEscapable: true });
+            }
+        }
+
+        shouldShowCashControl() {
+            return this.env.pos.config.cash_control && this.env.pos.pos_session.state == 'opening_control';
+        }
+
         // EVENT HANDLERS //
 
         _showStartScreen() {
@@ -206,6 +244,7 @@ odoo.define('point_of_sale.Chrome', function(require) {
         }
         __closeTempScreen() {
             this.tempScreen.isShown = false;
+            this.tempScreen.name = null;
         }
         __showScreen({ detail: { name, props = {} } }) {
             const component = this.constructor.components[name];
@@ -219,7 +258,7 @@ odoo.define('point_of_sale.Chrome', function(require) {
 
             // 3. Save the screen to the order.
             //  - This screen is shown when the order is selected.
-            if (!(component.prototype instanceof IndependentToOrderScreen)) {
+            if (!(component.prototype instanceof IndependentToOrderScreen) && name !== "ReprintReceiptScreen") {
                 this._setScreenData(name, props);
             }
         }
@@ -284,6 +323,13 @@ odoo.define('point_of_sale.Chrome', function(require) {
         _toggleDebugWidget() {
             this.state.debugWidgetIsShown = !this.state.debugWidgetIsShown;
         }
+        _toggleMobileSearchBar({ detail: isSearchBarEnabled }) {
+            if (isSearchBarEnabled !== null) {
+                this.state.mobileSearchBarIsShown = isSearchBarEnabled;
+            } else {
+                this.state.mobileSearchBarIsShown = !this.state.mobileSearchBarIsShown;
+            }
+        }
         _onPlaySound({ detail: name }) {
             let src;
             if (name === 'error') {
@@ -295,6 +341,22 @@ odoo.define('point_of_sale.Chrome', function(require) {
         }
         _onSetSyncStatus({ detail: { status, pending }}) {
             this.env.pos.set('synch', { status, pending });
+        }
+        _onShowNotification({ detail: { message, duration } }) {
+            this.state.notification.isShown = true;
+            this.state.notification.message = message;
+            this.state.notification.duration = duration;
+        }
+        _onCloseNotification() {
+            this.state.notification.isShown = false;
+            this.state.notification.message = '';
+        }
+        /**
+         * Save `env.pos.toRefundLines` in localStorage on beforeunload - closing the
+         * browser, reloading or going to other page.
+         */
+        _onBeforeUnload() {
+            this.env.pos.db.save('TO_REFUND_LINES', this.env.pos.toRefundLines);
         }
 
         // TO PASS AS PARAMETERS //
@@ -335,6 +397,8 @@ odoo.define('point_of_sale.Chrome', function(require) {
                 body: this.env._t(
                     'Would you like to load demo data?'
                 ),
+                confirmText: this.env._t('Yes'),
+                cancelText: this.env._t('No')
             });
             if (confirmed) {
                 await this.rpc({
@@ -374,27 +438,6 @@ odoo.define('point_of_sale.Chrome', function(require) {
             }
 
             this._disableBackspaceBack();
-            this._replaceCrashmanager();
-        }
-        // replaces the error handling of the existing crashmanager which
-        // uses jquery dialog to display the error, to use the pos popup
-        // instead
-        _replaceCrashmanager() {
-            var self = this;
-            CrashManager.include({
-                show_error: function (error) {
-                    if (self.env.pos) {
-                        // self == this component
-                        self.showPopup('ErrorTracebackPopup', {
-                            title: error.type,
-                            body: error.message + '\n' + error.data.debug + '\n',
-                        });
-                    } else {
-                        // this == CrashManager instance
-                        this._super(error);
-                    }
-                },
-            });
         }
         // prevent backspace from performing a 'back' navigation
         _disableBackspaceBack() {
@@ -403,6 +446,102 @@ odoo.define('point_of_sale.Chrome', function(require) {
                     e.preventDefault();
                 }
             });
+        }
+        _closeOtherTabs() {
+            localStorage['message'] = '';
+            localStorage['message'] = JSON.stringify({
+                message: 'close_tabs',
+                session: this.env.pos.pos_session.id,
+            });
+
+            window.addEventListener(
+                'storage',
+                (event) => {
+                    if (event.key === 'message' && event.newValue) {
+                        const msg = JSON.parse(event.newValue);
+                        if (
+                            msg.message === 'close_tabs' &&
+                            msg.session == this.env.pos.pos_session.id
+                        ) {
+                            console.info(
+                                'POS / Session opened in another window. EXITING POS'
+                            );
+                            this._closePos();
+                        }
+                    }
+                },
+                false
+            );
+        }
+        showCashMoveButton() {
+            return this.env.pos && this.env.pos.config && this.env.pos.config.cash_control;
+        }
+
+        // UNEXPECTED ERROR HANDLING //
+
+        /**
+         * This method is used to handle unexpected errors. It is registered to
+         * the `error_handlers` service when this component is properly mounted.
+         * See `onMounted` hook of the `ChromeAdapter` component.
+         * @param {*} env
+         * @param {UncaughtClientError | UncaughtPromiseError} error
+         * @param {*} originalError
+         * @returns {boolean}
+         */
+        errorHandler(env, error, originalError) {
+            if (!env.pos) return false;
+            const errorToHandle = identifyError(originalError);
+            // Assume that the unhandled falsey rejections can be ignored.
+            if (errorToHandle) {
+                this._errorHandler(error, errorToHandle);
+            }
+            return true;
+        }
+
+        _errorHandler(error, errorToHandle) {
+            if (errorToHandle instanceof RPCError) {
+                const { message, data } = errorToHandle;
+                if (odooExceptionTitleMap.has(errorToHandle.exceptionName)) {
+                    const title = odooExceptionTitleMap.get(errorToHandle.exceptionName).toString();
+                    this.showPopup('ErrorPopup', { title, body: data.message });
+                } else {
+                    this.showPopup('ErrorTracebackPopup', {
+                        title: message,
+                        body: data.message + '\n' + data.debug + '\n',
+                    });
+                }
+            } else if (errorToHandle instanceof ConnectionLostError) {
+                this.showPopup('OfflineErrorPopup', {
+                    title: this.env._t('Connection is lost'),
+                    body: this.env._t('Check the internet connection then try again.'),
+                });
+            } else if (errorToHandle instanceof ConnectionAbortedError) {
+                this.showPopup('OfflineErrorPopup', {
+                    title: this.env._t('Connection is aborted'),
+                    body: this.env._t('Check the internet connection then try again.'),
+                });
+            } else if (errorToHandle instanceof Error) {
+                // If `errorToHandle` is a normal Error (such as TypeError),
+                // the annotated traceback can be found from `error`.
+                this.showPopup('ErrorTracebackPopup', {
+                    // Hopefully the message is translated.
+                    title: `${errorToHandle.name}: ${errorToHandle.message}`,
+                    body: error.traceback,
+                });
+            } else {
+                // Hey developer. It's your fault that the error reach here.
+                // Please, throw an Error object in order to get stack trace of the error.
+                // At least we can find the file that throws the error when you look
+                // at the console.
+                this.showPopup('ErrorPopup', {
+                    title: this.env._t('Unknown Error'),
+                    body: this.env._t('Unable to show information about this error.'),
+                });
+                console.error('Unknown error. Unable to show information about this error.', errorToHandle);
+            }
+        }
+        _shouldResetIdleTimer() {
+            return true;
         }
     }
     Chrome.template = 'Chrome';

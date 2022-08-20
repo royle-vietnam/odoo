@@ -2,10 +2,12 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 import odoo
-from odoo import api, fields, models, tools, SUPERUSER_ID, _
+from odoo import api, fields, models, tools, SUPERUSER_ID, _, Command
 from odoo.exceptions import MissingError, UserError, ValidationError, AccessError
 from odoo.osv import expression
 from odoo.tools.safe_eval import safe_eval, test_python_expr
+from odoo.tools.float_utils import float_compare
+from odoo.http import request
 
 import base64
 from collections import defaultdict
@@ -64,6 +66,10 @@ class IrActions(models.Model):
         self.clear_caches()
         return res
 
+    @api.ondelete(at_uninstall=True)
+    def _unlink_check_home_action(self):
+        self.env['res.users'].with_context(active_test=False).search([('action_id', 'in', self.ids)]).sudo().write({'action_id': None})
+
     @api.model
     def _get_eval_context(self, action=None):
         """ evaluation context to pass to safe_eval """
@@ -74,33 +80,41 @@ class IrActions(models.Model):
             'datetime': tools.safe_eval.datetime,
             'dateutil': tools.safe_eval.dateutil,
             'timezone': timezone,
+            'float_compare': float_compare,
             'b64encode': base64.b64encode,
             'b64decode': base64.b64decode,
+            'Command': Command,
         }
 
     @api.model
-    @tools.ormcache('frozenset(self.env.user.groups_id.ids)', 'model_name')
     def get_bindings(self, model_name):
+        return self._get_bindings(model_name, bool(request) and request.session.debug)
+
+    @tools.ormcache('frozenset(self.env.user.groups_id.ids)', 'model_name', 'debug')
+    def _get_bindings(self, model_name, debug=False):
         """ Retrieve the list of actions bound to the given model.
 
            :return: a dict mapping binding types to a list of dict describing
                     actions, where the latter is given by calling the method
                     ``read`` on the action record.
         """
-        # DLE P19: Need to flush before doing the SELECT, which act as a search.
-        # Test `test_bindings`
-        self.flush()
         cr = self.env.cr
-        query = """ SELECT a.id, a.type, a.binding_type
-                    FROM ir_actions a, ir_model m
-                    WHERE a.binding_model_id=m.id AND m.model=%s
-                    ORDER BY a.id """
-        cr.execute(query, [model_name])
         IrModelAccess = self.env['ir.model.access']
 
         # discard unauthorized actions, and read action definitions
         result = defaultdict(list)
         user_groups = self.env.user.groups_id
+        if not debug:
+            user_groups -= self.env.ref('base.group_no_one')
+
+        self.flush()
+        cr.execute("""
+            SELECT a.id, a.type, a.binding_type
+              FROM ir_actions a
+              JOIN ir_model m ON a.binding_model_id = m.id
+             WHERE m.model = %s
+          ORDER BY a.id
+        """, [model_name])
         for action_id, action_model, binding_type in cr.fetchall():
             try:
                 action = self.env[action_model].sudo().browse(action_id)
@@ -112,7 +126,10 @@ class IrActions(models.Model):
                 if action_model and not IrModelAccess.check(action_model, mode='read', raise_exception=False):
                     # the user won't be able to read records
                     continue
-                result[binding_type].append(action.read()[0])
+                fields = ['name', 'binding_view_types']
+                if 'sequence' in action._fields:
+                    fields.append('sequence')
+                result[binding_type].append(action.read(fields)[0])
             except (AccessError, MissingError):
                 continue
 
@@ -277,6 +294,9 @@ class IrActionsActWindow(models.Model):
             "context", "domain", "filter", "groups_id", "limit", "res_id",
             "res_model", "search_view", "search_view_id", "target", "view_id",
             "view_mode", "views",
+            # `flags` is not a real field of ir.actions.act_window but is used
+            # to give the parameters to generate the action
+            "flags"
         }
 
 
@@ -317,6 +337,13 @@ class IrActionsActWindowclose(models.Model):
     _table = 'ir_actions'
 
     type = fields.Char(default='ir.actions.act_window_close')
+
+    def _get_readable_fields(self):
+        return super()._get_readable_fields() | {
+            # 'effect' is not a real field of ir.actions.act_window_close but is
+            # used to display the rainbowman
+            "effect"
+        }
 
 
 class IrActionsActUrl(models.Model):
@@ -371,14 +398,11 @@ class IrActionsServer(models.Model):
 #  - record: record on which the action is triggered; may be void
 #  - records: recordset of all records on which the action is triggered in multi-mode; may be void
 #  - time, datetime, dateutil, timezone: useful Python libraries
+#  - float_compare: Odoo function to compare floats based on specific precisions
 #  - log: log(message, level='info'): logging function to record debug information in ir.logging table
-#  - Warning: Warning Exception to use with raise
+#  - UserError: Warning Exception to use with raise
+#  - Command: x2Many commands namespace
 # To return an action, assign: action = {...}\n\n\n\n"""
-
-    @api.model
-    def _select_objects(self):
-        records = self.env['ir.model'].search([])
-        return [(record.model, record.name) for record in records] + [('', '')]
 
     name = fields.Char(string='Action Name', translate=True)
     type = fields.Char(default='ir.actions.server')
@@ -519,7 +543,7 @@ class IrActionsServer(models.Model):
         if self.link_field_id:
             record = self.env[self.model_id.model].browse(self._context.get('active_id'))
             if self.link_field_id.ttype in ['one2many', 'many2many']:
-                record.write({self.link_field_id.name: [(4, res.id)]})
+                record.write({self.link_field_id.name: [Command.link(res.id)]})
             else:
                 record.write({self.link_field_id.name: res.id})
 
@@ -601,6 +625,16 @@ class IrActionsServer(models.Model):
                     raise
 
             eval_context = self._get_eval_context(action)
+            records = eval_context.get('record') or eval_context['model']
+            records |= eval_context.get('records') or eval_context['model']
+            if records:
+                try:
+                    records.check_access_rule('write')
+                except AccessError:
+                    _logger.warning("Forbidden server action %r executed while the user %s does not have access to %s.",
+                        action.name, self.env.user.login, records,
+                    )
+                    raise
 
             runner, multi = action._get_runner()
             if runner and multi:
@@ -651,8 +685,7 @@ class IrServerObjectLines(models.Model):
 
     @api.model
     def _selection_target_model(self):
-        models = self.env['ir.model'].search([])
-        return [(model.model, model.name) for model in models]
+        return [(model.model, model.name) for model in self.env['ir.model'].sudo().search([])]
 
     @api.depends('col1.relation', 'value', 'evaluation_type')
     def _compute_resource_ref(self):
@@ -662,14 +695,19 @@ class IrServerObjectLines(models.Model):
                 try:
                     value = int(value)
                     if not self.env[line.col1.relation].browse(value).exists():
-                        record = self.env[line.col1.relation]._search([], limit=1)
+                        record = list(self.env[line.col1.relation]._search([], limit=1))
                         value = record[0] if record else 0
                 except ValueError:
-                    record = self.env[line.col1.relation]._search([], limit=1)
+                    record = list(self.env[line.col1.relation]._search([], limit=1))
                     value = record[0] if record else 0
                 line.resource_ref = '%s,%s' % (line.col1.relation, value)
             else:
                 line.resource_ref = False
+
+    @api.constrains('col1', 'evaluation_type')
+    def _raise_many2many_error(self):
+        if self.filtered(lambda line: line.col1.ttype == 'many2many' and line.evaluation_type == 'reference'):
+            raise ValidationError(_('many2many fields cannot be evaluated by reference'))
 
     @api.onchange('resource_ref')
     def _set_resource_ref(self):

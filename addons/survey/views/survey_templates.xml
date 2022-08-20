@@ -24,7 +24,7 @@
             <div class="py-3 m-0 p-0 text-right">
                 <div class="o_survey_progress_wrapper d-inline-block pr-5 text-left">
                     <t t-call="survey.survey_progression"
-                        t-if="survey and survey.questions_layout != 'one_page' and answer and answer.state == 'in_progress' and (not question or not question.is_page)">
+                        t-if="survey and survey.questions_layout != 'one_page' and answer and answer.state == 'in_progress' and (not question or not question.is_page) and not survey_form_readonly">
                         <t t-if="survey.questions_layout == 'page_per_section'">
                             <t t-set="page_ids" t-value="survey.page_ids.ids"/>
                             <t t-set="page_number" t-value="page_ids.index(page.id) + (1 if survey.progression_mode == 'number' else 0)"/>
@@ -65,11 +65,11 @@
         <div class="o_survey_nav pt16 mb-2">
             <div class="container m-0 p-0">
                 <div class="row">
-                    <div  class="col-10">
+                    <div  class="col-lg-10">
                         <h1 t-if="answer.state == 'new' or survey.questions_layout != 'page_per_question'"
                             t-esc="survey.title" class="o_survey_main_title pt-4"></h1>
                     </div>
-                    <div class="o_survey_timer col-2 pt-4">
+                    <div class="o_survey_timer col-lg-2 pt-4">
                         <h1 class="o_survey_timer_container timer text-right">
                         </h1>
                     </div>
@@ -111,15 +111,15 @@
         </form>
 
         <!-- Modal used to display error message, i.c.o. ajax error -->
-        <div role="dialog" class="modal fade" id="AJAXErrorModal" >
+        <div role="dialog" class="modal fade" id="MasterTabErrorModal" >
             <div class="modal-dialog">
                 <div class="modal-content">
                     <header class="modal-header">
-                        <h4 class="modal-title">A problem has occured</h4>
-                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">&amp;times;</button>
+                        <h4 class="modal-title">A problem has occurred</h4>
+                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">×</button>
                     </header>
-                    <main class="modal-body"><p>Something went wrong while contacting survey server. <strong class="text-danger">Your answers have probably not been recorded.</strong> Try refreshing.</p></main>
-                    <footer class="modal-footer"><button type="button" class="btn btn-primary" data-dismiss="modal">Close</button></footer>
+                    <main class="modal-body"><p>To take this survey, please close all other tabs on <strong class="text-danger"></strong>.</p></main>
+                    <footer class="modal-footer"><button type="button" class="btn btn-primary" data-dismiss="modal">Continue here</button></footer>
                 </div>
             </div>
         </div>
@@ -160,6 +160,7 @@
             t-att-data-question-time-limit-reached="answer.question_time_limit_reached"
             t-att-data-has-answered="bool(has_answered)"
             t-att-data-is-page-description="bool(question and question.is_page and not is_html_empty(question.description))"
+            t-att-data-server-time="server_time"
             t-att-data-timer="timer_start"
             t-att-data-time-limit-minutes="time_limit_minutes"/>
         <t t-if="survey.questions_layout == 'one_page'">
@@ -227,7 +228,10 @@
                             <t t-if="answer.is_session_answer or survey_last">Submit</t>
                             <t t-else="">Continue</t>
                         </button>
-                        <span class="font-weight-bold text-muted ml-2 d-none d-md-inline">or press Enter</span>
+                        <span class="font-weight-bold text-muted ml-2 d-none d-md-inline">
+                            <span t-if="question.question_type == 'text_box'">or press CTRL+Enter</span>
+                            <span t-else="">or press Enter</span>
+                        </span>
                     </div>
                 </div>
             </t>
@@ -271,17 +275,16 @@
                     </div>
                 </div>
             </div>
-            <div class="container o_survey_result p-4" t-if="graph_data">
-                <div class="tab-content">
-                    <div role="tabpanel" class="tab-pane active survey_graph"
-                         t-att-data-scoring_percentage="answer.scoring_percentage"
-                         t-att-id="'survey_graph_question_%d' % answer.id"
-                         t-att-data-question_id="answer.id"
-                         data-graph-type="doughnut"
-                         t-att-data-graph-data="graph_data">
-                        <canvas id="doughnut_chart"></canvas>
-                        <span class="o_overall_performance"></span>
-                    </div>
+            <div class="o_survey_result p-4 col-12 row" t-if="graph_data">
+                <div t-if="survey.page_ids" class="survey_graph col-lg-6 d-none d-md-block"
+                        data-graph-type="by_section"
+                        t-att-data-graph-data="graph_data">
+                    <canvas id="by_section_chart"></canvas>
+                </div>
+                <div t-attf-class="survey_graph col-lg-6 #{'offset-lg-3' if not survey.page_ids else ''}"
+                        data-graph-type="doughnut"
+                        t-att-data-graph-data="graph_data">
+                    <canvas id="doughnut_chart"></canvas>
                 </div>
             </div>
         </div>

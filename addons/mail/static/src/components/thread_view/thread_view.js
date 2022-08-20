@@ -1,40 +1,21 @@
-odoo.define('mail/static/src/components/thread_view/thread_view.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    Composer: require('mail/static/src/components/composer/composer.js'),
-    MessageList: require('mail/static/src/components/message_list/message_list.js'),
-};
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 const { useRef } = owl.hooks;
 
-class ThreadView extends Component {
+export class ThreadView extends Component {
 
     /**
-     * @param {...any} args
+     * @override
      */
-    constructor(...args) {
-        super(...args);
-        useStore((...args) => this._useStoreSelector(...args));
-        /**
-         * Reference of the composer. Useful to set focus on composer when
-         * thread has the focus.
-         */
-        this._composerRef = useRef('composer');
+    setup() {
+        super.setup();
         /**
          * Reference of the message list. Useful to determine scroll positions.
          */
         this._messageListRef = useRef('messageList');
-    }
-
-    mounted() {
-        this._update();
-    }
-
-    patched() {
-        this._update();
     }
 
     //--------------------------------------------------------------------------
@@ -42,23 +23,15 @@ class ThreadView extends Component {
     //--------------------------------------------------------------------------
 
     /**
-     * Focus the thread. If it has a composer, focus it.
+     * Get the scroll height in the message list.
+     *
+     * @returns {integer|undefined}
      */
-    focus() {
-        if (!this._composerRef.comp) {
-            return;
+    getScrollHeight() {
+        if (!this._messageListRef.comp) {
+            return undefined;
         }
-        this._composerRef.comp.focus();
-    }
-
-    /**
-     * Focusout the thread.
-     */
-    focusout() {
-        if (!this._composerRef.comp) {
-            return;
-        }
-        this._composerRef.comp.focusout();
+        return this._messageListRef.comp.getScrollHeight();
     }
 
     /**
@@ -74,81 +47,71 @@ class ThreadView extends Component {
     }
 
     /**
+     * @private
+     * @param {MouseEvent} ev
+     */
+    onScroll(ev) {
+        if (!this._messageListRef.comp) {
+            return;
+        }
+        this._messageListRef.comp.onScroll(ev);
+    }
+
+    /**
      * @returns {mail.thread_view}
      */
     get threadView() {
-        return this.env.models['mail.thread_view'].get(this.props.threadViewLocalId);
+        return this.messaging && this.messaging.models['mail.thread_view'].get(this.props.threadViewLocalId);
     }
 
     //--------------------------------------------------------------------------
-    // Private
+    // Handlers
     //--------------------------------------------------------------------------
 
     /**
-     * Called when thread component is mounted or patched.
-     *
      * @private
      */
-    _update() {
-        const messageList = this._messageListRef.comp;
-        this.trigger('o-rendered');
-        /**
-         * Control panel may offset scrolling position of message list due to
-         * height of buttons. To prevent this, control panel re-render is
-         * triggered before message list. Correct way should be to adjust
-         * scroll positions after everything has been rendered, but OWL doesn't
-         * have such an API for the moment.
-         */
-        if (messageList) {
-            messageList.adjustFromComponentHints();
+    _onClickRetryLoadMessages() {
+        if (!this.threadView) {
+            return;
         }
-    }
-
-    /**
-     * Returns data selected from the store.
-     *
-     * @private
-     * @param {Object} props
-     * @returns {Object}
-     */
-    _useStoreSelector(props) {
-        const threadView = this.env.models['mail.thread_view'].get(props.threadViewLocalId);
-        const thread = threadView ? threadView.thread : undefined;
-        const threadCache = threadView ? threadView.threadCache : undefined;
-        return {
-            isDeviceMobile: this.env.messaging.device.isMobile,
-            thread: thread ? thread.__state : undefined,
-            threadCache: threadCache ? threadCache.__state : undefined,
-            threadView: threadView ? threadView.__state : undefined,
-        };
+        if (!this.threadView.threadCache) {
+            return;
+        }
+        this.threadView.threadCache.update({ hasLoadingFailed: false });
     }
 
 }
 
 Object.assign(ThreadView, {
-    components,
     defaultProps: {
-        composerAttachmentsDetailsMode: 'auto',
-        hasComposer: false,
-        hasMessageCheckbox: false,
-        hasSquashCloseMessages: false,
-        haveMessagesMarkAsReadIcon: false,
-        haveMessagesReplyIcon: false,
-        order: 'asc',
+        hasComposerDiscardButton: false,
+        hasComposerThreadName: false,
         showComposerAttachmentsExtensions: true,
         showComposerAttachmentsFilenames: true,
     },
     props: {
-        composerAttachmentsDetailsMode: {
-            type: String,
-            validate: prop => ['auto', 'card', 'hover', 'none'].includes(prop),
+        /**
+         * Function returns the exact scrollable element from the parent
+         * to manage proper scroll heights which affects the load more messages.
+         */
+        getScrollableElement: {
+            type: Function,
+            optional: true,
         },
-        hasComposer: Boolean,
         hasComposerCurrentPartnerAvatar: {
             type: Boolean,
             optional: true,
         },
+        hasComposerDiscardButton: {
+            type: Boolean,
+            optional: true,
+        },
         hasComposerSendButton: {
+            type: Boolean,
+            optional: true,
+        },
+        hasComposerThreadName: {
             type: Boolean,
             optional: true,
         },
@@ -161,20 +124,8 @@ Object.assign(ThreadView, {
             type: Boolean,
             optional: true,
         },
-        hasMessageCheckbox: Boolean,
         hasScrollAdjust: {
             type: Boolean,
-            optional: true,
-        },
-        hasSquashCloseMessages: Boolean,
-        haveMessagesMarkAsReadIcon: Boolean,
-        haveMessagesReplyIcon: Boolean,
-        order: {
-            type: String,
-            validate: prop => ['asc', 'desc'].includes(prop),
-        },
-        selectedMessageLocalId: {
-            type: String,
             optional: true,
         },
         showComposerAttachmentsExtensions: Boolean,
@@ -184,6 +135,4 @@ Object.assign(ThreadView, {
     template: 'mail.ThreadView',
 });
 
-return ThreadView;
-
-});
+registerMessagingComponent(ThreadView);

@@ -23,6 +23,7 @@ class TestUi(HttpCaseWithUserDemo, HttpCaseWithUserPortal):
 
         product_attribute = self.env['product.attribute'].create({
             'name': 'Legs',
+            'visibility': 'visible',
             'sequence': 10,
         })
         product_attribute_value_1 = self.env['product.attribute.value'].create({
@@ -52,6 +53,11 @@ class TestUi(HttpCaseWithUserDemo, HttpCaseWithUserPortal):
                 ptav.price_extra = 0
             else:
                 ptav.price_extra = 50.4
+
+        # Update the pricelist currency regarding env.company_id currency_id in case company has changed currency with COA installation.
+        website = self.env['website'].get_current_website()
+        pricelist = website.get_current_pricelist()
+        pricelist.write({'currency_id': self.env.company.currency_id.id})
 
     def test_01_admin_shop_customize_tour(self):
         # Enable Variant Group
@@ -133,14 +139,12 @@ class TestUi(HttpCaseWithUserDemo, HttpCaseWithUserPortal):
             'value_ids': [(4, product_attribute_value_1.id), (4, product_attribute_value_2.id)],
         })
         self.product_product_11_product_template.attribute_line_ids[0].product_template_value_ids[1].price_extra = 6.40
-        self.product_product_4_product_template.optional_product_ids = [(4, self.product_product_11_product_template.id)]
 
         # Setup a second optional product
         self.product_product_1_product_template = self.env['product.template'].create({
             'name': 'Chair floor protection',
             'list_price': 12.0,
         })
-        self.product_product_11_product_template.optional_product_ids = [(4, self.product_product_1_product_template.id)]
 
         # fix runbot, sometimes one pricelist is chosen, sometimes the other...
         pricelists = self.env['website'].get_current_website().get_current_pricelist() | self.env.ref('product.list0')
@@ -313,3 +317,6 @@ class TestUi(HttpCaseWithUserDemo, HttpCaseWithUserPortal):
         config.execute()
 
         self.start_tour("/", 'shop_list_view_b2c', login="admin")
+
+    def test_07_editor_shop(self):
+        self.start_tour("/", 'shop_editor', login="admin")

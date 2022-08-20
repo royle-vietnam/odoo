@@ -1,17 +1,10 @@
-odoo.define('mail/static/src/components/messaging_menu/messaging_menu.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    AutocompleteInput: require('mail/static/src/components/autocomplete_input/autocomplete_input.js'),
-    MobileMessagingNavbar: require('mail/static/src/components/mobile_messaging_navbar/mobile_messaging_navbar.js'),
-    NotificationList: require('mail/static/src/components/notification_list/notification_list.js'),
-};
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
-const { useRef } = owl.hooks;
 
-class MessagingMenu extends Component {
+export class MessagingMenu extends Component {
 
     /**
      * @override
@@ -24,20 +17,27 @@ class MessagingMenu extends Component {
          * item is not considered as a click away from messaging menu in mobile.
          */
         this.id = _.uniqueId('o_messagingMenu_');
-        useStore(props => {
-            return {
-                isDeviceMobile: this.env.messaging && this.env.messaging.device.isMobile,
-                isDiscussOpen: this.env.messaging && this.env.messaging.discuss.isOpen,
-                isMessagingInitialized: this.env.isMessagingInitialized(),
-                messagingMenu: this.env.messaging && this.env.messaging.messagingMenu.__state,
-            };
-        });
 
         // bind since passed as props
         this._onMobileNewMessageInputSelect = this._onMobileNewMessageInputSelect.bind(this);
         this._onMobileNewMessageInputSource = this._onMobileNewMessageInputSource.bind(this);
-
         this._onClickCaptureGlobal = this._onClickCaptureGlobal.bind(this);
+        this._constructor(...args);
+    }
+
+    /**
+     * Allows patching constructor.
+     */
+    _constructor() {}
+
+    /**
+     * @override
+     */
+    setup() {
+        // for now, the legacy env is needed for internal functions such as
+        // `useModels` to work
+        this.env = owl.Component.env;
+        super.setup();
     }
 
     mounted() {
@@ -53,17 +53,10 @@ class MessagingMenu extends Component {
     //--------------------------------------------------------------------------
 
     /**
-     * @returns {mail.discuss}
-     */
-    get discuss() {
-        return this.env.messaging && this.env.messaging.discuss;
-    }
-
-    /**
      * @returns {mail.messaging_menu}
      */
     get messagingMenu() {
-        return this.env.messaging && this.env.messaging.messagingMenu;
+        return this.messaging && this.messaging.messagingMenu;
     }
 
     /**
@@ -103,22 +96,11 @@ class MessagingMenu extends Component {
      * @param {MouseEvent} ev
      */
     _onClickCaptureGlobal(ev) {
-        if (!this.env.messaging) {
-            /**
-             * Messaging not created, which means essential models like
-             * messaging menu are not ready, so user interactions are omitted
-             * during this (short) period of time.
-             */
-            return;
-        }
-        // in mobile: keeps the messaging menu open in background
-        // TODO: maybe need to move this to a mobile component?
-        // task-2089887
-        if (this.env.messaging.device.isMobile) {
+        if (!this.messagingMenu) {
             return;
         }
         // ignore click inside the menu
-        if (this.el.contains(ev.target)) {
+        if (!this.el || this.el.contains(ev.target)) {
             return;
         }
         // in all other cases: close the messaging menu when clicking outside
@@ -138,8 +120,8 @@ class MessagingMenu extends Component {
      * @param {MouseEvent} ev
      */
     _onClickNewMessage(ev) {
-        if (!this.env.messaging.device.isMobile) {
-            this.env.messaging.chatWindowManager.openNewMessage();
+        if (!this.messaging.device.isMobile) {
+            this.messaging.chatWindowManager.openNewMessage();
             this.messagingMenu.close();
         } else {
             this.messagingMenu.toggleMobileNewMessage();
@@ -153,12 +135,7 @@ class MessagingMenu extends Component {
     _onClickToggler(ev) {
         // avoid following dummy href
         ev.preventDefault();
-        if (!this.env.messaging) {
-            /**
-             * Messaging not created, which means essential models like
-             * messaging menu are not ready, so user interactions are omitted
-             * during this (short) period of time.
-             */
+        if (!this.messagingMenu) {
             return;
         }
         this.messagingMenu.toggleOpen();
@@ -181,7 +158,7 @@ class MessagingMenu extends Component {
      * @param {integer} ui.item.id
      */
     _onMobileNewMessageInputSelect(ev, ui) {
-        this.env.messaging.openChat({ partnerId: ui.item.id });
+        this.messaging.openChat({ partnerId: ui.item.id });
     }
 
     /**
@@ -192,7 +169,7 @@ class MessagingMenu extends Component {
      */
     _onMobileNewMessageInputSource(req, res) {
         const value = _.escape(req.term);
-        this.env.models['mail.partner'].imSearch({
+        this.messaging.models['mail.partner'].imSearch({
             callback: partners => {
                 const suggestions = partners.map(partner => {
                     return {
@@ -222,11 +199,8 @@ class MessagingMenu extends Component {
 }
 
 Object.assign(MessagingMenu, {
-    components,
     props: {},
     template: 'mail.MessagingMenu',
 });
 
-return MessagingMenu;
-
-});
+registerMessagingComponent(MessagingMenu);

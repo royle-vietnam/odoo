@@ -1,23 +1,17 @@
-odoo.define('mail/static/src/components/activity/activity.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    ActivityMarkDonePopover: require('mail/static/src/components/activity_mark_done_popover/activity_mark_done_popover.js'),
-    FileUploader: require('mail/static/src/components/file_uploader/file_uploader.js'),
-    MailTemplate: require('mail/static/src/components/mail_template/mail_template.js'),
-};
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
-const {
+import {
     auto_str_to_date,
     getLangDateFormat,
     getLangDatetimeFormat,
-} = require('web.time');
+} from 'web.time';
 
 const { Component, useState } = owl;
 const { useRef } = owl.hooks;
 
-class Activity extends Component {
+export class Activity extends Component {
 
     /**
      * @override
@@ -26,17 +20,6 @@ class Activity extends Component {
         super(...args);
         this.state = useState({
             areDetailsVisible: false,
-        });
-        useStore(props => {
-            const activity = this.env.models['mail.activity'].get(props.activityLocalId);
-            return {
-                activity: activity ? activity.__state : undefined,
-                assigneeNameOrDisplayName: (
-                    activity &&
-                    activity.assignee &&
-                    activity.assignee.nameOrDisplayName
-                ),
-            };
         });
         /**
          * Reference of the file uploader.
@@ -53,7 +36,7 @@ class Activity extends Component {
      * @returns {mail.activity}
      */
     get activity() {
-        return this.env.models['mail.activity'].get(this.props.activityLocalId);
+        return this.messaging && this.messaging.models['mail.activity'].get(this.props.activityLocalId);
     }
 
     /**
@@ -126,8 +109,9 @@ class Activity extends Component {
      * @param {Object} ev.detail
      * @param {mail.attachment} ev.detail.attachment
      */
-    _onAttachmentCreated(ev) {
-        this.activity.markAsDone({ attachments: [ev.detail.attachment] });
+    async _onAttachmentCreated(ev) {
+        await this.activity.markAsDone({ attachments: [ev.detail.attachment] });
+        this.trigger('o-attachments-changed');
     }
 
     /**
@@ -140,7 +124,7 @@ class Activity extends Component {
             ev.target.dataset.oeId &&
             ev.target.dataset.oeModel
         ) {
-            this.env.messaging.openProfile({
+            this.messaging.openProfile({
                 id: Number(ev.target.dataset.oeId),
                 model: ev.target.dataset.oeModel,
             });
@@ -153,15 +137,17 @@ class Activity extends Component {
      * @private
      * @param {MouseEvent} ev
      */
-    _onClickCancel(ev) {
+    async _onClickCancel(ev) {
         ev.preventDefault();
-        this.activity.deleteServerRecord();
+        await this.activity.deleteServerRecord();
+        this.trigger('reload', { keepChanges: true });
     }
 
     /**
      * @private
      */
-    _onClickDetailsButton() {
+    _onClickDetailsButton(ev) {
+        ev.preventDefault();
         this.state.areDetailsVisible = !this.state.areDetailsVisible;
     }
 
@@ -169,8 +155,9 @@ class Activity extends Component {
      * @private
      * @param {MouseEvent} ev
      */
-    _onClickEdit(ev) {
-        this.activity.edit();
+    async _onClickEdit(ev) {
+        await this.activity.edit();
+        this.trigger('reload', { keepChanges: true });
     }
 
     /**
@@ -184,13 +171,10 @@ class Activity extends Component {
 }
 
 Object.assign(Activity, {
-    components,
     props: {
         activityLocalId: String,
     },
     template: 'mail.Activity',
 });
 
-return Activity;
-
-});
+registerMessagingComponent(Activity);

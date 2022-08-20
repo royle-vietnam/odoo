@@ -11,7 +11,10 @@
     ],
     'installable': True,
     'auto_install': False,
-    'qweb': [
-        'static/src/xml/js_templates.xml',
-    ]
+    'assets': {
+        'web.assets_qweb': [
+            'test_translation_import/static/src/xml/js_templates.xml',
+        ],
+    },
+    'license': 'LGPL-3',
 }

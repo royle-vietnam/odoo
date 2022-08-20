@@ -22,11 +22,12 @@ Bu modül kurulduktan sonra, Muhasebe yapılandırma sihirbazı çalışır
         'data/l10n_tr_chart_data.xml',
         'data/account.account.template.csv',
         'data/l10n_tr_chart_post_data.xml',
-        'data/account_data.xml',
+        'data/account_tax_group_data.xml',
         'data/account_tax_template_data.xml',
         'data/account_chart_template_data.xml',
     ],
     'demo': [
         'demo/demo_company.xml',
     ],
+    'license': 'LGPL-3',
 }

@@ -1,24 +1,11 @@
-odoo.define('mail/static/src/models/activity_type/activity_type.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const { registerNewModel } = require('mail/static/src/model/model_core.js');
-const { attr, one2many } = require('mail/static/src/model/model_field.js');
+import { registerNewModel } from '@mail/model/model_core';
+import { attr, one2many } from '@mail/model/model_field';
 
 function factory(dependencies) {
 
     class ActivityType extends dependencies['mail.model'] {
-
-        //----------------------------------------------------------------------
-        // Private
-        //----------------------------------------------------------------------
-
-        /**
-         * @override
-         */
-        static _createRecordLocalId(data) {
-            return `${this.modelName}_${data.id}`;
-        }
-
     }
 
     ActivityType.fields = {
@@ -26,14 +13,15 @@ function factory(dependencies) {
             inverse: 'type',
         }),
         displayName: attr(),
-        id: attr(),
+        id: attr({
+            readonly: true,
+            required: true,
+        }),
     };
-
+    ActivityType.identifyingFields = ['id'];
     ActivityType.modelName = 'mail.activity_type';
 
     return ActivityType;
 }
 
 registerNewModel('mail.activity_type', factory);
-
-});

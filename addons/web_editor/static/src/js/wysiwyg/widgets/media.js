@@ -11,6 +11,7 @@ var Widget = require('web.Widget');
 var session = require('web.session');
 const {removeOnImageChangeAttrs} = require('web_editor.image_processing');
 const {getCSSVariableValue, DEFAULT_PALETTE} = require('web_editor.utils');
+const { UploadProgressToast } = require('@web_editor/js/wysiwyg/widgets/upload_progress_toast');
 
 var QWeb = core.qweb;
 var _t = core._t;
@@ -63,6 +64,7 @@ var MediaWidget = Widget.extend({
 
 var SearchableMediaWidget = MediaWidget.extend({
     events: _.extend({}, MediaWidget.prototype.events || {}, {
+        'keydown .o_we_search': '_onSearchKeydown',
         'input .o_we_search': '_onSearchInput',
     }),
 
@@ -106,9 +108,26 @@ var SearchableMediaWidget = MediaWidget.extend({
     /**
      * @private
      */
+    _onSearchKeydown: function (ev) {
+        // If the template contains a form that has only one input, the enter
+        // will reload the page as the html 2.0 specify this behavior.
+        if (ev.originalEvent && (ev.originalEvent.code === "Enter" || ev.originalEvent.key === "Enter")) {
+            ev.preventDefault();
+        }
+    },
+    /**
+     * @private
+     */
     _onSearchInput: function (ev) {
         this.attachments = [];
-        this.search($(ev.currentTarget).val() || '').then(() => this._renderThumbnails());
+        // Disable user interactions with attachments while updating results.
+        this.$('.o_we_existing_attachments').css('pointer-events', 'none');
+        this.search($(ev.currentTarget).val() || "")
+            .then(() => this._renderThumbnails())
+            .then(() => {
+                // Re-enable user interactions after updating results.
+                this.$(".o_we_existing_attachments").css("pointer-events", "");
+            });
         this.hasSearched = true;
     },
 });
@@ -128,7 +147,8 @@ var FileWidget = SearchableMediaWidget.extend({
     }),
     existingAttachmentsTemplate: undefined,
 
-    IMAGE_MIMETYPES: ['image/gif', 'image/jpe', 'image/jpeg', 'image/jpg', 'image/gif', 'image/png', 'image/svg+xml'],
+    IMAGE_MIMETYPES: ['image/jpg', 'image/jpeg', 'image/jpe', 'image/png', 'image/svg+xml', 'image/gif'],
+    IMAGE_EXTENSIONS: ['.jpg', '.jpeg', '.jpe', '.png', '.svg', '.gif'],
     NUMBER_OF_ATTACHMENTS_TO_DISPLAY: 30,
     MAX_DB_ATTACHMENTS: 5,
 
@@ -143,6 +163,7 @@ var FileWidget = SearchableMediaWidget.extend({
 
         this.options = _.extend({
             mediaWidth: media && media.parentElement && $(media.parentElement).width(),
+            useMediaLibrary: true,
         }, options || {});
 
         this.attachments = [];
@@ -190,6 +211,17 @@ var FileWidget = SearchableMediaWidget.extend({
             }
             return def;
         });
+    },
+    /**
+     * @override
+     */
+    destroy() {
+        if (this.uploader) {
+            // Prevent uploader from being destroyed with call to super so it can linger
+            this.uploader.setParent(null);
+            this.uploader.close(2000);
+        }
+        this._super(...arguments);
     },
 
     //--------------------------------------------------------------------------
@@ -250,15 +282,7 @@ var FileWidget = SearchableMediaWidget.extend({
      * @override
      */
     _clear: function () {
-        if (this.$media.is('img')) {
-            return;
-        }
-        var allImgClasses = /(^|\s+)((img(\s|$)|img-(?!circle|rounded|thumbnail))[^\s]*)/g;
-        var allImgClassModifiers = /(^|\s+)(rounded-circle|shadow|rounded|img-thumbnail|mx-auto)([^\s]*)/g;
-        this.media.className = this.media.className && this.media.className
-            .replace('o_we_custom_image', '')
-            .replace(allImgClasses, ' ')
-            .replace(allImgClassModifiers, ' ');
+        this.media.className = this.media.className && this.media.className.replace(/(^|\s+)(o_image)(?=\s|$)/g, ' ');
     },
     /**
      * Returns the domain for attachments used in media dialog.
@@ -300,6 +324,9 @@ var FileWidget = SearchableMediaWidget.extend({
         domain = domain.concat(this.options.mimetypeDomain);
         if (needle && needle.length) {
             domain.push(['name', 'ilike', needle]);
+        }
+        if (!this.options.useMediaLibrary) {
+            domain.push('|', ['url', '=', false], '!', ['url', '=ilike', '/web_editor/shape/%']);
         }
         domain.push('!', ['name', '=like', '%.crop']);
         domain.push('|', ['type', '=', 'binary'], '!', ['url', '=like', '/%/static/%']);
@@ -383,6 +410,7 @@ var FileWidget = SearchableMediaWidget.extend({
             media.id, {
                 query: media.query || '',
                 is_dynamic_svg: !!media.isDynamicSVG,
+                dynamic_colors: media.dynamicColors,
             }
         ]));
         let mediaAttachments = [];
@@ -395,10 +423,15 @@ var FileWidget = SearchableMediaWidget.extend({
             });
         }
         const selected = this.selectedAttachments.concat(mediaAttachments).map(attachment => {
-            // Color-customize dynamic SVGs with the primary theme color
-            if (attachment.image_src.startsWith('/web_editor/shape/')) {
+            // Color-customize dynamic SVGs with the theme colors
+            if (attachment.image_src && attachment.image_src.startsWith('/web_editor/shape/')) {
                 const colorCustomizedURL = new URL(attachment.image_src, window.location.origin);
-                colorCustomizedURL.searchParams.set('c1', getCSSVariableValue('o-color-1'));
+                colorCustomizedURL.searchParams.forEach((value, key) => {
+                    const match = key.match(/^c([1-5])$/);
+                    if (match) {
+                        colorCustomizedURL.searchParams.set(key, getCSSVariableValue(`o-color-${match[1]}`))
+                    }
+                })
                 attachment.image_src = colorCustomizedURL.pathname + colorCustomizedURL.search;
             }
             return attachment;
@@ -408,7 +441,7 @@ var FileWidget = SearchableMediaWidget.extend({
         }
 
         const img = selected[0];
-        if (!img || !img.id) {
+        if (!img || !img.id || this.$media.attr('src') === img.image_src) {
             return this.media;
         }
 
@@ -448,7 +481,7 @@ var FileWidget = SearchableMediaWidget.extend({
             }
             href += 'unique=' + img.checksum + '&download=true';
             this.$media.attr('href', href);
-            this.$media.addClass('o_image').attr('title', img.name).attr('data-mimetype', img.mimetype);
+            this.$media.addClass('o_image').attr('title', img.name);
         }
 
         this.$media.attr('alt', img.alt || img.description || '');
@@ -461,6 +494,10 @@ var FileWidget = SearchableMediaWidget.extend({
         removeOnImageChangeAttrs.forEach(attr => {
             delete this.media.dataset[attr];
         });
+        // Add mimetype for documents
+        if (!img.image_src) {
+            this.media.dataset.mimetype = img.mimetype;
+        }
         this.media.classList.remove('o_modified_image_to_save');
         this.$media.trigger('image_changed');
         return this.media;
@@ -555,40 +592,49 @@ var FileWidget = SearchableMediaWidget.extend({
      * @private
      * @returns {Promise}
      */
-    _addData: function () {
-        var self = this;
-        var uploadMutex = new concurrency.Mutex();
+    async _addData() {
+        let files = this.$fileInput[0].files;
+        if (!files.length) {
+            // Case if the input is emptied, return resolved promise
+            return;
+        }
+
+        const uploadMutex = new concurrency.Mutex();
 
         // Upload the smallest file first to block the user the least possible.
-        var files = _.sortBy(this.$fileInput[0].files, 'size');
-
-        _.each(files, function (file) {
+        files = _.sortBy(files, 'size');
+        await this._setUpProgressToast(files);
+        _.each(files, (file, index) => {
             // Upload one file at a time: no need to parallel as upload is
             // limited by bandwidth.
-            uploadMutex.exec(function () {
-                return utils.getDataURLFromFile(file).then(function (result) {
-                    return self._rpc({
-                        route: '/web_editor/attachment/add_data',
-                        params: {
-                            'name': file.name,
-                            'data': result.split(',')[1],
-                            'res_id': self.options.res_id,
-                            'res_model': self.options.res_model,
-                            'width': 0,
-                            'quality': 0,
-                        },
-                    }).then(function (attachment) {
-                        self._handleNewAttachment(attachment);
-                    });
-                });
+            uploadMutex.exec(async () => {
+                const dataURL = await utils.getDataURLFromFile(file);
+                const attachment = await this.uploader.rpcShowProgress({
+                    route: '/web_editor/attachment/add_data',
+                    params: {
+                        'name': file.name,
+                        'data': dataURL.split(',')[1],
+                        'res_id': this.options.res_id,
+                        'res_model': this.options.res_model,
+                        'is_image': this.widgetType === 'image',
+                        'width': 0,
+                        'quality': 0,
+                    }
+                }, index);
+                if (!attachment.error) {
+                    this._handleNewAttachment(attachment);
+                }
             });
         });
 
-        return uploadMutex.getUnlockedDef().then(function () {
-            if (!self.options.multiImages && !self.noSave) {
-                self.trigger_up('save_request');
+        return uploadMutex.getUnlockedDef().then(() => {
+            if (!this.uploader.hasError) {
+                this.uploader.close(3000);
             }
-            self.noSave = false;
+            if (!this.options.multiImages && !this.noSave) {
+                this.trigger_up('save_request');
+            }
+            this.noSave = false;
         });
     },
     /**
@@ -630,11 +676,11 @@ var FileWidget = SearchableMediaWidget.extend({
      * @private
      */
     _onURLInputChange: function () {
-        var inputValue = this.$urlInput.val();
+        const inputValue = this.$urlInput.val().split('?')[0];
         var emptyValue = (inputValue === '');
 
         var isURL = /^.+\..+$/.test(inputValue); // TODO improve
-        var isImage = _.any(['.gif', '.jpeg', '.jpe', '.jpg', '.png'], function (format) {
+        var isImage = _.any(this.IMAGE_EXTENSIONS, function (format) {
             return inputValue.endsWith(format);
         });
 
@@ -693,6 +739,21 @@ var FileWidget = SearchableMediaWidget.extend({
         this.numberOfAttachmentsToDisplay = this.NUMBER_OF_ATTACHMENTS_TO_DISPLAY;
         this._super.apply(this, arguments);
     },
+
+    //--------------------------------------------------------------------------
+    // Private
+    //--------------------------------------------------------------------------
+
+    /**
+     * Sets up a progress bar for every file being uploaded in a toast.
+     *
+     * @private
+     * @param {Object[]} files
+     */
+    _setUpProgressToast: async function (files) {
+        this.uploader = new UploadProgressToast(this, files);
+        await this.uploader.appendTo(document.body);
+    },
 });
 
 /**
@@ -712,6 +773,7 @@ var ImageWidget = FileWidget.extend({
      */
     init: function (parent, media, options) {
         this.searchService = 'all';
+        this.widgetType = 'image';
         options = _.extend({
             accept: 'image/*',
             mimetypeDomain: [['mimetype', 'in', this.IMAGE_MIMETYPES]],
@@ -744,13 +806,21 @@ var ImageWidget = FileWidget.extend({
         }
         const result = await this._super(number, offset);
         // Color-substitution for dynamic SVG attachment
-        const primaryColor = getCSSVariableValue('o-color-1');
+        const primaryColors = {};
+        for (let color = 1; color <= 5; color++) {
+            primaryColors[color] = getCSSVariableValue('o-color-' + color);
+        }
         this.attachments.forEach(attachment => {
             if (attachment.image_src.startsWith('/')) {
                 const newURL = new URL(attachment.image_src, window.location.origin);
-                // Set the main color of dynamic SVGs to o-color-1
+                // Set the main colors of dynamic SVGs to o-color-1~5
                 if (attachment.image_src.startsWith('/web_editor/shape/')) {
-                    newURL.searchParams.set('c1', primaryColor);
+                    newURL.searchParams.forEach((value, key) => {
+                        const match = key.match(/^c([1-5])$/);
+                        if (match) {
+                            newURL.searchParams.set(key, primaryColors[match[1]]);
+                        }
+                    })
                 } else {
                     // Set height so that db images load faster
                     newURL.searchParams.set('height', 2 * this.MIN_ROW_HEIGHT);
@@ -758,7 +828,7 @@ var ImageWidget = FileWidget.extend({
                 attachment.thumbnail_src = newURL.pathname + newURL.search;
             }
         });
-        if (this.needle) {
+        if (this.needle && this.options.useMediaLibrary) {
             try {
                 const response = await this._rpc({
                     route: '/web_editor/media_library_search',
@@ -798,12 +868,10 @@ var ImageWidget = FileWidget.extend({
      */
     _updateAddUrlUi: function (emptyValue, isURL, isImage) {
         this._super.apply(this, arguments);
-        this.$addUrlButton.text((isURL && !isImage) ? _t("Add as document") : _t("Add image"));
         const warning = isURL && !isImage;
         this.$urlWarning.toggleClass('d-none', !warning);
-        if (warning) {
-            this.$urlSuccess.addClass('d-none');
-        }
+        this.$addUrlButton.prop('disabled', warning || !isURL);
+        this.$urlSuccess.toggleClass('d-none', warning || !isURL);
     },
     /**
      * @override
@@ -884,17 +952,25 @@ var ImageWidget = FileWidget.extend({
             try {
                 const response = await fetch(mediaUrl);
                 if (response.headers.get('content-type') === 'image/svg+xml') {
-                    const svg = await response.text();
-                    const colorRegex = new RegExp(DEFAULT_PALETTE['1'], 'gi');
-                    if (colorRegex.test(svg)) {
-                        const fileName = mediaUrl.split('/').pop();
-                        const file = new File([svg.replace(colorRegex, getCSSVariableValue('o-color-1'))], fileName, {
+                    let svg = await response.text();
+                    const fileName = mediaUrl.split('/').pop();
+                    const dynamicColors = {};
+                    const combinedColorsRegex = new RegExp(Object.values(DEFAULT_PALETTE).join('|'), 'gi');
+                    svg = svg.replace(combinedColorsRegex, match => {
+                        const colorId = Object.keys(DEFAULT_PALETTE).find(key => DEFAULT_PALETTE[key] === match.toUpperCase());
+                        const colorKey = 'c' + colorId
+                        dynamicColors[colorKey] = getCSSVariableValue('o-color-' + colorId);
+                        return dynamicColors[colorKey];
+                    });
+                    if (Object.keys(dynamicColors).length) {
+                        const file = new File([svg], fileName, {
                             type: "image/svg+xml",
                         });
                         img.src = URL.createObjectURL(file);
                         const media = this.libraryMedia.find(media => media.id === parseInt(cell.dataset.mediaId));
                         if (media) {
                             media.isDynamicSVG = true;
+                            media.dynamicColors = dynamicColors;
                         }
                         // We changed the src: wait for the next load event to do the styling
                         return;
@@ -904,7 +980,25 @@ var ImageWidget = FileWidget.extend({
                 console.error('CORS is misconfigured on the API server, image will be treated as non-dynamic.');
             }
         }
-        const aspectRatio = img.naturalWidth / img.naturalHeight;
+        let aspectRatio = img.naturalWidth / img.naturalHeight;
+        // Special case for SVGs with no instrinsic sizes on firefox
+        // See https://github.com/whatwg/html/issues/3510#issuecomment-369982529
+        if (img.naturalHeight === 0) {
+            img.width = 1000;
+            // Position fixed so that the image doesn't affect layout while rendering
+            img.style.position = 'fixed';
+            // Make invisible so the image doesn't briefly appear on the screen
+            img.style.opacity = '0';
+            // Image needs to be in the DOM for dimensions to be correct after render
+            const originalParent = img.parentElement;
+            document.body.appendChild(img);
+
+            aspectRatio = img.width / img.height;
+            originalParent.appendChild(img);
+            img.removeAttribute('width');
+            img.style.removeProperty('position');
+            img.style.removeProperty('opacity');
+        }
         const width = aspectRatio * this.MIN_ROW_HEIGHT;
         cell.style.flexGrow = width;
         cell.style.flexBasis = `${width}px`;
@@ -932,6 +1026,15 @@ var ImageWidget = FileWidget.extend({
     _onSearchInput: function (ev) {
         this.libraryMedia = [];
         this._super(...arguments);
+        this.$('.o_we_search_select').removeClass('d-none');
+    },
+    /**
+     * @override
+     */
+    _clear: function (type) {
+        // Not calling _super: we don't want to call the document widget's _clear method on images
+        var allImgClasses = /(^|\s+)(img|img-\S*|o_we_custom_image|rounded-circle|rounded|thumbnail|shadow|w-25|w-50|w-75|w-100|o_modified_image_to_save)(?=\s|$)/g;
+        this.media.className = this.media.className && this.media.className.replace(allImgClasses, ' ');
     },
 });
 
@@ -958,18 +1061,6 @@ var DocumentWidget = FileWidget.extend({
     // Private
     //--------------------------------------------------------------------------
 
-    /**
-     * @override
-     */
-    _updateAddUrlUi: function (emptyValue, isURL, isImage) {
-        this._super.apply(this, arguments);
-        this.$addUrlButton.text((isURL && isImage) ? _t("Add as image") : _t("Add document"));
-        const warning = isURL && isImage;
-        this.$urlWarning.toggleClass('d-none', !warning);
-        if (warning) {
-            this.$urlSuccess.addClass('d-none');
-        }
-    },
     /**
      * @override
      */
@@ -1012,10 +1103,10 @@ var IconWidget = SearchableMediaWidget.extend({
             var cls = classes[i];
             if (_.contains(this.alias, cls)) {
                 this.selectedIcon = cls;
+                this.initialIcon = cls;
                 this._highlightSelectedIcon();
             }
         }
-        this.nonIconClasses = _.without(classes, 'media_iframe_video', this.selectedIcon);
 
         return this._super.apply(this, arguments);
     },
@@ -1027,21 +1118,33 @@ var IconWidget = SearchableMediaWidget.extend({
     /**
      * @override
      */
-    save: function () {
+    save: async function () {
         var style = this.$media.attr('style') || '';
         var iconFont = this._getFont(this.selectedIcon) || {base: 'fa', font: ''};
-        var finalClasses = _.uniq(this.nonIconClasses.concat([iconFont.base, iconFont.font]));
-        if (!this.$media.is('span')) {
+        if (!this.$media.is('span, i')) {
             var $span = $('<span/>');
-            $span.data(this.$media.data());
+            if (this.$media.length) {
+                // Make sure jquery data() is clean by signaling the removal
+                // (e.g. website wants to remove SnippetEditor references from
+                // the data).
+                // TODO make sure copying the data is in fact useful at all, but
+                // in stable it did not feel safe to remove anyway.
+                //
+                // Note: done with an array of promises filled by the event
+                // handler instead of a Promise created here to be resolved by
+                // the event handler as the event handler does not necessarily
+                // exists (in simple HTML fields for example).
+                const data = { proms: [] };
+                this.$media.trigger('before_replace_target', data);
+                await Promise.all(data.proms);
+                $span.data(this.$media.data());
+            }
             this.$media = $span;
             this.media = this.$media[0];
             style = style.replace(/\s*width:[^;]+/, '');
         }
-        this.$media.attr({
-            class: _.compact(finalClasses).join(' '),
-            style: style || null,
-        });
+        this.$media.removeClass(this.initialIcon).addClass([iconFont.base, iconFont.font]);
+        this.$media.attr('style', style || null);
         return Promise.resolve(this.media);
     },
     /**
@@ -1079,7 +1182,7 @@ var IconWidget = SearchableMediaWidget.extend({
      * @override
      */
     _clear: function () {
-        var allFaClasses = /(^|\s)(fa(\s|$)|fa-[^\s]*)/g;
+        var allFaClasses = /(^|\s)(fa|(text-|bg-|fa-)\S*|rounded-circle|rounded|thumbnail|img-thumbnail|shadow)(?=\s|$)/g;
         this.media.className = this.media.className && this.media.className.replace(allFaClasses, ' ');
     },
     /**
@@ -1134,7 +1237,7 @@ var IconWidget = SearchableMediaWidget.extend({
 });
 
 /**
- * Let users choose a video, support all summernote video, and embed iframe.
+ * Let users choose a video, support embed iframe.
  */
 var VideoWidget = MediaWidget.extend({
     template: 'wysiwyg.widgets.video',
@@ -1142,6 +1245,7 @@ var VideoWidget = MediaWidget.extend({
         'change .o_video_dialog_options input': '_onUpdateVideoOption',
         'input textarea#o_video_text': '_onVideoCodeInput',
         'change textarea#o_video_text': '_onVideoCodeChange',
+        'click .o_sample_video': '_onSampleVideoClick',
     }),
 
     /**
@@ -1151,6 +1255,8 @@ var VideoWidget = MediaWidget.extend({
         this._super.apply(this, arguments);
         this.isForBgVideo = !!options.isForBgVideo;
         this._onVideoCodeInput = _.debounce(this._onVideoCodeInput, 1000);
+        // list of videoIds from vimeo.
+        this._vimeoPreviewIds = options.vimeoPreviewIds;
     },
     /**
      * @override
@@ -1174,6 +1280,23 @@ var VideoWidget = MediaWidget.extend({
             this._updateVideo();
         }
 
+        // loads the thumbnail of vimeo video previews.
+        this.$('.o_sample_video').each((index, node) => {
+            const $node = $(node);
+            const videoId = $node.attr('data-vimeo');
+            if (!videoId) {
+                return;
+            }
+            fetch(`https://vimeo.com/api/oembed.json?url=http%3A//vimeo.com/${videoId}`)
+                .then(response=>response.json())
+                .then((response) => {
+                    $node.append($('<img>', {
+                        src: response.thumbnail_url,
+                        class: 'mw-100 mh-100 p-1',
+                    }));
+                });
+        });
+
         return this._super.apply(this, arguments);
     },
 
@@ -1186,20 +1309,30 @@ var VideoWidget = MediaWidget.extend({
      */
     save: function () {
         this._updateVideo();
+        const videoSrc = this.$content.attr('src');
         if (this.isForBgVideo) {
-            return Promise.resolve({bgVideoSrc: this.$content.attr('src')});
+            return Promise.resolve({bgVideoSrc: videoSrc});
         }
-        if (this.$('.o_video_dialog_iframe').is('iframe')) {
-            this.$media = $(
-                '<div class="media_iframe_video" data-oe-expression="' + this.$content.attr('src') + '">' +
-                    '<div class="css_editable_mode_display">&nbsp;</div>' +
-                    '<div class="media_iframe_video_size" contenteditable="false">&nbsp;</div>' +
-                    '<iframe src="' + this.$content.attr('src') + '" frameborder="0" contenteditable="false" allowfullscreen="allowfullscreen"></iframe>' +
-                '</div>'
-            );
+        if (this.$('.o_video_dialog_iframe').is('iframe') && videoSrc) {
+            this.$media = this.getWrappedIframe(videoSrc);
             this.media = this.$media[0];
         }
         return Promise.resolve(this.media);
+    },
+
+    /**
+     * Get an iframe wrapped for the website builder.
+     *
+     * @param {string} src The video url.
+     */
+    getWrappedIframe: function (src) {
+        return $(
+            '<div class="media_iframe_video" data-oe-expression="' + src + '">' +
+                '<div class="css_editable_mode_display">&nbsp;</div>' +
+                '<div class="media_iframe_video_size" contenteditable="false">&nbsp;</div>' +
+                '<iframe src="' + src + '" frameborder="0" contenteditable="false" allowfullscreen="allowfullscreen"></iframe>' +
+            '</div>'
+        );
     },
 
     //--------------------------------------------------------------------------
@@ -1345,6 +1478,19 @@ var VideoWidget = MediaWidget.extend({
         this._updateVideo();
     },
     /**
+     * changes the video preview when clicking on the thumbnail of a suggested video
+     *
+     * @private
+     * @param {OdooEvent} ev
+     */
+    _onSampleVideoClick(ev) {
+        const vimeoId = ev.currentTarget.getAttribute('data-vimeo');
+        if (vimeoId) {
+            this.$('#o_video_text').val(`https://player.vimeo.com/video/${vimeoId}`);
+            this._updateVideo();
+        }
+    },
+    /**
      * Called when the video code (URL / Iframe) change is confirmed -> Updates
      * the video preview immediately.
      *
@@ -1393,7 +1539,13 @@ var VideoWidget = MediaWidget.extend({
             const fullscreen = options.hide_fullscreen ? '&fs=0' : '';
             const ytLoop = loop ? loop + `&playlist=${matches.youtube[2]}` : '';
             const logo = options.hide_yt_logo ? '&modestbranding=1' : '';
-            embedURL = `//www.youtube${matches.youtube[1] || ''}.com/embed/${matches.youtube[2]}${autoplay}&rel=0${ytLoop}${controls}${fullscreen}${logo}`;
+            // The youtube js api is needed for autoplay on mobile. Note: this
+            // was added as a fix, old customers may have autoplay videos
+            // without this, which will make their video autoplay on desktop
+            // but not in mobile (so no behavior change was done in stable,
+            // this should not be migrated).
+            const enablejsapi = options.autoplay ? '&enablejsapi=1' : '';
+            embedURL = `//www.youtube${matches.youtube[1] || ''}.com/embed/${matches.youtube[2]}${autoplay}${enablejsapi}&rel=0${ytLoop}${controls}${fullscreen}${logo}`;
             type = 'youtube';
         } else if (matches.instagram && matches.instagram[2].length) {
             embedURL = `//www.instagram.com/p/${matches.instagram[2]}/embed/`;
@@ -1403,7 +1555,7 @@ var VideoWidget = MediaWidget.extend({
             type = 'vine';
         } else if (matches.vimeo && matches.vimeo[3].length) {
             const vimeoAutoplay = autoplay.replace('mute', 'muted');
-            embedURL = `//player.vimeo.com/video/${matches.vimeo[3]}${vimeoAutoplay}${loop}`;
+            embedURL = `//player.vimeo.com/video/${matches.vimeo[3]}${vimeoAutoplay}${loop}${controls}`;
             type = 'vimeo';
         } else if (matches.dailymotion && matches.dailymotion[2].length) {
             const videoId = matches.dailymotion[2].replace('video/', '');

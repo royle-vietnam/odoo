@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
-
+import base64
 import functools
-import logging
-
 import json
+import logging
+import os
 
 import werkzeug.urls
 import werkzeug.utils
@@ -65,6 +65,7 @@ class OAuthLogin(Home):
                 redirect_uri=return_url,
                 scope=provider['scope'],
                 state=json.dumps(state),
+                # nonce=base64.urlsafe_b64encode(os.urandom(16)),
             )
             provider['auth_link'] = "%s?%s" % (provider['auth_endpoint'], werkzeug.urls.url_encode(params))
         return providers
@@ -88,7 +89,7 @@ class OAuthLogin(Home):
         ensure_db()
         if request.httprequest.method == 'GET' and request.session.uid and request.params.get('redirect'):
             # Redirect if already logged in and redirect param is present
-            return http.redirect_with_hash(request.params.get('redirect'))
+            return request.redirect(request.params.get('redirect'))
         providers = self.list_providers()
 
         response = super(OAuthLogin, self).web_login(*args, **kw)
@@ -155,7 +156,7 @@ class OAuthController(http.Controller):
                 # oauth credentials not valid, user could be on a temporary session
                 _logger.info('OAuth2: access denied, redirect to main page in case a valid session exists, without setting cookies')
                 url = "/web/login?oauth_error=3"
-                redirect = werkzeug.utils.redirect(url, 303)
+                redirect = request.redirect(url, 303)
                 redirect.autocorrect_location_header = False
                 return redirect
             except Exception as e:

@@ -16,6 +16,7 @@
     'installable': True,
     'auto_install': True,
     'data': [
-        'views/mail_templates.xml',
+        'data/mail_templates.xml',
     ],
+    'license': 'LGPL-3',
 }

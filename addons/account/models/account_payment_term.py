@@ -16,7 +16,7 @@ class AccountPaymentTerm(models.Model):
 
     name = fields.Char(string='Payment Terms', translate=True, required=True)
     active = fields.Boolean(default=True, help="If the active field is set to False, it will allow you to hide the payment terms without removing it.")
-    note = fields.Text(string='Description on the Invoice', translate=True)
+    note = fields.Html(string='Description on the Invoice', translate=True)
     line_ids = fields.One2many('account.payment.term.line', 'payment_id', string='Terms', copy=True, default=_default_line_ids)
     company_id = fields.Many2one('res.company', string='Company')
     sequence = fields.Integer(required=True, default=10)
@@ -70,10 +70,13 @@ class AccountPaymentTerm(models.Model):
             result.append((last_date, dist))
         return result
 
+    @api.ondelete(at_uninstall=False)
+    def _unlink_except_referenced_terms(self):
+        if self.env['account.move'].search([('invoice_payment_term_id', 'in', self.ids)]):
+            raise UserError(_('You can not delete payment terms as other records still reference it. However, you can archive it.'))
+
     def unlink(self):
         for terms in self:
-            if self.env['account.move'].search([('invoice_payment_term_id', 'in', terms.ids)]):
-                raise UserError(_('You can not delete payment terms as other records still reference it. However, you can archive it.'))
             self.env['ir.property'].sudo().search(
                 [('value_reference', 'in', ['account.payment.term,%s'%payment_term.id for payment_term in terms])]
             ).unlink()

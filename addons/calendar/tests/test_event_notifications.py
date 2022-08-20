@@ -6,11 +6,12 @@ from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
 
 from odoo import fields
-from odoo.tests.common import SavepointCase, new_test_user
+from odoo.tests.common import TransactionCase, new_test_user
+from odoo.addons.base.tests.test_ir_cron import CronMixinCase
 from odoo.addons.mail.tests.common import MailCase
 
 
-class TestEventNotifications(SavepointCase, MailCase):
+class TestEventNotifications(TransactionCase, MailCase, CronMixinCase):
 
     @classmethod
     def setUpClass(cls):
@@ -54,13 +55,13 @@ class TestEventNotifications(SavepointCase, MailCase):
             'message_type': 'user_notification',
             'subtype': 'mail.mt_note',
         }):
-            self.event.start += relativedelta(days=-1)
+            self.event.start = fields.Datetime.now() + relativedelta(days=1)
 
     def test_message_date_changed(self):
         self.event.write({
             'allday': True,
-            'start_date': date(2019, 10, 15),
-            'stop_date': date(2019, 10, 15),
+            'start_date': fields.Date.today() + relativedelta(days=7),
+            'stop_date': fields.Date.today() + relativedelta(days=8),
         })
         self.event.partner_ids = self.partner
         with self.assertSinglePostNotifications([{'partner': self.partner, 'type': 'inbox'}], {
@@ -68,6 +69,16 @@ class TestEventNotifications(SavepointCase, MailCase):
             'subtype': 'mail.mt_note',
         }):
             self.event.start_date += relativedelta(days=-1)
+
+    def test_message_date_changed_past(self):
+        self.event.write({
+            'allday': True,
+            'start_date': fields.Date.today(),
+            'stop_date': fields.Date.today() + relativedelta(days=1),
+        })
+        self.event.partner_ids = self.partner
+        with self.assertNoNotifications():
+            self.event.write({'start': date(2019, 1, 1)})
 
     def test_message_set_inactive_date_changed(self):
         self.event.write({
@@ -113,41 +124,49 @@ class TestEventNotifications(SavepointCase, MailCase):
         })
         now = fields.Datetime.now()
         with patch.object(fields.Datetime, 'now', lambda: now):
-            with self.assertBus([(self.env.cr.dbname, 'calendar.alarm', self.partner.id)]):
+            with self.assertBus([(self.env.cr.dbname, 'res.partner', self.partner.id)], [
+                {
+                    "type": "calendar.alarm",
+                    "payload": [{
+                        "alarm_id": alarm.id,
+                        "event_id": self.event.id,
+                        "title": "Doom's day",
+                        "message": self.event.display_time,
+                        "timer": 20 * 60,
+                        "notify_at": fields.Datetime.to_string(now + relativedelta(minutes=20)),
+                    }],
+                },
+            ]):
                 self.event.with_context(no_mail_to_attendees=True).write({
                     'start': now + relativedelta(minutes=50),
                     'stop': now + relativedelta(minutes=55),
                     'partner_ids': [(4, self.partner.id)],
                     'alarm_ids': [(4, alarm.id)]
                 })
-            bus_message = [{
-                "alarm_id": alarm.id,
-                "event_id": self.event.id,
-                "title": "Doom's day",
-                "message": self.event.display_time,
-                "timer": 20*60,
-                "notify_at": fields.Datetime.to_string(now + relativedelta(minutes=20)),
-            }]
-            notif = self.env['calendar.alarm_manager'].with_user(self.user).get_next_notif()
-            self.assertEqual(notif, bus_message)
 
     def test_email_alarm(self):
-        alarm = self.env['calendar.alarm'].create({
-            'name': 'Alarm',
-            'alarm_type': 'email',
-            'interval': 'minutes',
-            'duration': 20,
-        })
         now = fields.Datetime.now()
-        self.event.write({
-            'start': now + relativedelta(minutes=15),
-            'stop': now + relativedelta(minutes=18),
-            'partner_ids': [(4, self.partner.id)],
-            'alarm_ids': [(4, alarm.id)],
-        })
+        with self.capture_triggers('calendar.ir_cron_scheduler_alarm') as capt:
+            alarm = self.env['calendar.alarm'].create({
+                'name': 'Alarm',
+                'alarm_type': 'email',
+                'interval': 'minutes',
+                'duration': 20,
+            })
+            self.event.write({
+                'name': 'test event',
+                'start': now + relativedelta(minutes=15),
+                'stop': now + relativedelta(minutes=18),
+                'partner_ids': [fields.Command.link(self.partner.id)],
+                'alarm_ids': [fields.Command.link(alarm.id)],
+            })
+
+        capt.records.ensure_one()
+        self.assertLessEqual(capt.records.call_at, now)
+
         with patch.object(fields.Datetime, 'now', lambda: now):
             with self.assertSinglePostNotifications([{'partner': self.partner, 'type': 'inbox'}], {
                 'message_type': 'user_notification',
                 'subtype': 'mail.mt_note',
             }):
-                self.env['calendar.alarm_manager'].with_context(lastcall=now - relativedelta(minutes=15))._get_partner_next_mail(self.partner)
+                self.env['calendar.alarm_manager'].with_context(lastcall=now - relativedelta(minutes=15))._send_reminder()

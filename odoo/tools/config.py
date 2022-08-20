@@ -1,4 +1,3 @@
-#odoo.loggers.handlers. -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 import configparser as ConfigParser
@@ -163,14 +162,23 @@ class configmanager(object):
                          dest='test_enable',
                          help="Enable unit tests.")
         group.add_option("--test-tags", dest="test_tags",
-                         help="""Comma-separated list of spec to filter which tests to execute. Enable unit tests if set.
-                         A filter spec has the format: [-][tag][/module][:class][.method]
-                         The '-' specifies if we want to include or exclude tests matching this spec.
-                         The tag will match tags added on a class with a @tagged decorator. By default tag value is 'standard' when not
-                         given on include mode. '*' will match all tags. Tag will also match module name (deprecated, use /module)
-                         The module, class, and method will respectively match the module name, test class name and test method name.
-                         examples: :TestClass.test_func,/test_module,external
-                         """)
+                         help="Comma-separated list of specs to filter which tests to execute. Enable unit tests if set. "
+                         "A filter spec has the format: [-][tag][/module][:class][.method] "
+                         "The '-' specifies if we want to include or exclude tests matching this spec. "
+                         "The tag will match tags added on a class with a @tagged decorator "
+                         "(all Test classes have 'standard' and 'at_install' tags "
+                         "until explicitly removed, see the decorator documentation). "
+                         "'*' will match all tags. "
+                         "If tag is omitted on include mode, its value is 'standard'. "
+                         "If tag is omitted on exclude mode, its value is '*'. "
+                         "The module, class, and method will respectively match the module name, test class name and test method name. "
+                         "Example: --test-tags :TestClass.test_func,/test_module,external "
+
+                         "Filtering and executing the tests happens twice: right "
+                         "after each module installation/update and at the end "
+                         "of the modules loading. At each stage tests are filtered "
+                         "by --test-tags specs and additionally by dynamic specs "
+                         "'at_install' and 'post_install' correspondingly.")
 
         group.add_option("--screencasts", dest="screencasts", action="store", my_default=None,
                          metavar='DIR',
@@ -208,6 +216,8 @@ class configmanager(object):
         group = optparse.OptionGroup(parser, "SMTP Configuration")
         group.add_option('--email-from', dest='email_from', my_default=False,
                          help='specify the SMTP email address for sending email')
+        group.add_option('--from-filter', dest='from_filter', my_default=False,
+                         help='specify for which email address the SMTP configuration can be used')
         group.add_option('--smtp', dest='smtp_server', my_default='localhost',
                          help='specify the SMTP server for sending email')
         group.add_option('--smtp-port', dest='smtp_port', my_default=25,
@@ -218,6 +228,10 @@ class configmanager(object):
                          help='specify the SMTP username for sending email')
         group.add_option('--smtp-password', dest='smtp_password', my_default=False,
                          help='specify the SMTP password for sending email')
+        group.add_option('--smtp-ssl-certificate-filename', dest='smtp_ssl_certificate_filename', my_default=False,
+                         help='specify the SSL certificate used for authentication')
+        group.add_option('--smtp-ssl-private-key-filename', dest='smtp_ssl_private_key_filename', my_default=False,
+                         help='specify the SSL private key used for authentication')
         parser.add_option_group(group)
 
         group = optparse.OptionGroup(parser, "Database related options")
@@ -241,7 +255,7 @@ class configmanager(object):
                          help="specify a custom database template to create a new database")
         parser.add_option_group(group)
 
-        group = optparse.OptionGroup(parser, "Internationalisation options. ",
+        group = optparse.OptionGroup(parser, "Internationalisation options",
             "Use these options to translate Odoo to another language. "
             "See i18n section of the user manual. Option '-d' is mandatory. "
             "Option '-l' is mandatory in case of importation"
@@ -279,11 +293,11 @@ class configmanager(object):
                           help="stop the server after its initialization")
         group.add_option("--osv-memory-count-limit", dest="osv_memory_count_limit", my_default=False,
                          help="Force a limit on the maximum number of records kept in the virtual "
-                              "osv_memory tables. The default is False, which means no count-based limit.",
+                              "osv_memory tables. By default there is no limit.",
                          type="int")
         group.add_option("--transient-age-limit", dest="transient_age_limit", my_default=1.0,
                          help="Time limit (decimal value in hours) records created with a "
-                              "TransientModel (mosly wizard) are kept in the database. Default to 1 hour.",
+                              "TransientModel (mostly wizard) are kept in the database. Default to 1 hour.",
                          type="float")
         group.add_option("--osv-memory-age-limit", dest="osv_memory_age_limit", my_default=False,
                          help="Deprecated alias to the transient-age-limit option",
@@ -429,7 +443,8 @@ class configmanager(object):
         keys = ['http_interface', 'http_port', 'longpolling_port', 'http_enable',
                 'db_name', 'db_user', 'db_password', 'db_host', 'db_sslmode',
                 'db_port', 'db_template', 'logfile', 'pidfile', 'smtp_port',
-                'email_from', 'smtp_server', 'smtp_user', 'smtp_password',
+                'email_from', 'smtp_server', 'smtp_user', 'smtp_password', 'from_filter',
+                'smtp_ssl_certificate_filename', 'smtp_ssl_private_key_filename',
                 'db_maxconn', 'import_partial', 'addons_path', 'upgrade_path',
                 'syslog', 'without_demo', 'screencasts', 'screenshots',
                 'dbfilter', 'log_level', 'log_db',
@@ -439,7 +454,7 @@ class configmanager(object):
         for arg in keys:
             # Copy the command-line argument (except the special case for log_handler, due to
             # action=append requiring a real default, so we cannot use the my_default workaround)
-            if getattr(opt, arg):
+            if getattr(opt, arg, None) is not None:
                 self.options[arg] = getattr(opt, arg)
             # ... or keep, but cast, the config file value.
             elif isinstance(self.options[arg], str) and self.casts[arg].type in optparse.Option.TYPE_CHECKER:
@@ -556,7 +571,7 @@ class configmanager(object):
             path = path.strip()
             res = os.path.abspath(os.path.expanduser(path))
             if not os.path.isdir(res):
-                raise optparse.OptionValueError("option %s: no such directory: %r" % (opt, path))
+                raise optparse.OptionValueError("option %s: no such directory: %r" % (opt, res))
             if not self._is_addons_path(res):
                 raise optparse.OptionValueError("option %s: the path %r is not a valid addons directory" % (opt, path))
             ad_paths.append(res)

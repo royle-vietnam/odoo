@@ -45,14 +45,14 @@
         </div>
         <div id="ace-view-id">
             <div class="float-right mb-2">
-                <button data-action="reset" type="button" class="btn btn-sm btn-danger"><i class="fa fa-undo"/> Reset</button>
+                <button data-action="reset" type="button" class="btn btn-sm btn-danger d-none"><i class="fa fa-undo"/> Reset</button>
                 <button data-action="format" type="button" class="btn btn-sm btn-link">Format</button>
             </div>
             <span class="o_ace_editor_resource_info"/>
             <div class="alert alert-warning alert-dismissible mt-2 mb-0" role="alert">
                 Editing a built-in file through this editor is not advised, as it will prevent it from being updated during future App upgrades.
                 <button type="button" class="close" aria-label="Close">
-                    <span>&amp;times;</span>
+                    <span>×</span>
                 </button>
             </div>
         </div>

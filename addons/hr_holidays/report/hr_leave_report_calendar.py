@@ -16,8 +16,10 @@ class LeaveReportCalendar(models.Model):
     start_datetime = fields.Datetime(string='From', readonly=True)
     stop_datetime = fields.Datetime(string='To', readonly=True)
     tz = fields.Selection(_tz_get, string="Timezone", readonly=True)
-    duration = fields.Float(string='Duration', readonly=True)
+    duration = fields.Float(string='Duration', readonly=True, store=False)
     employee_id = fields.Many2one('hr.employee', readonly=True)
+    department_id = fields.Many2one('hr.department', readonly=True)
+    job_id = fields.Many2one('hr.job', readonly=True)
     company_id = fields.Many2one('res.company', readonly=True)
     state = fields.Selection([
         ('draft', 'To Submit'),
@@ -28,23 +30,43 @@ class LeaveReportCalendar(models.Model):
         ('validate', 'Approved')
     ], readonly=True)
 
+    is_hatched = fields.Boolean('Hatched', readonly=True)
+    is_striked = fields.Boolean('Striked', readonly=True)
+
     def init(self):
         tools.drop_view_if_exists(self._cr, 'hr_leave_report_calendar')
         self._cr.execute("""CREATE OR REPLACE VIEW hr_leave_report_calendar AS
         (SELECT 
-            row_number() OVER() AS id,
+            hl.id AS id,
             CONCAT(em.name, ': ', hl.duration_display) AS name,
             hl.date_from AS start_datetime,
             hl.date_to AS stop_datetime,
             hl.employee_id AS employee_id,
             hl.state AS state,
-            em.company_id AS company_id
+            hl.department_id AS department_id,
+            em.company_id AS company_id,
+            em.job_id AS job_id,
+            COALESCE(
+                CASE WHEN hl.holiday_type = 'employee' THEN COALESCE(rr.tz, rc.tz) END,
+                cc.tz,
+                'UTC'
+            ) AS tz,
+            hl.state = 'refuse' as is_striked,
+            hl.state not in ('validate', 'refuse') as is_hatched
         FROM hr_leave hl
             LEFT JOIN hr_employee em
                 ON em.id = hl.employee_id
+            LEFT JOIN resource_resource rr
+                ON rr.id = em.resource_id
+            LEFT JOIN resource_calendar rc
+                ON rc.id = em.resource_calendar_id
+            LEFT JOIN res_company co
+                ON co.id = em.company_id
+            LEFT JOIN resource_calendar cc
+                ON cc.id = co.resource_calendar_id
         WHERE 
             hl.state IN ('confirm', 'validate', 'validate1')
-        ORDER BY id);
+        );
         """)
 
     def _read(self, fields):
@@ -57,6 +79,4 @@ class LeaveReportCalendar(models.Model):
 
     @api.model
     def get_unusual_days(self, date_from, date_to=None):
-        # Checking the calendar directly allows to not grey out the leaves taken
-        # by the employee
-        return self.env['hr.leave'].get_unusual_days(date_from, date_to=date_to)
+        return self.env.user.employee_id._get_unusual_days(date_from, date_to)

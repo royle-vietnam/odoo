@@ -34,6 +34,7 @@ class PurchaseRequisitionType(models.Model):
     line_copy = fields.Selection([
         ('copy', 'Use lines of agreement'), ('none', 'Do not create RfQ lines automatically')],
         string='Lines', required=True, default='copy')
+    active = fields.Boolean(default=True, help="Set active to false to hide the Purchase Agreement Types without removing it.")
 
 
 class PurchaseRequisition(models.Model):
@@ -56,11 +57,11 @@ class PurchaseRequisition(models.Model):
     user_id = fields.Many2one(
         'res.users', string='Purchase Representative',
         default=lambda self: self.env.user, check_company=True)
-    description = fields.Text()
+    description = fields.Html()
     company_id = fields.Many2one('res.company', string='Company', required=True, default=lambda self: self.env.company)
     purchase_ids = fields.One2many('purchase.order', 'requisition_id', string='Purchase Orders', states={'done': [('readonly', True)]})
     line_ids = fields.One2many('purchase.requisition.line', 'requisition_id', string='Products to Purchase', states={'done': [('readonly', True)]}, copy=True)
-    product_id = fields.Many2one('product.product', related='line_ids.product_id', string='Product', readonly=False)
+    product_id = fields.Many2one('product.product', related='line_ids.product_id', string='Product')
     state = fields.Selection(PURCHASE_REQUISITION_STATES,
                               'Status', tracking=True, required=True,
                               copy=False, default='draft')
@@ -90,7 +91,7 @@ class PurchaseRequisition(models.Model):
         ])
         if any(requisitions):
             title = _("Warning for %s", self.vendor_id.name)
-            message = _("There is already an open blanket order for this supplier. We suggest you to use to complete this open blanket order instead of creating a new one.")
+            message = _("There is already an open blanket order for this supplier. We suggest you complete this open blanket order, instead of creating a new one.")
             warning = {
                 'title': title,
                 'message': message
@@ -152,9 +153,12 @@ class PurchaseRequisition(models.Model):
                 requisition_line.supplier_info_ids.unlink()
         self.write({'state': 'done'})
 
-    def unlink(self):
+    @api.ondelete(at_uninstall=False)
+    def _unlink_if_draft_or_cancel(self):
         if any(requisition.state not in ('draft', 'cancel') for requisition in self):
             raise UserError(_('You can only delete draft requisitions.'))
+
+    def unlink(self):
         # Draft requisitions could have some requisition lines.
         self.mapped('line_ids').unlink()
         return super(PurchaseRequisition, self).unlink()
@@ -173,7 +177,7 @@ class PurchaseRequisitionLine(models.Model):
     price_unit = fields.Float(string='Unit Price', digits='Product Price')
     qty_ordered = fields.Float(compute='_compute_ordered_qty', string='Ordered Quantities')
     requisition_id = fields.Many2one('purchase.requisition', required=True, string='Purchase Agreement', ondelete='cascade')
-    company_id = fields.Many2one('res.company', related='requisition_id.company_id', string='Company', store=True, readonly=True, default= lambda self: self.env.company)
+    company_id = fields.Many2one('res.company', related='requisition_id.company_id', string='Company', store=True, readonly=True)
     account_analytic_id = fields.Many2one('account.analytic.account', string='Analytic Account')
     analytic_tag_ids = fields.Many2many('account.analytic.tag', string='Analytic Tags')
     schedule_date = fields.Date(string='Scheduled Date')
@@ -224,6 +228,7 @@ class PurchaseRequisitionLine(models.Model):
 
     @api.depends('requisition_id.purchase_ids.state')
     def _compute_ordered_qty(self):
+        line_found = set()
         for line in self:
             total = 0.0
             for po in line.requisition_id.purchase_ids.filtered(lambda purchase_order: purchase_order.state in ['purchase', 'done']):
@@ -232,7 +237,11 @@ class PurchaseRequisitionLine(models.Model):
                         total += po_line.product_uom._compute_quantity(po_line.product_qty, line.product_uom_id)
                     else:
                         total += po_line.product_qty
-            line.qty_ordered = total
+            if line.product_id not in line_found :
+                line.qty_ordered = total
+                line_found.add(line.product_id)
+            else:
+                line.qty_ordered = 0
 
     @api.onchange('product_id')
     def _onchange_product_id(self):

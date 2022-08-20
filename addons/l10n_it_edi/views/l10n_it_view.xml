@@ -21,12 +21,14 @@
         <field name="inherit_id" ref="account.view_tax_form"/>
         <field name="arch" type="xml">
         <data>
-            <xpath expr="//page" position="inside">
-                <group>
-                    <field name="l10n_it_vat_due_date"/>
-                    <field name="l10n_it_has_exoneration" readonly="False"/>
-                    <field name="l10n_it_kind_exoneration" attrs="{'invisible': [('l10n_it_has_exoneration', '=', False)]}"/>
-                    <field name="l10n_it_law_reference" attrs="{'invisible': [('l10n_it_has_exoneration', '=', False)]}"/>
+            <xpath expr="//page[@name='advanced_options']" position="inside">
+                <group attrs="{'invisible': [('country_code', '!=', 'IT')]}">
+                    <group>
+                        <field name="l10n_it_vat_due_date"/>
+                        <field name="l10n_it_has_exoneration"/>
+                        <field name="l10n_it_kind_exoneration" attrs="{'invisible': [('l10n_it_has_exoneration', '=', False)]}"/>
+                        <field name="l10n_it_law_reference" attrs="{'invisible': [('l10n_it_has_exoneration', '=', False)]}"/>
+                    </group>
                 </group>
             </xpath>
         </data>
@@ -76,13 +78,11 @@
                         </div>
                         <group>
                             <field name="l10n_it_has_eco_index" string="Company listed on the register of companies"/>
-                        </group>
-                        <group attrs="{'invisible': [('l10n_it_has_eco_index', '=', False)]}">
-                            <field name="l10n_it_eco_index_office"/>
-                            <field name="l10n_it_eco_index_number"/>
-                            <field name="l10n_it_eco_index_share_capital"/>
-                            <field name="l10n_it_eco_index_sole_shareholder"/>
-                            <field name="l10n_it_eco_index_liquidation_state"/>
+                            <field name="l10n_it_eco_index_office" attrs="{'invisible': [('l10n_it_has_eco_index', '=', False)]}"/>
+                            <field name="l10n_it_eco_index_number" attrs="{'invisible': [('l10n_it_has_eco_index', '=', False)]}"/>
+                            <field name="l10n_it_eco_index_share_capital" attrs="{'invisible': [('l10n_it_has_eco_index', '=', False)]}"/>
+                            <field name="l10n_it_eco_index_sole_shareholder" attrs="{'invisible': [('l10n_it_has_eco_index', '=', False)]}"/>
+                            <field name="l10n_it_eco_index_liquidation_state" attrs="{'invisible': [('l10n_it_has_eco_index', '=', False)]}"/>
                         </group>
                     </group>
                     <group>
@@ -93,9 +93,7 @@
                         </div>
                         <group>
                             <field name="l10n_it_has_tax_representative" string="Company have a tax representative"/>
-                        </group>
-                        <group attrs="{'invisible': [('l10n_it_has_tax_representative', '=', False)]}">
-                            <field name="l10n_it_tax_representative_partner_id"/>
+                            <field name="l10n_it_tax_representative_partner_id" attrs="{'invisible': [('l10n_it_has_tax_representative', '=', False)]}"/>
                         </group>
                     </group>
                 </page>
@@ -151,10 +149,6 @@
         <field name="inherit_id" ref="account.view_move_form"/>
         <field name="arch" type="xml">
         <data>
-            <xpath expr="//button[@name='preview_invoice']" position="after">
-                <button name="post" type="object" icon="fa-envelope-o" class="btn btn-primary" string="Resend"
-                        attrs="{'invisible': ['|', ('move_type', 'not in', ('out_invoice', 'out_refund')), ('l10n_it_send_state', '!=', 'invalid')]}"/>
-            </xpath>
             <xpath expr="//field[@name='move_type']" position="before">
                 <div class="alert alert-success" role="alert"
                      attrs="{'invisible': ['|', ('move_type', 'not in', ('out_invoice', 'out_refund')), ('l10n_it_send_state', 'not in', ['delivered', 'delivered_accepted', 'delivered_refused', 'delivered_expired', 'failed_delivery'])]}">
@@ -172,7 +166,7 @@
             <xpath expr="//page[@name='other_info']" position="after">
                 <page string="Electronic Invoicing"
                     name="electronic_invoicing"
-                    attrs="{'invisible': [('move_type', 'not in', ('out_invoice', 'out_refund', 'in_invoice', 'in_refund'))]}">
+                    attrs="{'invisible': ['|', ('move_type', 'not in', ('out_invoice', 'out_refund', 'in_invoice', 'in_refund')), ('country_code', '!=', 'IT')]}">
                     <group>
                         <group>
                             <field name="l10n_it_stamp_duty"/>

@@ -3,19 +3,16 @@ odoo.define('web_editor.field.html', function (require) {
 
 var ajax = require('web.ajax');
 var basic_fields = require('web.basic_fields');
-var config = require('web.config');
 var core = require('web.core');
-var Wysiwyg = require('web_editor.wysiwyg.root');
+var wysiwygLoader = require('web_editor.loader');
 var field_registry = require('web.field_registry');
+const {QWebPlugin} = require('@web_editor/js/backend/QWebPlugin');
 // must wait for web/ to add the default html widget, otherwise it would override the web_editor one
 require('web._field_registry');
 
 var _lt = core._lt;
 var TranslatableFieldMixin = basic_fields.TranslatableFieldMixin;
 var QWeb = core.qweb;
-var assetsLoaded;
-
-var jinjaRegex = /(^|\n)\s*%\s(end|set\s)/;
 
 /**
  * FieldHtml Widget
@@ -29,11 +26,17 @@ var jinjaRegex = /(^|\n)\s*%\s(end|set\s)/;
  *  - cssReadonly
  *  - snippets
  *  - wrapper
+ *  - resizable
+ *  - codeview
  */
 var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
     description: _lt("Html"),
     className: 'oe_form_field oe_form_field_html',
     supportedFieldTypes: ['html'],
+    isQuickEditable: true,
+    quickEditExclusion: [
+        '[href]',
+    ],
 
     custom_events: {
         wysiwyg_focus: '_onWysiwygFocus',
@@ -41,30 +44,19 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
         wysiwyg_change: '_onChange',
         wysiwyg_attachment: '_onAttachmentChange',
     },
-
     /**
      * @override
      */
-    willStart: function () {
-        var self = this;
+    willStart: async function () {
         this.isRendered = false;
         this._onUpdateIframeId = 'onLoad_' + _.uniqueId('FieldHtml');
-        var defAsset;
+        await this._super();
         if (this.nodeOptions.cssReadonly) {
-            defAsset = ajax.loadAsset(this.nodeOptions.cssReadonly);
+            this.cssReadonly = await ajax.loadAsset(this.nodeOptions.cssReadonly);
         }
-
-        if (!assetsLoaded) { // avoid flickering when begin to edit
-            assetsLoaded = new Promise(function (resolve) {
-                var wysiwyg = new Wysiwyg(self, {});
-                wysiwyg.attachTo($('<textarea>')).then(function () {
-                    wysiwyg.destroy();
-                    resolve();
-                });
-            });
+        if (this.nodeOptions.cssEdit || this.nodeOptions['style-inline']) {
+            this.cssEdit = await ajax.loadAsset(this.nodeOptions.cssEdit || 'web_editor.assets_edit_html_field');
         }
-
-        return Promise.all([this._super(), assetsLoaded, defAsset]);
     },
     /**
      * @override
@@ -73,6 +65,9 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
         delete window.top[this._onUpdateIframeId];
         if (this.$iframe) {
             this.$iframe.remove();
+        }
+        if (this._qwebPlugin) {
+            this._qwebPlugin.destroy();
         }
         this._super();
     },
@@ -97,22 +92,25 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
      *
      * @override
      */
-    commitChanges: function () {
-        var self = this;
-        if (config.isDebug() && this.mode === 'edit') {
-            var layoutInfo = $.summernote.core.dom.makeLayoutInfo(this.wysiwyg.$editor);
-            $.summernote.pluginEvents.codeview(undefined, undefined, layoutInfo, false);
-        }
+    commitChanges: async function () {
         if (this.mode == "readonly" || !this.isRendered) {
             return this._super();
         }
         var _super = this._super.bind(this);
-        return this.wysiwyg.saveModifiedImages(this.$content).then(function () {
-            return self.wysiwyg.save().then(function (result) {
-                self._isDirty = result.isDirty;
-                _super();
-            });
-        });
+        // Do not wait for the resolution of the cleanForSave promise to update
+        // the internal value in case this happens during an urgentSave as the
+        // beforeunload event does not play well with asynchronicity. It is
+        // better to have a partially cleared value than to lose changes. When
+        // this function is called outside of an urgentSave context, the full
+        // cleaning is still awaited below and `_super` will reupdate the value.
+        const fullClean = this.wysiwyg.cleanForSave();
+        this._setValue(this._getValue());
+        this._isDirty = this.wysiwyg.isDirty();
+        await fullClean;
+        await this.wysiwyg.saveModifiedImages(this.$content);
+        // Update the value to the fully cleaned version.
+        this._setValue(this._getValue());
+        _super();
     },
     /**
      * @override
@@ -125,7 +123,7 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
      * @override
      */
     getFocusableElement: function () {
-        return this.$target || $();
+        return this.wysiwyg && this.wysiwyg.$editable || $();
     },
     /**
      * Do not re-render this field if it was the origin of the onchange call.
@@ -140,8 +138,10 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
         }
         value = this._textToHtml(value);
         if (!event || event.target !== this) {
-            if (this.mode === 'edit') {
+            if (this.mode === 'edit' && this.wysiwyg) {
                 this.wysiwyg.setValue(value);
+            } else if (this.cssReadonly) {
+                return Promise.resolve();
             } else {
                 this.$content.html(value);
             }
@@ -157,7 +157,12 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
      * @override
      */
     _getValue: function () {
-        var value = this.$target.val();
+        let value;
+        if (!this._$codeview || this._$codeview.hasClass('d-none')) {
+           value = this.wysiwyg.getValue();
+        } else {
+            value = this._$codeview.val();
+        }
         if (this.nodeOptions.wrapper) {
             return this._unWrap(value);
         }
@@ -170,16 +175,12 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
      * @private
      * @returns {$.Promise}
      */
-    _createWysiwygIntance: function () {
-        var self = this;
-        this.wysiwyg = new Wysiwyg(this, this._getWysiwygOptions());
-
-        // by default this is synchronous because the assets are already loaded in willStart
-        // but it can be async in the case of options such as iframe, snippets...
-        return this.wysiwyg.attachTo(this.$target).then(function () {
-            self.$content = self.wysiwyg.$editor.closest('body, odoo-wysiwyg-container');
-            self._onLoadWysiwyg();
-            self.isRendered = true;
+    _createWysiwygIntance: async function () {
+        this.wysiwyg = await wysiwygLoader.createWysiwyg(this, this._getWysiwygOptions());
+        return this.wysiwyg.appendTo(this.$el).then(() => {
+            this.$content = this.wysiwyg.$editable;
+            this._onLoadWysiwyg();
+            this.isRendered = true;
         });
     },
     /**
@@ -189,48 +190,55 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
      * @returns {Object}
      */
     _getWysiwygOptions: function () {
-        var self = this;
         return Object.assign({}, this.nodeOptions, {
             recordInfo: {
                 context: this.record.getContext(this.recordParams),
                 res_model: this.model,
                 res_id: this.res_id,
             },
+            placeholder: this.attrs && this.attrs.placeholder,
+            collaborationChannel: !!this.nodeOptions.collaborative && {
+                collaborationModelName: this.model,
+                collaborationFieldName: this.name,
+                collaborationResId: parseInt(this.res_id),
+            },
             noAttachment: this.nodeOptions['no-attachment'],
             inIframe: !!this.nodeOptions.cssEdit,
             iframeCssAssets: this.nodeOptions.cssEdit,
             snippets: this.nodeOptions.snippets,
-
-            tabsize: 0,
-            height: 180,
-            generateOptions: function (options) {
-                var toolbar = options.toolbar || options.airPopover || {};
-                var para = _.find(toolbar, function (item) {
-                    return item[0] === 'para';
-                });
-                if (para && para[1] && para[1].indexOf('checklist') === -1) {
-                    para[1].splice(2, 0, 'checklist');
-                }
-                if (config.isDebug()) {
-                    options.codeview = true;
-                    var view = _.find(toolbar, function (item) {
-                        return item[0] === 'view';
-                    });
-                    if (view) {
-                        if (!view[1].includes('codeview')) {
-                            view[1].splice(-1, 0, 'codeview');
-                        }
-                    } else {
-                        toolbar.splice(-1, 0, ['view', ['codeview']]);
-                    }
-                }
-                if ("mailing.mailing" === self.model) {
-                    options.noVideos = true;
-                }
-                options.prettifyHtml = false;
-                return options;
+            value: this.value,
+            allowCommandVideo: Boolean(this.nodeOptions.allowCommandVideo) && (!this.field.sanitize || !this.field.sanitize_tags),
+            mediaModalParams: {
+                noVideos: 'noVideos' in this.nodeOptions ? this.nodeOptions.noVideos : true,
+                res_model: this.model,
+                res_id: this.res_id,
+                useMediaLibrary: true,
             },
+            linkForceNewWindow: true,
+            tabsize: 0,
+            height: this.nodeOptions.height,
+            minHeight: this.nodeOptions.minHeight,
+            maxHeight: this.nodeOptions.maxHeight,
+            resizable: 'resizable' in this.nodeOptions ? this.nodeOptions.resizable : false,
+            editorPlugins: [QWebPlugin],
         });
+    },
+    /**
+     * Toggle the code view and update the UI.
+     *
+     * @param {JQuery} $codeview
+     */
+    _toggleCodeView: function ($codeview) {
+        this.wysiwyg.odooEditor.observerUnactive();
+        $codeview.toggleClass('d-none');
+        this.$content.toggleClass('d-none');
+        if ($codeview.hasClass('d-none')) {
+            this.wysiwyg.odooEditor.observerActive();
+            this.wysiwyg.setValue($codeview.val());
+        } else {
+            $codeview.val(this.$content.html());
+            this.wysiwyg.odooEditor.observerActive();
+        }
     },
     /**
      * trigger_up 'field_changed' add record into the "ir.attachment" field found in the view.
@@ -260,13 +268,13 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
      * @override
      */
     _renderEdit: function () {
+        if (this.nodeOptions.notEditable) {
+            return this._renderReadonly();
+        }
         var value = this._textToHtml(this.value);
         if (this.nodeOptions.wrapper) {
             value = this._wrap(value);
         }
-        this.$target = $('<textarea>').val(value).hide();
-        this.$target.appendTo(this.$el);
-
         var fieldNameAttachment = _.chain(this.recordData)
             .pairs()
             .find(function (value) {
@@ -300,8 +308,9 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
         var def = new Promise(function (resolve) {
             resolver = resolve;
         });
+        const externalLinkSelector = `a:not([href^="${location.origin}"]):not([href^="/"])`;
         if (this.nodeOptions.cssReadonly) {
-            this.$iframe = $('<iframe class="o_readonly"/>');
+            this.$iframe = $('<iframe class="o_readonly d-none"/>');
             this.$iframe.appendTo(this.$el);
 
             var avoidDoubleLoad = 0; // this bug only appears on some computers with some chrome version.
@@ -316,6 +325,7 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
                 }
                 self.$content = $('#iframe_target', self.$iframe[0].contentWindow.document.body);
                 resolver();
+                self.trigger_up('iframe_updated', { $iframe: self.$iframe });
             };
 
             this.$iframe.on('load', function onLoad() {
@@ -326,9 +336,15 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
                         return;
                     }
                     var cwindow = self.$iframe[0].contentWindow;
+                    try {
+                        cwindow.document;
+                    } catch (e) {
+                        return;
+                    }
                     cwindow.document
                         .open("text/html", "replace")
                         .write(
+                            '<!DOCTYPE html><html>' +
                             '<head>' +
                                 '<meta charset="utf-8"/>' +
                                 '<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1"/>\n' +
@@ -340,27 +356,53 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
                                     return '<style type="text/css">' + cssContent + '</style>';
                                 }).join('\n') + '\n' +
                             '</head>\n' +
-                            '<body class="o_in_iframe o_readonly">\n' +
+                            '<body class="o_in_iframe o_readonly" style="overflow: hidden;">\n' +
                                 '<div id="iframe_target">' + value + '</div>\n' +
                                 '<script type="text/javascript">' +
                                     'if (window.top.' + self._onUpdateIframeId + ') {' +
                                         'window.top.' + self._onUpdateIframeId + '(' + _avoidDoubleLoad + ')' +
                                     '}' +
                                 '</script>\n' +
-                            '</body>');
+                            '</body>' +
+                            '</html>');
 
                     var height = cwindow.document.body.scrollHeight;
                     self.$iframe.css('height', Math.max(30, Math.min(height, 500)) + 'px');
+
+                    $(cwindow).on('click', function (ev) {
+                        if (!ev.target.closest("[href]")) {
+                            self._onClick(ev);
+                        }
+                    });
+
+                    // Ensure all external links are opened in a new tab.
+                    for (const externalLink of cwindow.document.body.querySelectorAll(externalLinkSelector)) {
+                        externalLink.setAttribute('target', '_blank');
+                        externalLink.setAttribute('rel', 'noreferrer');
+                    }
                 });
             });
         } else {
             this.$content = $('<div class="o_readonly"/>').html(value);
             this.$content.appendTo(this.$el);
+            this._qwebPlugin = new QWebPlugin();
+            this._qwebPlugin.sanitizeElement(this.$content[0]);
+            // Ensure all external links are opened in a new tab.
+            for (const externalLink of this.$content.find(externalLinkSelector)) {
+                externalLink.setAttribute('target', '_blank');
+                externalLink.setAttribute('rel', 'noreferrer');
+            }
             resolver();
         }
 
         def.then(function () {
-            self.$content.on('click', 'ul.o_checklist > li', self._onReadonlyClickChecklist.bind(self));
+            if (!self.hasReadonlyModifier) {
+                self.$content.on('click', 'ul.o_checklist > li', self._onReadonlyClickChecklist.bind(self));
+            }
+            if (self.$iframe) {
+                // Iframe is hidden until fully loaded to avoid glitches.
+                self.$iframe.removeClass('d-none');
+            }
         });
     },
     /**
@@ -370,9 +412,6 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
      */
     _textToHtml: function (text) {
         var value = text || "";
-        if (jinjaRegex.test(value)) { // is jinja
-            return value;
-        }
         try {
             $(text)[0].innerHTML; // crashes if text isn't html
         } catch (e) {
@@ -457,7 +496,7 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
      * @param {OdooEvent} ev
      */
     _onKeydown: function (ev) {
-        if (ev.which === $.ui.keyCode.ENTER && $(ev.target).is('textarea')) {
+        if (ev.which === $.ui.keyCode.ENTER) {
             ev.stopPropagation();
             return;
         }
@@ -502,10 +541,26 @@ var FieldHtml = basic_fields.DebouncedField.extend(TranslatableFieldMixin, {
         $button.css({
             'font-size': '15px',
             position: 'absolute',
-            right: '+5px',
-            top: '+5px',
+            right: odoo.debug && this.nodeOptions.codeview ? '40px' : '5px',
+            top: '5px',
         });
         this.$el.append($button);
+        if (odoo.debug && this.nodeOptions.codeview) {
+            const $codeviewButtonToolbar = $(`
+                <div id="codeview-btn-group" class="btn-group">
+                    <button class="o_codeview_btn btn btn-primary">
+                        <i class="fa fa-code"></i>
+                    </button>
+                </div>
+            `);
+            this.$floatingCodeViewButton = $codeviewButtonToolbar.clone();
+            this._$codeview = $('<textarea class="o_codeview d-none"/>');
+            this.wysiwyg.$editable.after(this._$codeview);
+            this._$codeview.after(this.$floatingCodeViewButton);
+            this.wysiwyg.toolbar.$el.append($codeviewButtonToolbar);
+            $codeviewButtonToolbar.click(() => this._toggleCodeView(this._$codeview));
+            this.$floatingCodeViewButton.click(() => this._toggleCodeView(this._$codeview));
+        }
     },
     /**
      * @private

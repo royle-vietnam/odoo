@@ -5,6 +5,8 @@ odoo.define('point_of_sale.ClientListScreen', function(require) {
     const PosComponent = require('point_of_sale.PosComponent');
     const Registries = require('point_of_sale.Registries');
     const { useListener } = require('web.custom_hooks');
+    const { isConnectionError } = require('point_of_sale.utils');
+    const { useAsyncLockedMethod } = require('point_of_sale.custom_hooks');
 
     /**
      * Render this screen using `showTempScreen` to select client.
@@ -24,9 +26,10 @@ odoo.define('point_of_sale.ClientListScreen', function(require) {
     class ClientListScreen extends PosComponent {
         constructor() {
             super(...arguments);
+            this.lockedSaveChanges = useAsyncLockedMethod(this.saveChanges);
             useListener('click-save', () => this.env.bus.trigger('save-customer'));
             useListener('click-edit', () => this.editClient());
-            useListener('save-changes', this.saveChanges);
+            useListener('save-changes', this.lockedSaveChanges);
 
             // We are not using useState here because the object
             // passed to useState converts the object and its contents
@@ -47,7 +50,6 @@ odoo.define('point_of_sale.ClientListScreen', function(require) {
             };
             this.updateClientList = debounce(this.updateClientList, 70);
         }
-
         // Lifecycle hooks
         back() {
             if(this.state.detailIsShown) {
@@ -69,11 +71,13 @@ odoo.define('point_of_sale.ClientListScreen', function(require) {
         }
 
         get clients() {
+            let res;
             if (this.state.query && this.state.query.trim() !== '') {
-                return this.env.pos.db.search_partner(this.state.query.trim());
+                res = this.env.pos.db.search_partner(this.state.query.trim());
             } else {
-                return this.env.pos.db.get_partners_sorted(1000);
+                res = this.env.pos.db.get_partners_sorted(1000);
             }
+            return res.sort(function (a, b) { return (a.name || '').localeCompare(b.name || '') });
         }
         get isNextButtonVisible() {
             return this.state.selectedClient ? true : false;
@@ -84,11 +88,11 @@ odoo.define('point_of_sale.ClientListScreen', function(require) {
          */
         get nextButton() {
             if (!this.props.client) {
-                return { command: 'set', text: 'Set Customer' };
+                return { command: 'set', text: this.env._t('Set Customer') };
             } else if (this.props.client && this.props.client === this.state.selectedClient) {
-                return { command: 'deselect', text: 'Deselect Customer' };
+                return { command: 'deselect', text: this.env._t('Deselect Customer') };
             } else {
-                return { command: 'set', text: 'Change Customer' };
+                return { command: 'set', text: this.env._t('Change Customer') };
             }
         }
 
@@ -96,7 +100,7 @@ odoo.define('point_of_sale.ClientListScreen', function(require) {
 
         // We declare this event handler as a debounce function in
         // order to lower its trigger rate.
-        updateClientList(event) {
+        async updateClientList(event) {
             this.state.query = event.target.value;
             const clients = this.clients;
             if (event.code === 'Enter' && clients.length === 1) {
@@ -160,7 +164,7 @@ odoo.define('point_of_sale.ClientListScreen', function(require) {
                 this.state.detailIsShown = false;
                 this.render();
             } catch (error) {
-                if (error.message.code < 0) {
+                if (isConnectionError(error)) {
                     await this.showPopup('OfflineErrorPopup', {
                         title: this.env._t('Offline'),
                         body: this.env._t('Unable to save changes.'),
@@ -172,6 +176,41 @@ odoo.define('point_of_sale.ClientListScreen', function(require) {
         }
         cancelEdit() {
             this.deactivateEditMode();
+        }
+        async searchClient() {
+            let result = await this.getNewClient();
+            this.env.pos.db.add_partners(result);
+            if(!result.length) {
+                await this.showPopup('ErrorPopup', {
+                    title: '',
+                    body: this.env._t('No customer found'),
+                });
+            }
+            this.render();
+        }
+        async getNewClient() {
+            var domain = [];
+            if(this.state.query) {
+                domain = [
+                    '|','|',
+                    ["display_name", "ilike", this.state.query],
+                    ["email", "ilike", this.state.query],
+                    ];
+            }
+            var fields = _.find(this.env.pos.models, function(model){ return model.label === 'load_partners'; }).fields;
+            var result = await this.rpc({
+                model: 'res.partner',
+                method: 'search_read',
+                args: [domain, fields],
+                kwargs: {
+                    limit: 10,
+                },
+            },{
+                timeout: 3000,
+                shadow: true,
+            });
+
+            return result;
         }
     }
     ClientListScreen.template = 'ClientListScreen';

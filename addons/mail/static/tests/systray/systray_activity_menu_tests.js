@@ -1,15 +1,14 @@
-odoo.define('mail.systray.ActivityMenuTests', function (require) {
-"use strict";
+/** @odoo-module **/
 
-const {
+import ActivityMenu from '@mail/js/systray/systray_activity_menu';
+import {
     afterEach,
     afterNextRender,
     beforeEach,
     start,
-} = require('mail/static/src/utils/test_utils.js');
-var ActivityMenu = require('mail.systray.ActivityMenu');
+} from '@mail/utils/test_utils';
 
-var testUtils = require('web.test_utils');
+import testUtils from 'web.test_utils';
 
 QUnit.module('mail', {}, function () {
 QUnit.module('ActivityMenu', {
@@ -235,19 +234,16 @@ QUnit.test('activity menu widget: activity view icon', async function (assert) {
 QUnit.test('activity menu widget: close on messaging menu click', async function (assert) {
     assert.expect(2);
 
-    const { widget } = await start({
+    const { createMessagingMenuComponent, widget } = await start({
         data: this.data,
-        hasMessagingMenu: true,
         async mockRPC(route, args) {
-            if (args.method === 'message_fetch') {
-                return [];
-            }
             if (args.method === 'systray_get_activities') {
                 return [];
             }
             return this._super(route, args);
         },
     });
+    await createMessagingMenuComponent();
     const activityMenu = new ActivityMenu(widget);
     await activityMenu.appendTo($('#qunit-fixture'));
     await testUtils.nextTick();
@@ -269,8 +265,6 @@ QUnit.test('activity menu widget: close on messaging menu click', async function
     );
 
     widget.destroy();
-});
-
 });
 
 });

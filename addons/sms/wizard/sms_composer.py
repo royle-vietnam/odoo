@@ -41,15 +41,15 @@ class SendSMS(models.TransientModel):
     res_ids = fields.Char('Document IDs')
     res_ids_count = fields.Integer(
         'Visible records count', compute='_compute_recipients_count', compute_sudo=False,
-        help='UX field computing the number of recipients in mass mode without active domain')
+        help='Number of recipients that will receive the SMS if sent in mass mode, without applying the Active Domain value')
     use_active_domain = fields.Boolean('Use active domain')
     active_domain = fields.Text('Active domain', readonly=True)
     active_domain_count = fields.Integer(
         'Active records count', compute='_compute_recipients_count', compute_sudo=False,
-        help='UX field computing the number of recipients in mass mode based on given active domain')
+        help='Number of records found when searching with the value in Active Domain')
     comment_single_recipient = fields.Boolean(
         'Single Mode', compute='_compute_comment_single_recipient', compute_sudo=False,
-        help='UX field allowing to know we are sending an SMS to a single specific recipient')
+        help='Indicates if the SMS composer targets a single specific recipient')
     # options for comment and mass mode
     mass_keep_log = fields.Boolean('Keep a note on document', default=True)
     mass_force_send = fields.Boolean('Send directly', default=False)
@@ -236,12 +236,15 @@ class SendSMS(models.TransientModel):
 
     def _action_send_sms_comment(self, records=None):
         records = records if records is not None else self._get_records()
-        subtype_id = self.env['ir.model.data'].xmlid_to_res_id('mail.mt_note')
+        subtype_id = self.env['ir.model.data']._xmlid_to_res_id('mail.mt_note')
 
         messages = self.env['mail.message']
+        all_bodies = self._prepare_body_values(records)
+
         for record in records:
-            messages |= record._message_sms(
-                self.body, subtype_id=subtype_id,
+            messages += record._message_sms(
+                all_bodies[record.id],
+                subtype_id=subtype_id,
                 number_field=self.number_field_name,
                 sms_numbers=self.sanitized_numbers.split(',') if self.sanitized_numbers else None)
         return messages
@@ -273,6 +276,11 @@ class SendSMS(models.TransientModel):
             return [r.id for r in records if recipients_info[r.id]['sanitized'] in bl_numbers]
         return []
 
+    def _get_optout_record_ids(self, records, recipients_info):
+        """ Compute opt-outed contacts, not necessarily blacklisted. Void by default
+        as no opt-out mechanism exist in SMS, see SMS Marketing. """
+        return []
+
     def _get_done_record_ids(self, records, recipients_info):
         """ Get a list of already-done records. Order of record set is used to
         spot duplicates so pay attention to it if necessary. """
@@ -300,6 +308,7 @@ class SendSMS(models.TransientModel):
         all_bodies = self._prepare_body_values(records)
         all_recipients = self._prepare_recipient_values(records)
         blacklist_ids = self._get_blacklist_record_ids(records, all_recipients)
+        optout_ids = self._get_optout_record_ids(records, all_recipients)
         done_ids = self._get_done_record_ids(records, all_recipients)
 
         result = {}
@@ -308,23 +317,26 @@ class SendSMS(models.TransientModel):
             sanitized = recipients['sanitized']
             if sanitized and record.id in blacklist_ids:
                 state = 'canceled'
-                error_code = 'sms_blacklist'
+                failure_type = 'sms_blacklist'
+            elif sanitized and record.id in optout_ids:
+                state = 'canceled'
+                failure_type = 'sms_optout'
             elif sanitized and record.id in done_ids:
                 state = 'canceled'
-                error_code = 'sms_duplicate'
+                failure_type = 'sms_duplicate'
             elif not sanitized:
-                state = 'error'
-                error_code = 'sms_number_format' if recipients['number'] else 'sms_number_missing'
+                state = 'canceled'
+                failure_type = 'sms_number_format' if recipients['number'] else 'sms_number_missing'
             else:
                 state = 'outgoing'
-                error_code = ''
+                failure_type = ''
 
             result[record.id] = {
                 'body': all_bodies[record.id],
                 'partner_id': recipients['partner'].id,
                 'number': sanitized if sanitized else recipients['number'],
                 'state': state,
-                'error_code': error_code,
+                'failure_type': failure_type,
             }
         return result
 

@@ -3,7 +3,7 @@
 from odoo.tests import common
 
 
-class TestPurchaseRequisitionCommon(common.SavepointCase):
+class TestPurchaseRequisitionCommon(common.TransactionCase):
 
     @classmethod
     def setUpClass(cls):
@@ -67,4 +67,3 @@ class TestPurchaseRequisitionCommon(common.SavepointCase):
         cls.res_partner_1 = cls.env['res.partner'].create({
             'name': 'Wood Corner',
         })
-        cls.env.user.company_id.currency_id = cls.env.ref("base.USD").id

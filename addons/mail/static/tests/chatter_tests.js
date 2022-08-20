@@ -1,11 +1,10 @@
-odoo.define('mail.chatter_tests', function (require) {
-"use strict";
+/** @odoo-module **/
 
-const { afterEach, beforeEach, start } = require('mail/static/src/utils/test_utils.js');
+import { afterEach, beforeEach, start } from '@mail/utils/test_utils';
 
-var FormView = require('web.FormView');
-var ListView = require('web.ListView');
-var testUtils = require('web.test_utils');
+import FormView from 'web.FormView';
+import ListView from 'web.ListView';
+import testUtils from 'web.test_utils';
 
 QUnit.module('mail', {}, function () {
 QUnit.module('Chatter', {
@@ -104,7 +103,7 @@ QUnit.module('Chatter', {
 });
 
 QUnit.test('list activity widget with no activity', async function (assert) {
-    assert.expect(5);
+    assert.expect(4);
 
     const { widget: list } = await start({
         hasView: true,
@@ -113,7 +112,9 @@ QUnit.test('list activity widget with no activity', async function (assert) {
         data: this.data,
         arch: '<list><field name="activity_ids" widget="list_activity"/></list>',
         mockRPC: function (route) {
-            assert.step(route);
+            if (!['/mail/init_messaging', '/mail/load_message_failures'].includes(route)) {
+                assert.step(route);
+            }
             return this._super(...arguments);
         },
         session: { uid: 2 },
@@ -122,16 +123,13 @@ QUnit.test('list activity widget with no activity', async function (assert) {
     assert.containsOnce(list, '.o_mail_activity .o_activity_color_default');
     assert.strictEqual(list.$('.o_activity_summary').text(), '');
 
-    assert.verifySteps([
-        '/web/dataset/search_read',
-        '/mail/init_messaging',
-    ]);
+    assert.verifySteps(['/web/dataset/search_read']);
 
     list.destroy();
 });
 
 QUnit.test('list activity widget with activities', async function (assert) {
-    assert.expect(7);
+    assert.expect(6);
 
     const currentUser = this.data['res.users'].records.find(user =>
         user.id === this.data.currentUserId
@@ -159,7 +157,9 @@ QUnit.test('list activity widget with activities', async function (assert) {
         data: this.data,
         arch: '<list><field name="activity_ids" widget="list_activity"/></list>',
         mockRPC: function (route) {
-            assert.step(route);
+            if (!['/mail/init_messaging', '/mail/load_message_failures'].includes(route)) {
+                assert.step(route);
+            }
             return this._super(...arguments);
         },
     });
@@ -172,16 +172,13 @@ QUnit.test('list activity widget with activities', async function (assert) {
     assert.containsOnce($secondRow, '.o_mail_activity .o_activity_color_planned.fa-clock-o');
     assert.strictEqual($secondRow.find('.o_activity_summary').text(), 'Type 2');
 
-    assert.verifySteps([
-        '/web/dataset/search_read',
-        '/mail/init_messaging',
-    ]);
+    assert.verifySteps(['/web/dataset/search_read']);
 
     list.destroy();
 });
 
 QUnit.test('list activity widget with exception', async function (assert) {
-    assert.expect(5);
+    assert.expect(4);
 
     const currentUser = this.data['res.users'].records.find(user =>
         user.id === this.data.currentUserId
@@ -202,7 +199,9 @@ QUnit.test('list activity widget with exception', async function (assert) {
         data: this.data,
         arch: '<list><field name="activity_ids" widget="list_activity"/></list>',
         mockRPC: function (route) {
-            assert.step(route);
+            if (!['/mail/init_messaging', '/mail/load_message_failures'].includes(route)) {
+                assert.step(route);
+            }
             return this._super(...arguments);
         },
     });
@@ -210,16 +209,13 @@ QUnit.test('list activity widget with exception', async function (assert) {
     assert.containsOnce(list, '.o_activity_color_today.text-warning.fa-warning');
     assert.strictEqual(list.$('.o_activity_summary').text(), 'Warning');
 
-    assert.verifySteps([
-        '/web/dataset/search_read',
-        '/mail/init_messaging',
-    ]);
+    assert.verifySteps(['/web/dataset/search_read']);
 
     list.destroy();
 });
 
 QUnit.test('list activity widget: open dropdown', async function (assert) {
-    assert.expect(10);
+    assert.expect(9);
 
     const currentUser = this.data['res.users'].records.find(user =>
         user.id === this.data.currentUserId
@@ -253,7 +249,7 @@ QUnit.test('list activity widget: open dropdown', async function (assert) {
         }
     );
 
-    const { env, widget: list } = await start({
+    const { widget: list } = await start({
         hasView: true,
         View: ListView,
         model: 'res.users',
@@ -264,10 +260,12 @@ QUnit.test('list activity widget: open dropdown', async function (assert) {
                 <field name="activity_ids" widget="list_activity"/>
             </list>`,
         mockRPC: function (route, args) {
-            assert.step(args.method || route);
+            if (!['/mail/init_messaging', '/mail/load_message_failures'].includes(route)) {
+                assert.step(args.method || route);
+            }
             if (args.method === 'action_feedback') {
                 const currentUser = this.data['res.users'].records.find(user =>
-                    user.id === env.messaging.currentUser.id
+                    user.id === this.currentUserId
                 );
                 Object.assign(currentUser, {
                     activity_ids: [4],
@@ -302,7 +300,6 @@ QUnit.test('list activity widget: open dropdown', async function (assert) {
 
     assert.verifySteps([
         '/web/dataset/search_read',
-        '/mail/init_messaging',
         'switch_view',
         'open dropdown',
         'activity_format',
@@ -561,8 +558,6 @@ QUnit.test('many2many_tags_email widget can load more than 40 records', async fu
     assert.strictEqual(form.$('.o_field_widget[name="partner_ids"] .badge').length, 101);
 
     form.destroy();
-});
-
 });
 
 });

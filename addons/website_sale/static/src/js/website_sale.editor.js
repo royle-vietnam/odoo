@@ -28,7 +28,7 @@ WebsiteNewMenu.include({
         return wUtils.prompt({
             id: "editor_new_product",
             window_title: _t("New Product"),
-            input: _t("Name"),
+            input: _t("Product Name"),
         }).then(function (result) {
             if (!result.val) {
                 return;
@@ -47,6 +47,29 @@ WebsiteNewMenu.include({
 });
 });
 
+odoo.define('website_sale.editMenu', function (require) {
+    'use strict';
+
+var WebsiteEditMenu = require('website.editMenu');
+
+WebsiteEditMenu.include({
+    /**
+     * @override
+     */
+    _getContentEditableAreas () {
+        return $(this.savableSelector).not('input, [data-oe-readonly],[data-oe-type="monetary"],[data-oe-many2one-id], [data-oe-field="arch"]:empty').filter((_, el) => {
+            return !$(el).closest('.o_not_editable, .oe_website_sale .products_header').length;
+        }).toArray();
+    },
+    /**
+     * @override
+     */
+    _getReadOnlyAreas () {
+        return $("#wrapwrap").find('.oe_website_sale .products_header, .oe_website_sale .products_header a').toArray();
+    },
+});
+});
+
 //==============================================================================
 
 odoo.define('website_sale.editor', function (require) {
@@ -54,11 +77,12 @@ odoo.define('website_sale.editor', function (require) {
 
 var options = require('web_editor.snippets.options');
 var publicWidget = require('web.public.widget');
-const {Class: EditorMenuBar} = require('web_editor.editor');
-const {qweb} = require('web.core');
+const Wysiwyg = require('web_editor.wysiwyg');
+const {qweb, _t} = require('web.core');
+const {Markup} = require('web.utils');
 
-EditorMenuBar.include({
-    custom_events: Object.assign(EditorMenuBar.prototype.custom_events, {
+Wysiwyg.include({
+    custom_events: Object.assign(Wysiwyg.prototype.custom_events, {
         get_ribbons: '_onGetRibbons',
         get_ribbon_classes: '_onGetRibbonClasses',
         delete_ribbon: '_onDeleteRibbon',
@@ -79,7 +103,10 @@ EditorMenuBar.include({
                 fields: ['id', 'html', 'bg_color', 'text_color', 'html_class'],
             });
         }
-        this.ribbons = Object.fromEntries(ribbons.map(ribbon => [ribbon.id, ribbon]));
+        this.ribbons = Object.fromEntries(ribbons.map(ribbon => {
+            ribbon.html = Markup(ribbon.html);
+            return [ribbon.id, ribbon];
+        }));
         this.originalRibbons = Object.assign({}, this.ribbons);
         this.productTemplatesRibbons = [];
         this.deletedRibbonClasses = '';
@@ -88,7 +115,7 @@ EditorMenuBar.include({
     /**
      * @override
      */
-    async save() {
+    async _saveViewBlocks() {
         const _super = this._super.bind(this);
         await this._saveRibbons();
         return _super(...arguments);
@@ -246,25 +273,6 @@ EditorMenuBar.include({
     },
 });
 
-publicWidget.registry.websiteSaleCurrency = publicWidget.Widget.extend({
-    selector: '.oe_website_sale',
-    disabledInEditableMode: false,
-    edit_events: {
-        'click .oe_currency_value:o_editable': '_onCurrencyValueClick',
-    },
-
-    //--------------------------------------------------------------------------
-    // Handlers
-    //--------------------------------------------------------------------------
-
-    /**
-     * @private
-     */
-    _onCurrencyValueClick: function (ev) {
-        $(ev.currentTarget).selectContent();
-    },
-});
-
 function reload() {
     if (window.location.href.match(/\?enable_editor/)) {
         window.location.reload();
@@ -380,6 +388,15 @@ options.registry.WebsiteSaleProductsItem = options.Class.extend({
         // Ribbons may have been edited or deleted in another products' option, need to make sure they're up to date
         this.rerender = true;
     },
+    /**
+     * @override
+     */
+    onBlur: function () {
+        // Since changes will not be saved unless they are validated, reset the
+        // previewed ribbon onBlur to communicate that to the user
+        this._resetRibbonDummy();
+        this._toggleEditingUI(false);
+    },
 
     //--------------------------------------------------------------------------
     // Options
@@ -400,6 +417,11 @@ options.registry.WebsiteSaleProductsItem = options.Class.extend({
      * @see this.selectClass for params
      */
     async setRibbon(previewMode, widgetValue, params) {
+        if (previewMode === 'reset') {
+            widgetValue = this.prevRibbonId;
+        } else {
+            this.prevRibbonId = this.$target[0].dataset.ribbonId;
+        }
         this.$target[0].dataset.ribbonId = widgetValue;
         this.trigger_up('set_product_ribbon', {
             templateId: this.productTemplateID,
@@ -413,13 +435,14 @@ options.registry.WebsiteSaleProductsItem = options.Class.extend({
         $ribbons.removeClass(htmlClasses);
 
         $ribbons.addClass(ribbon.html_class || '');
-        $ribbons.css('color', ribbon.text_color);
+        $ribbons.css('color', ribbon.text_color || '');
         $ribbons.css('background-color', ribbon.bg_color || '');
 
         if (!this.ribbons[widgetValue]) {
             $(`[data-ribbon-id="${widgetValue}"]`).each((index, product) => delete product.dataset.ribbonId);
         }
         this._resetRibbonDummy();
+        this._toggleEditingUI(false);
     },
     /**
      * @see this.selectClass for params
@@ -433,6 +456,7 @@ options.registry.WebsiteSaleProductsItem = options.Class.extend({
      */
     createRibbon(previewMode, widgetValue, params) {
         this.saveMethod = 'create';
+        this.setRibbon(false);
         this.$ribbon.html('Ribbon text');
         this.$ribbon.addClass('bg-primary o_ribbon_left');
         this._toggleEditingUI(true);
@@ -531,6 +555,17 @@ options.registry.WebsiteSaleProductsItem = options.Class.extend({
             return this._rerenderXML();
         }
     },
+    /**
+     * @override
+     */
+    updateUIVisibility: async function () {
+        // Main updateUIVisibility will remove the d-none class because there are visible widgets
+        // inside of it. TODO: update this once updateUIVisibility can be used to compute visibility
+        // of arbitrary DOM elements and not just widgets.
+        const isEditing = this.$el.find('[data-name="ribbon_options"]').hasClass('d-none');
+        await this._super(...arguments);
+        this._toggleEditingUI(isEditing);
+    },
 
     //--------------------------------------------------------------------------
     // Private
@@ -559,7 +594,7 @@ options.registry.WebsiteSaleProductsItem = options.Class.extend({
                 colorClasses,
                 isTag: /o_tag_(left|right)/.test(ribbon.html_class),
                 isLeft: /o_(tag|ribbon)_left/.test(ribbon.html_class),
-                textColor: ribbon.text_color || colorClasses ? 'currentColor' : defaultTextColor,
+                textColor: ribbon.text_color || (colorClasses ? 'currentColor' : defaultTextColor),
             }));
         });
     },
@@ -597,6 +632,8 @@ options.registry.WebsiteSaleProductsItem = options.Class.extend({
     _toggleEditingUI(state) {
         this.$el.find('[data-name="ribbon_options"]').toggleClass('d-none', state);
         this.$el.find('[data-name="ribbon_customize_opt"]').toggleClass('d-none', !state);
+        this.$('.o_ribbon:not(.o_wsale_ribbon_dummy)').toggleClass('d-none', state);
+        this.$ribbon.toggleClass('d-none', !state);
     },
     /**
      * Creates a copy of current ribbon to manipulate for edition/creation.
@@ -607,7 +644,8 @@ options.registry.WebsiteSaleProductsItem = options.Class.extend({
         if (this.$ribbon) {
             this.$ribbon.remove();
         }
-        this.$ribbon = this.$('.o_ribbon').clone().addClass('d-none o_wsale_ribbon_dummy').appendTo(this.$target);
+        const $original = this.$('.o_ribbon');
+        this.$ribbon = $original.clone().addClass('d-none o_wsale_ribbon_dummy').appendTo($original.parent());
     },
 
     //--------------------------------------------------------------------------

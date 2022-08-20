@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
+from odoo.exceptions import AccessError, ValidationError
 from odoo.tools import mute_logger
 from odoo.tools.translate import quote, unquote, xml_translate, html_translate
-from odoo.tests.common import TransactionCase, BaseCase
+from odoo.tests.common import TransactionCase, BaseCase, new_test_user
 from psycopg2 import IntegrityError
 
 
@@ -222,8 +223,8 @@ class TranslationToolsTestCase(BaseCase):
         }
         expect = """<form string="Form stuff">
                         <h1>Blah <i>blah</i> blah</h1>
-                        Mettre &lt;b&gt;plus de texte&lt;/i&gt; ici
-                        <field name="foo"/>
+                        Mettre <b>plus de texte ici
+                        </b><field name="foo"/>
                     </form>"""
         result = xml_translate(translations.get, source)
         self.assertEqual(result, expect)
@@ -244,18 +245,18 @@ class TranslationToolsTestCase(BaseCase):
 
 
 class TestTranslation(TransactionCase):
-
-    def setUp(self):
-        super(TestTranslation, self).setUp()
-        lang = self.env['res.lang']._activate_lang('fr_FR')
-        self.env.ref('base.module_base')._update_translations(['fr_FR'])
-        self.customers = self.env['res.partner.category'].create({'name': 'Customers'})
-        self.env['ir.translation'].create({
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.env['res.lang']._activate_lang('fr_FR')
+        cls.env.ref('base.module_base')._update_translations(['fr_FR'])
+        cls.customers = cls.env['res.partner.category'].create({'name': 'Customers'})
+        cls.env['ir.translation'].create({
             'type': 'model',
             'name': 'res.partner.category,name',
-            'module':'base',
+            'module': 'base',
             'lang': 'fr_FR',
-            'res_id': self.customers.id,
+            'res_id': cls.customers.id,
             'value': 'Clients',
             'state': 'translated',
         })
@@ -396,10 +397,10 @@ class TestTranslation(TransactionCase):
         self.assertEqual(translation_fr.src, 'Customers', "Did not set English version as source")
 
 class TestTranslationWrite(TransactionCase):
-
-    def setUp(self):
-        super().setUp()
-        self.category = self.env['res.partner.category'].create({'name': 'Reblochon'})
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.category = cls.env['res.partner.category'].create({'name': 'Reblochon'})
 
     def test_01_en(self):
         langs = self.env['res.lang'].get_installed()
@@ -437,7 +438,7 @@ class TestTranslationWrite(TransactionCase):
 
     def test_03_fr_single(self):
         self.env['res.lang']._activate_lang('fr_FR')
-        self.env['res.users'].with_context(active_test=False).search([]).write({'lang': 'fr_FR'})
+        self.env['res.partner'].with_context(active_test=False).search([]).write({'lang': 'fr_FR'})
         self.env.ref('base.lang_en').active = False
 
         langs = self.env['res.lang'].get_installed()
@@ -483,7 +484,7 @@ class TestTranslationWrite(TransactionCase):
     def test_04_fr_multi_no_en(self):
         self.env['res.lang']._activate_lang('fr_FR')
         self.env['res.lang']._activate_lang('es_ES')
-        self.env['res.users'].with_context(active_test=False).search([]).write({'lang': 'fr_FR'})
+        self.env['res.partner'].with_context(active_test=False).search([]).write({'lang': 'fr_FR'})
         self.env.ref('base.lang_en').active = False
 
         langs = self.env['res.lang'].get_installed()
@@ -503,7 +504,13 @@ class TestTranslationWrite(TransactionCase):
             {'src': 'None Name', 'value': 'French Name', 'lang': 'fr_FR'},
         ])
 
-    def test_05_remove_multi(self):
+    def test_05_remove_multi_empty_string(self):
+        self._test_05_remove_multi("")
+
+    def test_05_remove_multi_false(self):
+        self._test_05_remove_multi(False)
+
+    def _test_05_remove_multi(self, empty_value):
         self.env['res.lang']._activate_lang('fr_FR')
 
         langs = self.env['res.lang'].get_installed()
@@ -513,39 +520,27 @@ class TestTranslationWrite(TransactionCase):
         belgium = self.env.ref('base.be')
         # vat_label is translatable and not required
         belgium.with_context(lang='en_US').write({'vat_label': 'VAT'})
+        belgium.with_context(lang='fr_FR').write({'vat_label': 'TVA'})
 
-        # create translations if not exists
-        self.env['ir.translation']._upsert_translations([{
-            'type': 'model',
-            'name': 'res.country,vat_label',
-            'lang': 'en_US',
-            'res_id': belgium.id,
-            'src': 'VAT',
-            'value': 'VAT',
-            'state': 'translated',
-        }, {
-            'type': 'model',
-            'name': 'res.country,vat_label',
-            'lang': 'fr_FR',
-            'res_id': belgium.id,
-            'src': 'VAT',
-            'value': 'TVA',
-            'state': 'translated',
-        }])
+        translations = self.env['ir.translation'].search([
+            ('name', '=', 'res.country,vat_label'),
+            ('res_id', '=', belgium.id),
+        ])
+        self.assertEqual(len(translations), 2, "Translations are not created")
 
         # remove the value
-        belgium.with_context(lang='fr_FR').write({'vat_label': False})
+        belgium.with_context(lang='fr_FR').write({'vat_label': empty_value})
         # should recover the initial value from db
-        self.assertEqual(
-            False, belgium.with_context(lang='fr_FR').vat_label,
+        self.assertFalse(
+            belgium.with_context(lang='fr_FR').vat_label,
             "Value was not reset"
         )
-        self.assertEqual(
-            False, belgium.with_context(lang='en_US').vat_label,
+        self.assertFalse(
+            belgium.with_context(lang='en_US').vat_label,
             "Value was not reset in other languages"
         )
-        self.assertEqual(
-            False, belgium.with_context(lang=None).vat_label,
+        self.assertFalse(
+            belgium.with_context(lang=None).vat_label,
             "Value was not reset on the field model"
         )
 
@@ -576,6 +571,90 @@ class TestTranslationWrite(TransactionCase):
             "Did not fallback to source when reset"
         )
 
+    def test_orphan(self):
+        """ What happens with orphan translations. """
+        self.env['res.lang']._activate_lang('fr_FR')
+
+        # create a user with access rights on partner categories
+        user = new_test_user(self.env, 'deleter')
+        group = self.env.ref('base.group_partner_manager')
+        user.groups_id = [(4, group.id)]
+
+        # this access rule triggers a MissingError
+        self.env['ir.rule'].create({
+            'model_id': self.env['ir.model']._get_id('res.partner.category'),
+            'groups': [(4, group.id)],
+            'domain_force': "[('name', 'ilike', 'e')]",
+        })
+
+        # create a translation, and delete the record from the database
+        translation = self.env['ir.translation'].create({
+            'type': 'model',
+            'name': 'res.partner.category,name',
+            'lang': 'fr_FR',
+            'res_id': self.category.id,
+            'src': 'Reblochon',
+            'value': 'Parfum Exquis',
+            'state': 'translated',
+        })
+        translation.flush()
+        translation.invalidate_cache()
+        self.cr.execute("DELETE FROM res_partner_category WHERE id=%s", [self.category.id])
+
+        # deleting the translation should be possible, provided the user has
+        # access rights on the translation's model
+        user0 = new_test_user(self.env, 'cannot modify category')
+        with self.assertRaises(AccessError):
+            translation.with_user(user0).unlink()
+
+        translation.with_user(user).unlink()
+
+        # however, creating orphan translations should not be possible
+        with self.assertRaises(ValidationError):
+            translation.with_user(user).create({
+                'type': 'model',
+                'name': 'res.partner.category,name',
+                'lang': 'fr_FR',
+                'res_id': self.category.id,
+                'src': 'Reblochon',
+                'value': 'Parfum Exquis',
+                'state': 'translated',
+            })
+
+    def test_write(self):
+        """ What happens with orphan translations. """
+        self.env['res.lang']._activate_lang('fr_FR')
+
+        # create a user with access rights on partner categories
+        user = new_test_user(self.env, 'updater')
+        group = self.env.ref('base.group_system')
+        user.groups_id = [(4, group.id)]
+        action = user.env["ir.actions.act_window"].create({
+            "name": "Dummy Action",
+            "res_model": "res.users",
+            "help": "<p>Cheese</p>",
+        })
+
+        # create a translation, and delete the record from the database
+        translation = user.env['ir.translation'].create({
+            'type': 'model_terms',
+            'name': 'ir.actions.act_window,help',
+            'lang': 'fr_FR',
+            'res_id': action.id,
+            'src': 'Cheese',
+            'value': 'Fromage',
+            'state': 'translated',
+        })
+        translation.flush()
+        translation.invalidate_cache()
+
+        # deleting the translation should be possible, provided the user has
+        # access rights on the translation's model
+        user0 = new_test_user(self.env, 'cannot modify an action')
+        with self.assertRaises(AccessError):
+            translation.with_user(user0).unlink()
+
+        translation.with_user(user).unlink()
 
     def test_field_selection(self):
         """ Test translations of field selections. """
@@ -594,13 +673,39 @@ class TestTranslationWrite(TransactionCase):
         self.assertEqual(fg['state']['selection'],
                          [('manual', 'Custo'), ('base', 'Pas touche!')])
 
+    def test_fields_view_get(self):
+        """ Test translations of field descriptions in fields_view_get(). """
+        self.env['res.lang']._activate_lang('fr_FR')
+
+        # add translation for the string of field ir.model.name
+        ir_model_field = self.env['ir.model.fields']._get('ir.model', 'name')
+        LABEL = "Description du Modèle"
+        self.env['ir.translation'].create({
+            'type': 'model',
+            'name': 'ir.model.fields,field_description',
+            'lang': 'fr_FR',
+            'res_id': ir_model_field.id,
+            'src': 'Name',
+            'value': LABEL,
+        })
+
+        # check that fields_get() returns the expected label
+        model = self.env['ir.model'].with_context(lang='fr_FR')
+        info = model.fields_get(['name'])
+        self.assertEqual(info['name']['string'], LABEL)
+
+        # check that fields_view_get() also returns the expected label
+        info = model.fields_view_get()['fields']
+        self.assertEqual(info['name']['string'], LABEL)
+
 
 class TestXMLTranslation(TransactionCase):
-    def setUp(self):
-        super(TestXMLTranslation, self).setUp()
-        self.env['res.lang']._activate_lang('fr_FR')
-        self.env['res.lang']._activate_lang('nl_NL')
-        self.env.ref('base.module_base')._update_translations(['fr_FR', 'nl_NL'])
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.env['res.lang']._activate_lang('fr_FR')
+        cls.env['res.lang']._activate_lang('nl_NL')
+        cls.env.ref('base.module_base')._update_translations(['fr_FR', 'nl_NL'])
 
     def create_view(self, archf, terms, **kwargs):
         view = self.env['ir.ui.view'].create({

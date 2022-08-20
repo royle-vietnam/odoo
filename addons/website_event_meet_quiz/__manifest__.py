@@ -8,7 +8,7 @@
     'sequence': 1007,
     'version': '1.0',
     'summary': 'Quiz and Meet on community route',
-    'website': 'https://www.odoo.com/page/events',
+    'website': 'https://www.odoo.com/app/events',
     'description': "",
     'depends': [
         'website_event_meet',
@@ -21,4 +21,5 @@
     ],
     'application': False,
     'auto_install': True,
+    'license': 'LGPL-3',
 }

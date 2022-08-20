@@ -3,18 +3,25 @@
 
 from datetime import datetime
 import random
-import json
+import re
 
 from odoo import api, models, fields, _
-from odoo.addons.http_routing.models.ir_http import slug
+from odoo.addons.http_routing.models.ir_http import slug, unslug
+from odoo.addons.website.tools import text_from_html
+from odoo.tools.json import scriptsafe as json_scriptsafe
 from odoo.tools.translate import html_translate
-from odoo.tools import html2plaintext
 
 
 class Blog(models.Model):
     _name = 'blog.blog'
     _description = 'Blog'
-    _inherit = ['mail.thread', 'website.seo.metadata', 'website.multi.mixin', 'website.cover_properties.mixin']
+    _inherit = [
+        'mail.thread',
+        'website.seo.metadata',
+        'website.multi.mixin',
+        'website.cover_properties.mixin',
+        'website.searchable.mixin',
+    ]
     _order = 'name'
 
     name = fields.Char('Blog Name', required=True, translate=True)
@@ -86,6 +93,34 @@ class Blog(models.Model):
 
         return tag_by_blog
 
+    @api.model
+    def _search_get_detail(self, website, order, options):
+        with_description = options['displayDescription']
+        search_fields = ['name']
+        fetch_fields = ['id', 'name']
+        mapping = {
+            'name': {'name': 'name', 'type': 'text', 'match': True},
+            'website_url': {'name': 'url', 'type': 'text', 'truncate': False},
+        }
+        if with_description:
+            search_fields.append('subtitle')
+            fetch_fields.append('subtitle')
+            mapping['description'] = {'name': 'subtitle', 'type': 'text', 'match': True}
+        return {
+            'model': 'blog.blog',
+            'base_domain': [website.website_domain()],
+            'search_fields': search_fields,
+            'fetch_fields': fetch_fields,
+            'mapping': mapping,
+            'icon': 'fa-rss-square',
+            'order': 'name desc, id desc' if 'name desc' in order else 'name asc, id desc',
+        }
+
+    def _search_render_results(self, fetch_fields, mapping, icon, limit):
+        results_data = super()._search_render_results(fetch_fields, mapping, icon, limit)
+        for data in results_data:
+            data['url'] = '/blog/%s' % data['id']
+        return results_data
 
 class BlogTagCategory(models.Model):
     _name = 'blog.tag.category'
@@ -118,7 +153,8 @@ class BlogTag(models.Model):
 class BlogPost(models.Model):
     _name = "blog.post"
     _description = "Blog Post"
-    _inherit = ['mail.thread', 'website.seo.metadata', 'website.published.multi.mixin', 'website.cover_properties.mixin']
+    _inherit = ['mail.thread', 'website.seo.metadata', 'website.published.multi.mixin',
+        'website.cover_properties.mixin', 'website.searchable.mixin']
     _order = 'id DESC'
     _mail_post_access = 'read'
 
@@ -162,7 +198,8 @@ class BlogPost(models.Model):
             if blog_post.teaser_manual:
                 blog_post.teaser = blog_post.teaser_manual
             else:
-                content = html2plaintext(blog_post.content).replace('\n', ' ')
+                content = text_from_html(blog_post.content)
+                content = re.sub('\\s+', ' ', content).strip()
                 blog_post.teaser = content[:200] + '...'
 
     def _set_teaser(self):
@@ -185,12 +222,12 @@ class BlogPost(models.Model):
 
     def _check_for_publication(self, vals):
         if vals.get('is_published'):
-            for post in self:
+            for post in self.filtered(lambda p: p.active):
                 post.blog_id.message_post_with_view(
                     'website_blog.blog_post_template_new_post',
                     subject=post.name,
                     values={'post': post},
-                    subtype_id=self.env['ir.model.data'].xmlid_to_res_id('website_blog.mt_blog_blog_published'))
+                    subtype_id=self.env['ir.model.data']._xmlid_to_res_id('website_blog.mt_blog_blog_published'))
             return True
         return False
 
@@ -202,13 +239,16 @@ class BlogPost(models.Model):
 
     def write(self, vals):
         result = True
+        # archiving a blog post, unpublished the blog post
+        if 'active' in vals and not vals['active']:
+            vals['is_published'] = False
         for post in self:
             copy_vals = dict(vals)
             published_in_vals = set(vals.keys()) & {'is_published', 'website_published'}
             if (published_in_vals and 'published_date' not in vals and
                     (not post.published_date or post.published_date <= fields.Datetime.now())):
                 copy_vals['published_date'] = vals[list(published_in_vals)[0]] and fields.Datetime.now() or False
-            result &= super(BlogPost, self).write(copy_vals)
+            result &= super(BlogPost, post).write(copy_vals)
         self._check_for_publication(vals)
         return result
 
@@ -234,9 +274,9 @@ class BlogPost(models.Model):
             'res_id': self.id,
         }
 
-    def _notify_get_groups(self):
+    def _notify_get_groups(self, msg_vals=None):
         """ Add access button to everyone if the document is published. """
-        groups = super(BlogPost, self)._notify_get_groups()
+        groups = super(BlogPost, self)._notify_get_groups(msg_vals=msg_vals)
 
         if self.website_published:
             for group_name, group_method, group_data in groups:
@@ -260,7 +300,58 @@ class BlogPost(models.Model):
         res['default_opengraph']['article:modified_time'] = self.write_date
         res['default_opengraph']['article:tag'] = self.tag_ids.mapped('name')
         # background-image might contain single quotes eg `url('/my/url')`
-        res['default_opengraph']['og:image'] = res['default_twitter']['twitter:image'] = json.loads(self.cover_properties).get('background-image', 'none')[4:-1].strip("'")
+        res['default_opengraph']['og:image'] = res['default_twitter']['twitter:image'] = json_scriptsafe.loads(self.cover_properties).get('background-image', 'none')[4:-1].strip("'")
         res['default_opengraph']['og:title'] = res['default_twitter']['twitter:title'] = self.name
         res['default_meta_description'] = self.subtitle
         return res
+
+    @api.model
+    def _search_get_detail(self, website, order, options):
+        with_description = options['displayDescription']
+        with_date = options['displayDetail']
+        blog = options.get('blog')
+        tags = options.get('tag')
+        date_begin = options.get('date_begin')
+        date_end = options.get('date_end')
+        state = options.get('state')
+        domain = [website.website_domain()]
+        if blog:
+            domain.append([('blog_id', '=', unslug(blog)[1])])
+        if tags:
+            active_tag_ids = [unslug(tag)[1] for tag in tags.split(',')] or []
+            if active_tag_ids:
+                domain.append([('tag_ids', 'in', active_tag_ids)])
+        if date_begin and date_end:
+            domain.append([("post_date", ">=", date_begin), ("post_date", "<=", date_end)])
+        if self.env.user.has_group('website.group_website_designer'):
+            if state == "published":
+                domain.append([("website_published", "=", True), ("post_date", "<=", fields.Datetime.now())])
+            elif state == "unpublished":
+                domain.append(['|', ("website_published", "=", False), ("post_date", ">", fields.Datetime.now())])
+        else:
+            domain.append([("post_date", "<=", fields.Datetime.now())])
+        search_fields = ['name', 'author_name']
+        def search_in_tags(env, search_term):
+            tags_like_search = env['blog.tag'].search([('name', 'ilike', search_term)])
+            return [('tag_ids', 'in', tags_like_search.ids)]
+        fetch_fields = ['name', 'website_url']
+        mapping = {
+            'name': {'name': 'name', 'type': 'text', 'match': True},
+            'website_url': {'name': 'website_url', 'type': 'text', 'truncate': False},
+        }
+        if with_description:
+            search_fields.append('content')
+            fetch_fields.append('content')
+            mapping['description'] = {'name': 'content', 'type': 'text', 'html': True, 'match': True}
+        if with_date:
+            fetch_fields.append('published_date')
+            mapping['detail'] = {'name': 'published_date', 'type': 'date'}
+        return {
+            'model': 'blog.post',
+            'base_domain': domain,
+            'search_fields': search_fields,
+            'search_extra': search_in_tags,
+            'fetch_fields': fetch_fields,
+            'mapping': mapping,
+            'icon': 'fa-rss',
+        }

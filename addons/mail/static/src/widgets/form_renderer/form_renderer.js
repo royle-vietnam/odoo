@@ -1,12 +1,11 @@
-odoo.define('mail/static/src/widgets/form_renderer/form_renderer.js', function (require) {
-"use strict";
+/** @odoo-module **/
 
-const components = {
-    ChatterContainer: require('mail/static/src/components/chatter_container/chatter_container.js'),
-};
+// ensure component is registered beforehand.
+import '@mail/components/chatter_container/chatter_container';
+import { getMessagingComponent } from "@mail/utils/messaging_component";
 
-const FormRenderer = require('web.FormRenderer');
-const { ComponentWrapper } = require('web.OwlCompatibility');
+import FormRenderer from 'web.FormRenderer';
+import { ComponentWrapper } from 'web.OwlCompatibility';
 
 class ChatterContainerWrapperComponent extends ComponentWrapper {}
 
@@ -64,20 +63,22 @@ FormRenderer.include({
         const props = this._makeChatterContainerProps();
         this._chatterContainerComponent = new ChatterContainerWrapperComponent(
             this,
-            components.ChatterContainer,
+            getMessagingComponent("ChatterContainer"),
             props
         );
         // Not in custom_events because other modules may remove this listener
         // while attempting to extend them.
         this.on('o_chatter_rendered', this, ev => this._onChatterRendered(ev));
         if (this.chatterFields.hasRecordReloadOnMessagePosted) {
-            this.on('o_message_posted', this, ev => this.trigger_up('reload'));
+            this.on('o_message_posted', this, ev => {
+                this.trigger_up('reload', { keepChanges: true });
+            });
         }
         if (this.chatterFields.hasRecordReloadOnAttachmentsChanged) {
-            this.on('o_attachments_changed', this, ev => this.trigger_up('reload'));
+            this.on('o_attachments_changed', this, ev => this.trigger_up('reload', { keepChanges: true }));
         }
         if (this.chatterFields.hasRecordReloadOnFollowersUpdate) {
-            owl.Component.env.bus.on('mail.thread:promptAddFollower-closed', this, ev => this.trigger_up('reload'));
+            owl.Component.env.bus.on('mail.thread:promptAddFollower-closed', this, ev => this.trigger_up('reload', { keepChanges: true }));
         }
     },
     /**
@@ -85,27 +86,11 @@ FormRenderer.include({
      * @returns {Object}
      */
     _makeChatterContainerProps() {
-        const context = this.record ? this.record.getContext() : {};
-        const activityIds = this.state.data.activity_ids
-            ? this.state.data.activity_ids.res_ids
-            : [];
-        const followerIds = this.state.data.message_follower_ids
-            ? this.state.data.message_follower_ids.res_ids
-            : [];
-        const messageIds = this.state.data.message_ids
-            ? this.state.data.message_ids.res_ids
-            : [];
-        const threadAttachmentCount = this.state.data.message_attachment_count || 0;
         return {
-            activityIds,
-            context,
-            followerIds,
             hasActivities: this.chatterFields.hasActivityIds,
             hasFollowers: this.chatterFields.hasMessageFollowerIds,
             hasMessageList: this.chatterFields.hasMessageIds,
-            isAttachmentBoxVisible: this.chatterFields.isAttachmentBoxVisible,
-            messageIds,
-            threadAttachmentCount,
+            isAttachmentBoxVisibleInitially: this.chatterFields.isAttachmentBoxVisibleInitially,
             threadId: this.state.res_id,
             threadModel: this.state.model,
         };
@@ -159,7 +144,7 @@ FormRenderer.include({
      *
      * @override
      */
-    async _renderView() {
+    async __renderView() {
         await this._super(...arguments);
         if (this._hasChatter()) {
             if (!this._chatterContainerComponent) {
@@ -197,6 +182,4 @@ FormRenderer.include({
      * @param {mail.thread} ev.data.thread
      */
     _onChatterRendered(ev) {},
-});
-
 });

@@ -44,6 +44,8 @@ publicWidget.registry.ChatRoom = publicWidget.Widget.extend({
 
         this.jitsiServer = this.$el.data('jitsi-server') || 'meet.jit.si';
 
+        this.maxCapacity = parseInt(this.$el.data('max-capacity')) || Infinity;
+
         if (this.autoOpen) {
             await this._onChatRoomClick();
         }
@@ -70,11 +72,7 @@ publicWidget.registry.ChatRoom = publicWidget.Widget.extend({
             });
 
             if (isChatRoomFull) {
-                Dialog.alert(this, _t("Sorry, this room is full"), {
-                    title: _t("Warning"),
-                    // reload the page to refresh the participant count
-                    confirm_callback: () => window.location.reload(),
-                });
+                window.location.reload();
                 return;
             }
         }
@@ -92,16 +90,7 @@ publicWidget.registry.ChatRoom = publicWidget.Widget.extend({
             $parentNode.find("iframe").trigger("empty");
             $parentNode.empty();
 
-            let jitsiRoom = await this._joinJitsiRoom($parentNode);
-
-            $(jitsiRoom._frame).on("empty", async () => {
-                // we opened an other Jitsi room on the same parent node
-                await this._updatePartitipantCountIfEmpty();
-            });
-
-            jitsiRoom.addEventListener('videoConferenceLeft', async () => {
-                await this._updatePartitipantCountIfEmpty();
-            });
+            await this._joinJitsiRoom($parentNode);
         } else {
             // create a model and append the Jitsi iframe in it
             let $jitsiModal = $(QWeb.render('chat_room_modal', {}));
@@ -119,7 +108,6 @@ publicWidget.registry.ChatRoom = publicWidget.Widget.extend({
             $jitsiModal.on('hidden.bs.modal', async () => {
                 jitsiRoom.dispose();
                 $(".o_wjitsi_room_modal").remove();
-                await this._updatePartitipantCountIfEmpty();
             });
         }
     },
@@ -166,6 +154,10 @@ publicWidget.registry.ChatRoom = publicWidget.Widget.extend({
 
         let timeoutCall = null;
         const updateParticipantCount = (joined) => {
+            this.allParticipantIds = Object.keys(jitsiRoom._participants).sort();
+            // if we reached the maximum capacity, update immediately the participant count
+            const timeoutTime = this.allParticipantIds.length >= this.maxCapacity ? 0 : 2000;
+
             // we clear the old timeout to be sure to call it only once each 2 seconds
             // (so if 2 participants join/leave in this interval, we will perform only
             // one HTTP request for both).
@@ -177,7 +169,7 @@ publicWidget.registry.ChatRoom = publicWidget.Widget.extend({
                     // count so we avoid to send to many HTTP requests
                     this._updateParticipantCount(this.allParticipantIds.length, joined);
                 }
-            }, 2000);
+            }, timeoutTime);
         };
 
         jitsiRoom.addEventListener('participantJoined', () => updateParticipantCount(true));
@@ -188,22 +180,25 @@ publicWidget.registry.ChatRoom = publicWidget.Widget.extend({
             this.participantId = event.id;
             updateParticipantCount(true);
             $('.o_wjitsi_chat_room_loading').addClass('d-none');
+
+            // recheck if the room is not full
+            if (this.checkFull && this.allParticipantIds.length > this.maxCapacity) {
+                clearTimeout(timeoutCall);
+                jitsiRoom.executeCommand('hangup');
+                window.location.reload();
+            }
+        });
+
+        // update the participant count when using the "Leave" button
+        jitsiRoom.addEventListener('videoConferenceLeft', async (event) => {
+            this.allParticipantIds = Object.keys(jitsiRoom._participants)
+            if (!this.allParticipantIds.length) {
+                // bypass the checks and timer of updateParticipantCount
+                this._updateParticipantCount(this.allParticipantIds.length, false);
+            }
         });
 
         return jitsiRoom;
-    },
-
-    /**
-      * If we are the last participant in the room, we are the only one who can send the
-      * "zero participant" update to the server.
-      *
-      * @private
-      */
-    _updatePartitipantCountIfEmpty: async function () {
-        if (this.allParticipantIds && this.allParticipantIds.length === 1 && this.allParticipantIds[0] === this.participantId) {
-          // we are the last participant in the room and we left it
-          await this._updateParticipantCount(0, false);
-        }
     },
 
     /**

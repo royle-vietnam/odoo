@@ -2,6 +2,23 @@
 <odoo>
 
 <!-- Search Box -->
+<template id="events_search_box_input" name="Events search box">
+    <t t-call="website.website_search_box_input">
+        <t t-set="_classes" t-valuef="o_wevent_event_searchbar_form w-100 my-1 my-lg-0 #{_classes}"/>
+        <t t-set="search_type" t-valuef="events"/>
+        <t t-set="action" t-valuef="/event"/>
+        <t t-set="display_description" t-valuef="true"/>
+        <t t-set="display_detail" t-valuef="false"/>
+        <t t-set="search" t-value="search or searches and searches['search']"/>
+        <t t-set="placeholder">Search an event...</t>
+        <t t-foreach="searches" t-as="item">
+            <input t-if="item != 'search' and item_value != 'all'" type="hidden"
+                t-att-name="item" t-att-value="item_value"/>
+        </t>
+        <t t-out="0"/>
+    </t>
+</template>
+
 <template id="events_search_box" inherit_id="website.website_search_box" primary="True">
     <xpath expr="//div[@role='search']" position="replace">
         <form t-attf-class="o_wevent_event_searchbar_form o_wait_lazy_js w-100 my-1 my-lg-0 #{_classes}"
@@ -13,7 +30,7 @@
                 <input t-if="search != 'search' and search_value != 'all'" type="hidden"
                     t-att-name="search" t-att-value="search_value"/>
             </t>
-            <t t-raw="0"/>
+            <t t-out="0"/>
         </form>
     </xpath>
 </template>
@@ -25,7 +42,7 @@
             <h6 class="o_wevent_sidebar_title">
                 <t t-if="country">
                     <i class="fa fa-flag mr-2"/>Events: <span t-esc="country.name"/>
-                    <img class="img-fluid" t-att-src="website.image_url(country, 'image')" alt=""/>
+                    <img class="img-fluid" t-att-src="country.image_url" alt=""/>
                 </t>
                 <t t-else="">
                     <i class="fa fa-globe mr-2"/>Upcoming Events
@@ -75,6 +92,15 @@
             <div class="o_countdown_metric_container"><span class="o_countdown_remaining o_timer_minutes">00</span><span class="o_countdown_metric">:</span></div>
             <div class="o_countdown_metric_container"><span class="o_countdown_remaining o_timer_seconds">00</span><span class="o_countdown_metric"></span></div>
         </span>
+    </div>
+</template>
+
+<template id="display_timer_alert_widget" name="Display Countdown widget">
+    <div class="o_we_track_timer alert alert-warning alert-dismissible fade show d-none mx-3 mt-3 mb-0" role="alert" t-att-data-time-to-live="time_to_live">
+        Starts <span />
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+            <i class="fa fa-times"/>
+        </button>
     </div>
 </template>
 

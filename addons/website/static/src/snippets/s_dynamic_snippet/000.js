@@ -4,6 +4,7 @@ odoo.define('website.s_dynamic_snippet', function (require) {
 const core = require('web.core');
 const config = require('web.config');
 const publicWidget = require('web.public.widget');
+const {Markup} = require('web.utils');
 
 const DynamicSnippet = publicWidget.Widget.extend({
     selector: '.s_dynamic_snippet',
@@ -40,7 +41,6 @@ const DynamicSnippet = publicWidget.Widget.extend({
         return this._super.apply(this, arguments).then(
             () => Promise.all([
                 this._fetchData(),
-                this._manageWarningMessageVisibility()
             ])
         );
     },
@@ -52,8 +52,9 @@ const DynamicSnippet = publicWidget.Widget.extend({
         return this._super.apply(this, arguments)
             .then(() => {
                 this._setupSizeChangedManagement(true);
+                this.options.wysiwyg && this.options.wysiwyg.odooEditor.observerUnactive();
                 this._render();
-                this._toggleVisibility(true);
+                this.options.wysiwyg && this.options.wysiwyg.odooEditor.observerActive();
             });
     },
     /**
@@ -61,9 +62,11 @@ const DynamicSnippet = publicWidget.Widget.extend({
      * @override
      */
     destroy: function () {
+        this.options.wysiwyg && this.options.wysiwyg.odooEditor.observerUnactive();
         this._toggleVisibility(false);
         this._setupSizeChangedManagement(false);
         this._clearContent();
+        this.options.wysiwyg && this.options.wysiwyg.odooEditor.observerActive();
         this._super.apply(this, arguments);
     },
 
@@ -72,14 +75,14 @@ const DynamicSnippet = publicWidget.Widget.extend({
     //--------------------------------------------------------------------------
 
     /**
-     *
      * @private
      */
     _clearContent: function () {
-        const $dynamicSnippetTemplate = this.$el.find('.dynamic_snippet_template');
-        if ($dynamicSnippetTemplate) {
-            $dynamicSnippetTemplate.html('');
-        }
+        const $templateArea = this.$el.find('.dynamic_snippet_template');
+        this.trigger_up('widgets_stop_request', {
+            $target: $templateArea,
+        });
+        $templateArea.html('');
     },
     /**
      * Method to be overridden in child components if additional configuration elements
@@ -98,42 +101,33 @@ const DynamicSnippet = publicWidget.Widget.extend({
         return [];
     },
     /**
+     * Method to be overridden in child components in order to add custom parameters if needed.
+     * @private
+     */
+    _getRpcParameters: function () {
+        return {};
+    },
+    /**
      * Fetches the data.
      * @private
      */
-    _fetchData: function () {
+    async _fetchData() {
         if (this._isConfigComplete()) {
-            return this._rpc(
-                {
-                    'route': '/website/snippet/filters',
-                    'params': {
-                        'filter_id': parseInt(this.$el.get(0).dataset.filterId),
-                        'template_key': this.$el.get(0).dataset.templateKey,
-                        'limit': parseInt(this.$el.get(0).dataset.numberOfRecords),
-                        'search_domain': this._getSearchDomain()
-                    },
-                })
-                .then(
-                    (data) => {
-                        this.data = data;
-                    }
-                );
-        } else {
-            return new Promise((resolve) => {
-                this.data = [];
-                resolve();
+            const nodeData = this.el.dataset;
+            const filterFragments = await this._rpc({
+                'route': '/website/snippet/filters',
+                'params': Object.assign({
+                    'filter_id': parseInt(nodeData.filterId),
+                    'template_key': nodeData.templateKey,
+                    'limit': parseInt(nodeData.numberOfRecords),
+                    'search_domain': this._getSearchDomain(),
+                    'with_sample': this.editableMode,
+                }, this._getRpcParameters()),
             });
+            this.data = filterFragments.map(Markup);
+        } else {
+            this.data = [];
         }
-    },
-    /**
-     *
-     * @private
-     */
-    _manageWarningMessageVisibility: async function () {
-        this.$el.find('.missing_option_warning').toggleClass(
-            'd-none',
-            this._isConfigComplete()
-        );
     },
     /**
      * Method to be overridden in child components in order to prepare content
@@ -170,19 +164,31 @@ const DynamicSnippet = publicWidget.Widget.extend({
      * @private
      */
     _render: function () {
-        if (this.data.length) {
+        if (this.data.length > 0 || this.editableMode) {
+            this.$el.removeClass('d-none');
             this._prepareContent();
         } else {
+            this.$el.addClass('d-none');
             this.renderedContent = '';
         }
         this._renderContent();
     },
     /**
-     *
      * @private
      */
     _renderContent: function () {
-        this.$el.find('.dynamic_snippet_template').html(this.renderedContent);
+        const $templateArea = this.$el.find('.dynamic_snippet_template');
+        this.trigger_up('widgets_stop_request', {
+            $target: $templateArea,
+        });
+        $templateArea.html(this.renderedContent);
+        // TODO this is probably not the only public widget which creates DOM
+        // which should be attached to another public widget. Maybe a generic
+        // method could be added to properly do this operation of DOM addition.
+        this.trigger_up('widgets_start_request', {
+            $target: $templateArea,
+            editableMode: this.editableMode,
+        });
     },
     /**
      *

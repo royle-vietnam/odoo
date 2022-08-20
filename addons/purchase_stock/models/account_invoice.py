@@ -2,8 +2,7 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from odoo import api, fields, models, _
-from odoo.tools.float_utils import float_compare, float_is_zero
-from odoo.exceptions import UserError
+from odoo.tools.float_utils import float_compare
 
 
 class AccountMove(models.Model):
@@ -36,14 +35,14 @@ class AccountMove(models.Model):
         :return: A list of Python dictionary to be passed to env['account.move.line'].create.
         '''
         lines_vals_list = []
+        price_unit_prec = self.env['decimal.precision'].precision_get('Product Price')
 
         for move in self:
             if move.move_type not in ('in_invoice', 'in_refund', 'in_receipt') or not move.company_id.anglo_saxon_accounting:
                 continue
 
             move = move.with_company(move.company_id)
-            for line in move.invoice_line_ids.filtered(lambda line: line.product_id.type == 'product' and line.product_id.valuation == 'real_time'):
-
+            for line in move.invoice_line_ids:
                 # Filter out lines being not eligible for price difference.
                 if line.product_id.type != 'product' or line.product_id.valuation != 'real_time':
                     continue
@@ -52,6 +51,8 @@ class AccountMove(models.Model):
                 debit_pdiff_account = line.product_id.property_account_creditor_price_difference \
                                 or line.product_id.categ_id.property_account_creditor_price_difference_categ
                 debit_pdiff_account = move.fiscal_position_id.map_account(debit_pdiff_account)
+                if not debit_pdiff_account:
+                    continue
 
                 if line.product_id.cost_method != 'standard' and line.purchase_line_id:
                     po_currency = line.purchase_line_id.currency_id
@@ -69,23 +70,7 @@ class AccountMove(models.Model):
                         valuation_stock_moves = valuation_stock_moves.filtered(lambda stock_move: stock_move._is_in())
 
                     if valuation_stock_moves:
-                        valuation_price_unit_total = 0
-                        valuation_total_qty = 0
-                        for val_stock_move in valuation_stock_moves:
-                            # In case val_stock_move is a return move, its valuation entries have been made with the
-                            # currency rate corresponding to the original stock move
-                            valuation_date = val_stock_move.origin_returned_move_id.date or val_stock_move.date
-                            svl = val_stock_move.mapped('stock_valuation_layer_ids').filtered(lambda l: l.quantity)
-                            layers_qty = sum(svl.mapped('quantity'))
-                            layers_values = sum(svl.mapped('value'))
-                            valuation_price_unit_total += line.company_currency_id._convert(
-                                layers_values, move.currency_id,
-                                move.company_id, valuation_date, round=False,
-                            )
-                            valuation_total_qty += layers_qty
-
-                        if float_is_zero(valuation_total_qty, precision_rounding=line.product_uom_id.rounding or line.product_id.uom_id.rounding):
-                            raise UserError(_('Odoo is not able to generate the anglo saxon entries. The total valuation of %s is zero.') % line.product_id.display_name)
+                        valuation_price_unit_total, valuation_total_qty = valuation_stock_moves._get_valuation_price_and_qty(line, move.currency_id)
                         valuation_price_unit = valuation_price_unit_total / valuation_total_qty
                         valuation_price_unit = line.product_id.uom_id._compute_price(valuation_price_unit, line.product_uom_id)
 
@@ -111,56 +96,70 @@ class AccountMove(models.Model):
                         move.company_id, fields.Date.today(), round=False
                     )
 
-                invoice_cur_prec = move.currency_id.decimal_places
 
                 price_unit = line.price_unit * (1 - (line.discount or 0.0) / 100.0)
                 if line.tax_ids:
-                    price_unit = line.tax_ids.compute_all(
+                    # We do not want to round the price unit since :
+                    # - It does not follow the currency precision
+                    # - It may include a discount
+                    # Since compute_all still rounds the total, we use an ugly workaround:
+                    # shift the decimal part using a fixed quantity to avoid rounding issues
+                    prec = 1e+6
+                    price_unit *= prec
+                    price_unit = line.tax_ids.with_context(round=False, force_sign=move._get_tax_force_sign()).compute_all(
                         price_unit, currency=move.currency_id, quantity=1.0, is_refund=move.move_type == 'in_refund')['total_excluded']
+                    price_unit /= prec
 
-                if float_compare(valuation_price_unit, price_unit, precision_digits=invoice_cur_prec) != 0 \
-                        and float_compare(line['price_unit'], line.price_unit, precision_digits=invoice_cur_prec) == 0:
+                price_unit_val_dif = price_unit - valuation_price_unit
+                price_subtotal = line.quantity * price_unit_val_dif
 
-                    price_unit_val_dif = price_unit - valuation_price_unit
+                # We consider there is a price difference if the subtotal is not zero. In case a
+                # discount has been applied, we can't round the price unit anymore, and hence we
+                # can't compare them.
+                if (
+                    not move.currency_id.is_zero(price_subtotal)
+                    and float_compare(line["price_unit"], line.price_unit, precision_digits=price_unit_prec) == 0
+                ):
 
-                    if move.currency_id.compare_amounts(price_unit, valuation_price_unit) != 0 and debit_pdiff_account:
-                        # Add price difference account line.
-                        vals = {
-                            'name': line.name[:64],
-                            'move_id': move.id,
-                            'currency_id': line.currency_id.id,
-                            'product_id': line.product_id.id,
-                            'product_uom_id': line.product_uom_id.id,
-                            'quantity': line.quantity,
-                            'price_unit': price_unit_val_dif,
-                            'price_subtotal': line.quantity * price_unit_val_dif,
-                            'account_id': debit_pdiff_account.id,
-                            'analytic_account_id': line.analytic_account_id.id,
-                            'analytic_tag_ids': [(6, 0, line.analytic_tag_ids.ids)],
-                            'exclude_from_invoice_tab': True,
-                            'is_anglo_saxon_line': True,
-                        }
-                        vals.update(line._get_fields_onchange_subtotal(price_subtotal=vals['price_subtotal']))
-                        lines_vals_list.append(vals)
+                    # Add price difference account line.
+                    vals = {
+                        'name': line.name[:64],
+                        'move_id': move.id,
+                        'partner_id': line.partner_id.id or move.commercial_partner_id.id,
+                        'currency_id': line.currency_id.id,
+                        'product_id': line.product_id.id,
+                        'product_uom_id': line.product_uom_id.id,
+                        'quantity': line.quantity,
+                        'price_unit': price_unit_val_dif,
+                        'price_subtotal': line.quantity * price_unit_val_dif,
+                        'account_id': debit_pdiff_account.id,
+                        'analytic_account_id': line.analytic_account_id.id,
+                        'analytic_tag_ids': [(6, 0, line.analytic_tag_ids.ids)],
+                        'exclude_from_invoice_tab': True,
+                        'is_anglo_saxon_line': True,
+                    }
+                    vals.update(line._get_fields_onchange_subtotal(price_subtotal=vals['price_subtotal']))
+                    lines_vals_list.append(vals)
 
-                        # Correct the amount of the current line.
-                        vals = {
-                            'name': line.name[:64],
-                            'move_id': move.id,
-                            'currency_id': line.currency_id.id,
-                            'product_id': line.product_id.id,
-                            'product_uom_id': line.product_uom_id.id,
-                            'quantity': line.quantity,
-                            'price_unit': -price_unit_val_dif,
-                            'price_subtotal': line.quantity * -price_unit_val_dif,
-                            'account_id': line.account_id.id,
-                            'analytic_account_id': line.analytic_account_id.id,
-                            'analytic_tag_ids': [(6, 0, line.analytic_tag_ids.ids)],
-                            'exclude_from_invoice_tab': True,
-                            'is_anglo_saxon_line': True,
-                        }
-                        vals.update(line._get_fields_onchange_subtotal(price_subtotal=vals['price_subtotal']))
-                        lines_vals_list.append(vals)
+                    # Correct the amount of the current line.
+                    vals = {
+                        'name': line.name[:64],
+                        'move_id': move.id,
+                        'partner_id': line.partner_id.id or move.commercial_partner_id.id,
+                        'currency_id': line.currency_id.id,
+                        'product_id': line.product_id.id,
+                        'product_uom_id': line.product_uom_id.id,
+                        'quantity': line.quantity,
+                        'price_unit': -price_unit_val_dif,
+                        'price_subtotal': line.quantity * -price_unit_val_dif,
+                        'account_id': line.account_id.id,
+                        'analytic_account_id': line.analytic_account_id.id,
+                        'analytic_tag_ids': [(6, 0, line.analytic_tag_ids.ids)],
+                        'exclude_from_invoice_tab': True,
+                        'is_anglo_saxon_line': True,
+                    }
+                    vals.update(line._get_fields_onchange_subtotal(price_subtotal=vals['price_subtotal']))
+                    lines_vals_list.append(vals)
         return lines_vals_list
 
     def _post(self, soft=True):

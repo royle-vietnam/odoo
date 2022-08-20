@@ -1,16 +1,11 @@
-odoo.define('mail/static/src/components/composer_suggested_recipient_list/composer_suggested_recipient_list.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 const { useState } = owl.hooks;
 
-const components = {
-    ComposerSuggestedRecipient: require('mail/static/src/components/composer_suggested_recipient/composer_suggested_recipient.js'),
-};
-
-class ComposerSuggestedRecipientList extends Component {
+export class ComposerSuggestedRecipientList extends Component {
 
     /**
      * @override
@@ -19,13 +14,6 @@ class ComposerSuggestedRecipientList extends Component {
         super(...args);
         this.state = useState({
             hasShowMoreButton: false,
-        });
-
-        useStore(props => {
-            const thread = this.env.models['mail.thread'].get(props.threadLocalId);
-            return {
-                thread: thread ? thread.__state : undefined,
-            };
         });
     }
 
@@ -37,7 +25,7 @@ class ComposerSuggestedRecipientList extends Component {
      * @returns {mail.thread}
      */
     get thread() {
-        return this.env.models['mail.thread'].get(this.props.threadLocalId);
+        return this.messaging && this.messaging.models['mail.thread'].get(this.props.threadLocalId);
     }
 
     //--------------------------------------------------------------------------
@@ -61,12 +49,10 @@ class ComposerSuggestedRecipientList extends Component {
 }
 
 Object.assign(ComposerSuggestedRecipientList, {
-    components,
     props: {
         threadLocalId: String,
     },
     template: 'mail.ComposerSuggestedRecipientList',
 });
 
-return ComposerSuggestedRecipientList;
-});
+registerMessagingComponent(ComposerSuggestedRecipientList);

@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 
-from odoo import models, api, _
+from odoo import models, _
 from odoo.exceptions import UserError
+from odoo.tools import pdf
+
 
 class IrActionsReport(models.Model):
     _inherit = 'ir.actions.report'
@@ -27,4 +29,30 @@ class IrActionsReport(models.Model):
         # don't save the 'account.report_original_vendor_bill' report as it's just a mean to print existing attachments
         if self.report_name == 'account.report_original_vendor_bill':
             return None
-        return super(IrActionsReport, self)._postprocess_pdf_report(record, buffer)
+        res = super(IrActionsReport, self)._postprocess_pdf_report(record, buffer)
+        if self.model == 'account.move' and record.state == 'posted' and record.is_sale_document(include_receipts=True):
+            attachment = self.retrieve_attachment(record)
+            if attachment:
+                attachment.register_as_main_attachment(force=False)
+        return res
+
+    def _render_qweb_pdf(self, res_ids=None, data=None):
+        # Overridden so that the print > invoices actions raises an error
+        # when trying to print a miscellaneous operation instead of an invoice.
+        if self.model == 'account.move' and res_ids:
+            invoice_reports = (self.env.ref('account.account_invoices_without_payment'), self.env.ref('account.account_invoices'))
+            if self in invoice_reports:
+                moves = self.env['account.move'].browse(res_ids)
+                if any(not move.is_invoice(include_receipts=True) for move in moves):
+                    raise UserError(_("Only invoices could be printed."))
+
+        return super()._render_qweb_pdf(res_ids=res_ids, data=data)
+
+    def _retrieve_stream_from_attachment(self, attachment):
+        # Overridden in order to add a banner in the upper right corner of the exported Vendor Bill PDF.
+        stream = super()._retrieve_stream_from_attachment(attachment)
+        vendor_bill_export = self.env.ref('account.action_account_original_vendor_bill')
+        if self == vendor_bill_export and attachment.mimetype == 'application/pdf':
+            record = self.env[attachment.res_model].browse(attachment.res_id)
+            return pdf.add_banner(stream, record.name, logo=True)
+        return stream

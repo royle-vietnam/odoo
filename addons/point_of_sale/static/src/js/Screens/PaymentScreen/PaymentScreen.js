@@ -3,11 +3,12 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
 
     const { parse } = require('web.field_utils');
     const PosComponent = require('point_of_sale.PosComponent');
-    const { useErrorHandlers } = require('point_of_sale.custom_hooks');
+    const { useErrorHandlers, useAsyncLockedMethod } = require('point_of_sale.custom_hooks');
     const NumberBuffer = require('point_of_sale.NumberBuffer');
     const { useListener } = require('web.custom_hooks');
     const Registries = require('point_of_sale.Registries');
     const { onChangeOrder } = require('point_of_sale.custom_hooks');
+    const { isConnectionError } = require('point_of_sale.utils');
 
     class PaymentScreen extends PosComponent {
         constructor() {
@@ -20,17 +21,23 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
             useListener('send-payment-cancel', this._sendPaymentCancel);
             useListener('send-payment-reverse', this._sendPaymentReverse);
             useListener('send-force-done', this._sendForceDone);
-            NumberBuffer.use({
+            this.lockedValidateOrder = useAsyncLockedMethod(this.validateOrder);
+            NumberBuffer.use(this._getNumberBufferConfig);
+            onChangeOrder(this._onPrevOrder, this._onNewOrder);
+            useErrorHandlers();
+            this.payment_interface = null;
+            this.error = false;
+            this.payment_methods_from_config = this.env.pos.payment_methods.filter(method => this.env.pos.config.payment_method_ids.includes(method.id));
+        }
+        get _getNumberBufferConfig() {
+            return {
                 // The numberBuffer listens to this event to update its state.
                 // Basically means 'update the buffer when this event is triggered'
                 nonKeyboardInputEvent: 'input-from-numpad',
                 // When the buffer is updated, trigger this event.
                 // Note that the component listens to it.
                 triggerAtInput: 'update-selected-paymentline',
-            });
-            onChangeOrder(this._onPrevOrder, this._onNewOrder);
-            useErrorHandlers();
-            this.payment_interface = null;
+            }
         }
         get currentOrder() {
             return this.env.pos.get_order();
@@ -56,30 +63,28 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
         }
         addNewPaymentLine({ detail: paymentMethod }) {
             // original function: click_paymentmethods
-            if (this.currentOrder.electronic_payment_in_progress()) {
+            let result = this.currentOrder.add_paymentline(paymentMethod);
+            if (result){
+                NumberBuffer.reset();
+                return true;
+            }
+            else{
                 this.showPopup('ErrorPopup', {
                     title: this.env._t('Error'),
                     body: this.env._t('There is already an electronic payment in progress.'),
                 });
                 return false;
-            } else {
-                this.currentOrder.add_paymentline(paymentMethod);
-                NumberBuffer.reset();
-                this.payment_interface = paymentMethod.payment_terminal;
-                if (this.payment_interface) {
-                    this.currentOrder.selected_paymentline.set_payment_status('pending');
-                }
-                return true;
             }
         }
         _updateSelectedPaymentline() {
             if (this.paymentLines.every((line) => line.paid)) {
-                this.currentOrder.add_paymentline(this.env.pos.payment_methods[0]);
+                this.currentOrder.add_paymentline(this.payment_methods_from_config[0]);
             }
             if (!this.selectedPaymentLine) return; // do nothing if no selected payment line
             // disable changing amount on paymentlines with running or done payments on a payment terminal
+            const payment_terminal = this.selectedPaymentLine.payment_method.payment_terminal;
             if (
-                this.payment_interface &&
+                payment_terminal &&
                 !['pending', 'retry'].includes(this.selectedPaymentLine.get_payment_status())
             ) {
                 return;
@@ -102,22 +107,25 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
             // click_tip
             const tip = this.currentOrder.get_tip();
             const change = this.currentOrder.get_change();
-            let value = tip.toFixed(this.env.pos.decimals);
-
-            if (tip === 0 && change > 0) {
-                value = change;
-            }
+            let value = tip === 0 && change > 0 ? change : tip;
 
             const { confirmed, payload } = await this.showPopup('NumberPopup', {
                 title: tip ? this.env._t('Change Tip') : this.env._t('Add Tip'),
                 startingValue: value,
+                isInputSelected: true,
             });
 
             if (confirmed) {
                 this.currentOrder.set_tip(parse.float(payload));
             }
         }
+        toggleIsToShip() {
+            // click_ship
+            this.currentOrder.set_to_ship(!this.currentOrder.is_to_ship());
+            this.render();
+        }
         deletePaymentLine(event) {
+            var self = this;
             const { cid } = event.detail;
             const line = this.paymentLines.find((line) => line.cid === cid);
 
@@ -125,12 +133,18 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
             // it is removed, the terminal should get a cancel
             // request.
             if (['waiting', 'waitingCard', 'timeout'].includes(line.get_payment_status())) {
-                line.payment_method.payment_terminal.send_payment_cancel(this.currentOrder, cid);
+                line.set_payment_status('waitingCancel');
+                line.payment_method.payment_terminal.send_payment_cancel(this.currentOrder, cid).then(function() {
+                    self.currentOrder.remove_paymentline(line);
+                    NumberBuffer.reset();
+                    self.render();
+                })
             }
-
-            this.currentOrder.remove_paymentline(line);
-            NumberBuffer.reset();
-            this.render();
+            else if (line.get_payment_status() !== 'waitingCancel') {
+                this.currentOrder.remove_paymentline(line);
+                NumberBuffer.reset();
+                this.render();
+            }
         }
         selectPaymentLine(event) {
             const { cid } = event.detail;
@@ -139,7 +153,28 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
             NumberBuffer.reset();
             this.render();
         }
+        /**
+         * Returns false if the current order is empty and has no payments.
+         * @returns {boolean}
+         */
+        _isValidEmptyOrder() {
+            const order = this.currentOrder;
+            if (order.get_orderlines().length == 0) {
+                return order.get_paymentlines().length != 0;
+            } else {
+                return true;
+            }
+        }
         async validateOrder(isForceValidate) {
+            if(this.env.pos.config.cash_rounding) {
+                if(!this.env.pos.get_order().check_paymentlines_rounding()) {
+                    this.showPopup('ErrorPopup', {
+                        title: this.env._t('Rounding error in payment lines'),
+                        body: this.env._t("The amount of your payment lines must be rounded to validate the transaction."),
+                    });
+                    return;
+                }
+            }
             if (await this._isOrderValid(isForceValidate)) {
                 // remove pending payments before finalizing the validation
                 for (let line of this.paymentLines) {
@@ -149,7 +184,7 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
             }
         }
         async _finalizeValidation() {
-            if (this.currentOrder.is_paid_with_cash() && this.env.pos.config.iface_cashdrawer) {
+            if ((this.currentOrder.is_paid_with_cash() || this.currentOrder.get_change()) && this.env.pos.config.iface_cashdrawer) {
                 this.env.pos.proxy.printer.open_cashbox();
             }
 
@@ -167,10 +202,25 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
                     syncedOrderBackendIds = await this.env.pos.push_single_order(this.currentOrder);
                 }
             } catch (error) {
-                if (error instanceof Error) {
-                    throw error;
-                } else {
+                if (error.code == 700)
+                    this.error = true;
+
+                if ('code' in error) {
+                    // We started putting `code` in the rejected object for invoicing error.
+                    // We can continue with that convention such that when the error has `code`,
+                    // then it is an error when invoicing. Besides, _handlePushOrderError was
+                    // introduce to handle invoicing error logic.
                     await this._handlePushOrderError(error);
+                } else {
+                    // We don't block for connection error. But we rethrow for any other errors.
+                    if (isConnectionError(error)) {
+                        this.showPopup('OfflineErrorPopup', {
+                            title: this.env._t('Connection Error'),
+                            body: this.env._t('Order is not synced. Check your internet connection'),
+                        });
+                    } else {
+                        throw error;
+                    }
                 }
             }
             if (syncedOrderBackendIds.length && this.currentOrder.wait_for_push_order()) {
@@ -180,8 +230,8 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
                 );
                 if (!result) {
                     await this.showPopup('ErrorPopup', {
-                        title: 'Error: no internet connection.',
-                        body: error,
+                        title: this.env._t('Error: no internet connection.'),
+                        body: this.env._t('Some, if not all, post-processing after syncing order failed.'),
                     });
                 }
             }
@@ -207,29 +257,51 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
             }
         }
         get nextScreen() {
-            return 'ReceiptScreen';
+            return !this.error? 'ReceiptScreen' : 'ProductScreen';
         }
         async _isOrderValid(isForceValidate) {
-            if (this.currentOrder.get_orderlines().length === 0) {
+            if (this.currentOrder.get_orderlines().length === 0 && this.currentOrder.is_to_invoice()) {
                 this.showPopup('ErrorPopup', {
                     title: this.env._t('Empty Order'),
                     body: this.env._t(
-                        'There must be at least one product in your order before it can be validated'
+                        'There must be at least one product in your order before it can be validated and invoiced.'
                     ),
                 });
                 return false;
             }
 
-            if (this.currentOrder.is_to_invoice() && !this.currentOrder.get_client()) {
+            const splitPayments = this.paymentLines.filter(payment => payment.payment_method.split_transactions)
+            if (splitPayments.length && !this.currentOrder.get_client()) {
+                const paymentMethod = splitPayments[0].payment_method
+                const { confirmed } = await this.showPopup('ConfirmPopup', {
+                    title: this.env._t('Customer Required'),
+                    body: _.str.sprintf(this.env._t('Customer is required for %s payment method.'), paymentMethod.name),
+                });
+                if (confirmed) {
+                    this.selectClient();
+                }
+                return false;
+            }
+
+            if ((this.currentOrder.is_to_invoice() || this.currentOrder.is_to_ship()) && !this.currentOrder.get_client()) {
                 const { confirmed } = await this.showPopup('ConfirmPopup', {
                     title: this.env._t('Please select the Customer'),
                     body: this.env._t(
-                        'You need to select the customer before you can invoice an order.'
+                        'You need to select the customer before you can invoice or ship an order.'
                     ),
                 });
                 if (confirmed) {
                     this.selectClient();
                 }
+                return false;
+            }
+
+            var customer = this.currentOrder.get_client()
+            if (this.currentOrder.is_to_ship() && !(customer.name && customer.street && customer.city && customer.country_id)) {
+                this.showPopup('ErrorPopup', {
+                    title: this.env._t('Incorrect address for shipping'),
+                    body: this.env._t('The selected customer needs an address.'),
+                });
                 return false;
             }
 
@@ -288,10 +360,12 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
                         ' ' +
                         this.env._t('? Clicking "Confirm" will validate the payment.'),
                 }).then(({ confirmed }) => {
-                    if (confirmed) this.validateOrder(true);
+                    if (confirmed) this.lockedValidateOrder(true);
                 });
                 return false;
             }
+
+            if (!this._isValidEmptyOrder()) return false;
 
             return true;
         }
@@ -310,7 +384,7 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
             const isPaymentSuccessful = await payment_terminal.send_payment_request(line.cid);
             if (isPaymentSuccessful) {
                 line.set_payment_status('done');
-                line.can_be_reversed = this.payment_interface.supports_reversals;
+                line.can_be_reversed = payment_terminal.supports_reversals;
             } else {
                 line.set_payment_status('retry');
             }
@@ -318,10 +392,11 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
         async _sendPaymentCancel({ detail: line }) {
             const payment_terminal = line.payment_method.payment_terminal;
             line.set_payment_status('waitingCancel');
-            try {
-                payment_terminal.send_payment_cancel(this.currentOrder, line.cid);
-            } finally {
+            const isCancelSuccessful = await payment_terminal.send_payment_cancel(this.currentOrder, line.cid);
+            if (isCancelSuccessful) {
                 line.set_payment_status('retry');
+            } else {
+                line.set_payment_status('waitingCard');
             }
         }
         async _sendPaymentReverse({ detail: line }) {

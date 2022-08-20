@@ -1,120 +1,54 @@
-# -*- coding: utf-8 -*-
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from lxml import objectify
-from werkzeug import urls
-
-import odoo
-from odoo.addons.payment.models.payment_acquirer import ValidationError
-from odoo.addons.payment.tests.common import PaymentAcquirerCommon
-from odoo.addons.payment_buckaroo.controllers.main import BuckarooController
+from odoo.exceptions import ValidationError
+from odoo.tests import tagged
 from odoo.tools import mute_logger
 
+from .common import BuckarooCommon
+from ..controllers.main import BuckarooController
 
-@odoo.tests.tagged('post_install', '-at_install', 'external', '-standard')
-class BuckarooCommon(PaymentAcquirerCommon):
 
-    @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
-        # get the buckaroo account
-        cls.buckaroo = cls.env.ref('payment.payment_acquirer_buckaroo')
-        cls.buckaroo.write({
-            'brq_websitekey': 'dummy',
-            'brq_secretkey': 'dummy',
-            'state': 'test',
-        })
+@tagged('post_install', '-at_install')
+class BuckarooTest(BuckarooCommon):
 
-@odoo.tests.tagged('post_install', '-at_install', 'external', '-standard')
-class BuckarooForm(BuckarooCommon):
+    def test_redirect_form_values(self):
+        self.patch(self, 'base_url', 'http://localhost:8069')
+        self.patch(type(self.env['base']), 'get_base_url', lambda _: 'http://localhost:8069')
 
-    def test_10_Buckaroo_form_render(self):
-        base_url = self.env['ir.config_parameter'].get_param('web.base.url')
-        # be sure not to do stupid things
-        self.assertEqual(self.buckaroo.state, 'test', 'test without test environment')
-
-        # ----------------------------------------
-        # Test: button direct rendering
-        # ----------------------------------------
-
-        form_values = {
-            'add_returndata': '/payment/process',
-            'Brq_websitekey': self.buckaroo.brq_websitekey,
-            'Brq_amount': '2240.0',
-            'Brq_currency': 'EUR',
-            'Brq_invoicenumber': 'SO004',
-            'Brq_signature': 'f09bb79451a7ddef3178462ea52b07e55d34e99e',  # update me
-            'brq_test': 'True',
-            'Brq_return': urls.url_join(base_url, BuckarooController._return_url),
-            'Brq_returncancel': urls.url_join(base_url, BuckarooController._cancel_url),
-            'Brq_returnerror': urls.url_join(base_url, BuckarooController._exception_url),
-            'Brq_returnreject': urls.url_join(base_url, BuckarooController._reject_url),
+        return_url = self._build_url(BuckarooController._return_url)
+        expected_values = {
+            'Brq_websitekey': self.buckaroo.buckaroo_website_key,
+            'Brq_amount': str(self.amount),
+            'Brq_currency': self.currency.name,
+            'Brq_invoicenumber': self.reference,
+            'Brq_signature': '669d4f64ea9cbb58cfefba9b802389667e4eef39',
+            'Brq_return': return_url,
+            'Brq_returncancel': return_url,
+            'Brq_returnerror': return_url,
+            'Brq_returnreject': return_url,
             'Brq_culture': 'en-US',
         }
 
-        # render the button
-        res = self.buckaroo.render(
-            'SO004', 2240.0, self.currency_euro.id,
-            partner_id=None,
-            values=self.buyer_values)
-        # check form result
-        tree = objectify.fromstring(res)
-        data_set = tree.xpath("//input[@name='data_set']")
-        self.assertEqual(len(data_set), 1, 'paypal: Found %d "data_set" input instead of 1' % len(data_set))
-        self.assertEqual(data_set[0].get('data-action-url'), 'https://testcheckout.buckaroo.nl/html/', 'Buckaroo: wrong form POST url')
-        for form_input in tree.input:
-            if form_input.get('name') in ['submit', 'data_set']:
-                continue
-            self.assertEqual(
-                form_input.get('value'),
-                form_values[form_input.get('name')],
-                'Buckaroo: wrong value for input %s: received %s instead of %s' % (form_input.get('name'), form_input.get('value'), form_values[form_input.get('name')])
-            )
+        tx_sudo = self.create_transaction(flow='redirect')
+        with mute_logger('odoo.addons.payment.models.payment_transaction'):
+            processing_values = tx_sudo._get_processing_values()
+        form_info = self._extract_values_from_html_form(processing_values['redirect_form_html'])
 
-        # ----------------------------------------
-        # Test2: button using tx + validation
-        # ----------------------------------------
+        self.assertEqual(form_info['action'], "https://testcheckout.buckaroo.nl/html/")
+        self.assertDictEqual(expected_values, form_info['inputs'],
+            "Buckaroo: invalid inputs specified in the redirect form.")
 
-        # create a new draft tx
-        tx = self.env['payment.transaction'].create({
-            'amount': 2240.0,
-            'acquirer_id': self.buckaroo.id,
-            'currency_id': self.currency_euro.id,
-            'reference': 'SO004',
-            'partner_id': self.buyer_id,
-        })
-
-        # render the button
-        res = self.buckaroo.render(
-            'should_be_erased', 2240.0, self.currency_euro,
-            partner_id=None,
-            values=self.buyer_values)
-
-        # check form result
-        tree = objectify.fromstring(res)
-        data_set = tree.xpath("//input[@name='data_set']")
-        self.assertEqual(len(data_set), 1, 'paypal: Found %d "data_set" input instead of 1' % len(data_set))
-        self.assertEqual(data_set[0].get('data-action-url'), 'https://testcheckout.buckaroo.nl/html/', 'Buckaroo: wrong form POST url')
-        for form_input in tree.input:
-            if form_input.get('name') in ['submit', 'data_set']:
-                continue
-            self.assertEqual(
-                form_input.get('value'),
-                form_values[form_input.get('name')],
-                'Buckaroo: wrong value for form input %s: received %s instead of %s' % (form_input.get('name'), form_input.get('value'), form_values[form_input.get('name')])
-            )
-
-    @mute_logger('odoo.addons.payment_buckaroo.models.payment', 'ValidationError')
-    def test_20_buckaroo_form_management(self):
-        # be sure not to do stupid thing
-        self.assertEqual(self.buckaroo.state, 'test', 'test without test environment')
+    def test_feedback_processing(self):
+        self.amount = 2240.0
+        self.reference = 'SO004'
 
         # typical data posted by buckaroo after client has successfully paid
         buckaroo_post_data = {
             'BRQ_RETURNDATA': u'',
-            'BRQ_AMOUNT': u'2240.00',
-            'BRQ_CURRENCY': u'EUR',
+            'BRQ_AMOUNT': str(self.amount),
+            'BRQ_CURRENCY': self.currency.name,
             'BRQ_CUSTOMER_NAME': u'Jan de Tester',
-            'BRQ_INVOICENUMBER': u'SO004',
+            'BRQ_INVOICENUMBER': self.reference,
             'brq_payment': u'573311D081B04069BD6336001611DBD4',
             'BRQ_PAYMENT_METHOD': u'paypal',
             'BRQ_SERVICE_PAYPAL_PAYERCOUNTRY': u'NL',
@@ -123,52 +57,58 @@ class BuckarooForm(BuckarooCommon):
             'BRQ_SERVICE_PAYPAL_PAYERLASTNAME': u'Tester',
             'BRQ_SERVICE_PAYPAL_PAYERMIDDLENAME': u'de',
             'BRQ_SERVICE_PAYPAL_PAYERSTATUS': u'verified',
-            'Brq_signature': u'9e75e51cbcb6fbc798b40d1787cc5b7c36557d56',
+            'Brq_signature': u'e67e32ee1be1030a86c7764adfcc01856e00f9a7',
             'BRQ_STATUSCODE': u'190',
             'BRQ_STATUSCODE_DETAIL': u'S001',
             'BRQ_STATUSMESSAGE': u'Transaction successfully processed',
-            'BRQ_TEST': u'true',
             'BRQ_TIMESTAMP': u'2014-05-08 12:41:21',
             'BRQ_TRANSACTIONS': u'D6106678E1D54EEB8093F5B3AC42EA7B',
             'BRQ_WEBSITEKEY': u'5xTGyGyPyl',
         }
 
-        # should raise error about unknown tx
-        with self.assertRaises(ValidationError):
-            self.env['payment.transaction'].form_feedback(buckaroo_post_data, 'buckaroo')
+        with self.assertRaises(ValidationError):  # unknown transaction
+            self.env['payment.transaction']._handle_feedback_data('buckaroo', buckaroo_post_data)
 
-        tx = self.env['payment.transaction'].create({
-            'amount': 2240.0,
-            'acquirer_id': self.buckaroo.id,
-            'currency_id': self.currency_euro.id,
-            'reference': 'SO004',
-            'partner_name': 'Norbert Buyer',
-            'partner_country_id': self.country_france.id})
+        tx = self.create_transaction(flow='redirect')
 
         # validate it
-        tx.form_feedback(buckaroo_post_data, 'buckaroo')
-        # check state
+        tx._handle_feedback_data('buckaroo', buckaroo_post_data)
         self.assertEqual(tx.state, 'done', 'Buckaroo: validation did not put tx into done state')
-        self.assertEqual(tx.acquirer_reference, buckaroo_post_data.get('BRQ_TRANSACTIONS'), 'Buckaroo: validation did not update tx payid')
+        self.assertEqual(tx.acquirer_reference, buckaroo_post_data.get('BRQ_TRANSACTIONS'),
+            'Buckaroo: validation did not update tx payid')
 
-        # reset tx
-        tx = self.env['payment.transaction'].create({
-            'amount': 2240.0,
-            'acquirer_id': self.buckaroo.id,
-            'currency_id': self.currency_euro.id,
-            'reference': 'SO004-2',
-            'partner_name': 'Norbert Buyer',
-            'partner_country_id': self.country_france.id})
+        # New reference for new tx
+        self.reference = 'SO004-2'
+        tx = self.create_transaction(flow='redirect')
 
-        buckaroo_post_data['BRQ_INVOICENUMBER'] = 'SO004-2'
+        buckaroo_post_data['BRQ_INVOICENUMBER'] = self.reference
         # now buckaroo post is ok: try to modify the SHASIGN
         buckaroo_post_data['Brq_signature'] = '54d928810e343acf5fb0c3ee75fd747ff159ef7a'
         with self.assertRaises(ValidationError):
-            tx.form_feedback(buckaroo_post_data, 'buckaroo')
+            self.env['payment.transaction']._handle_feedback_data('buckaroo', buckaroo_post_data)
+
         # simulate an error
         buckaroo_post_data['BRQ_STATUSCODE'] = '2'
-        buckaroo_post_data['Brq_signature'] = '9138e2bf09a708a4eb485ce7777e5406898b689d'
-        tx.form_feedback(buckaroo_post_data, 'buckaroo')
+        buckaroo_post_data['Brq_signature'] = '3e67da5181b1a895d322987303e42bab2a376eec'
 
-        # check state
-        self.assertEqual(tx.state, 'cancel', 'Buckaroo: erroneous validation did not put tx into error state')
+        # Avoid warning log bc of unknown status code
+        with mute_logger('odoo.addons.payment_buckaroo.models.payment_transaction'):
+            self.env['payment.transaction']._handle_feedback_data('buckaroo', buckaroo_post_data)
+
+        self.assertEqual(tx.state, 'error',
+            'Buckaroo: unexpected status code should put tx in error state')
+
+    def test_signature_is_computed_based_on_lower_case_data_keys(self):
+        """ Test that lower case keys are used to execute the case-insensitive sort. """
+        computed_signature = self.acquirer._buckaroo_generate_digital_sign({
+            'brq_a': '1',
+            'brq_b': '2',
+            'brq_c_first': '3',
+            'brq_csecond': '4',
+            'brq_D': '5',
+        }, incoming=False)
+        self.assertEqual(
+            computed_signature,
+            '937cca8f486b75e93df1e9811a5ebf43357fc3f2',
+            msg="The signing string items should be ordered based on a lower-case copy of the keys",
+        )

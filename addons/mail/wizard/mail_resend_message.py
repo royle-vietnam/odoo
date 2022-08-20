@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from odoo import api, fields, models, _
+from odoo import api, fields, models, _, Command
 from odoo.exceptions import UserError
 
 
@@ -29,7 +29,7 @@ class MailResendMessage(models.TransientModel):
         if message_id:
             mail_message_id = self.env['mail.message'].browse(message_id)
             notification_ids = mail_message_id.notification_ids.filtered(lambda notif: notif.notification_type == 'email' and notif.notification_status in ('exception', 'bounce'))
-            partner_ids = [(0, 0, {
+            partner_ids = [Command.create({
                 "partner_id": notif.res_partner_id.id,
                 "name": notif.res_partner_id.name,
                 "email": notif.res_partner_id.email,
@@ -42,7 +42,7 @@ class MailResendMessage(models.TransientModel):
             else:
                 partner_readonly = not self.env['res.partner'].check_access_rights('write', raise_exception=False)
             rec['partner_readonly'] = partner_readonly
-            rec['notification_ids'] = [(6, 0, notification_ids.ids)]
+            rec['notification_ids'] = [Command.set(notification_ids.ids)]
             rec['mail_message_id'] = mail_message_id.id
             rec['partner_ids'] = partner_ids
         else:
@@ -63,7 +63,7 @@ class MailResendMessage(models.TransientModel):
                 record = self.env[message.model].browse(message.res_id) if message.is_thread_message() else self.env['mail.thread']
 
                 email_partners_data = []
-                for pid, cid, active, pshare, ctype, notif, groups in self.env['mail.followers']._get_recipient_data(None, 'comment', False, pids=to_send.ids):
+                for pid, active, pshare, notif, groups in self.env['mail.followers']._get_recipient_data(None, 'comment', False, pids=to_send.ids):
                     if pid and notif == 'email' or not notif:
                         pdata = {'id': pid, 'share': pshare, 'active': active, 'notif': 'email', 'groups': groups or []}
                         if not pshare and notif:  # has an user and is not shared, is therefore user
@@ -73,7 +73,7 @@ class MailResendMessage(models.TransientModel):
                         else:  # has no user, is therefore customer
                             email_partners_data.append(dict(pdata, type='customer'))
 
-                record._notify_record_by_email(message, {'partners': email_partners_data}, check_existing=True, send_after_commit=False)
+                record._notify_record_by_email(message, email_partners_data, check_existing=True, send_after_commit=False)
 
             self.mail_message_id._notify_message_notification_update()
         return {'type': 'ir.actions.act_window_close'}

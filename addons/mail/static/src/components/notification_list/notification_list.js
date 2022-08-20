@@ -1,30 +1,10 @@
-odoo.define('mail/static/src/components/notification_list/notification_list.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    NotificationGroup: require('mail/static/src/components/notification_group/notification_group.js'),
-    NotificationRequest: require('mail/static/src/components/notification_request/notification_request.js'),
-    ThreadNeedactionPreview: require('mail/static/src/components/thread_needaction_preview/thread_needaction_preview.js'),
-    ThreadPreview: require('mail/static/src/components/thread_preview/thread_preview.js'),
-};
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 
-class NotificationList extends Component {
-
-    /**
-     * @override
-     */
-    constructor(...args) {
-        super(...args);
-        this.storeProps = useStore((...args) => this._useStoreSelector(...args), {
-            compareDepth: {
-                // list + notification object created in useStore
-                notifications: 2,
-            },
-        });
-    }
+export class NotificationList extends Component {
 
     mounted() {
         this._loadPreviews();
@@ -38,52 +18,29 @@ class NotificationList extends Component {
      * @returns {Object[]}
      */
     get notifications() {
-        const { notifications } = this.storeProps;
-        return notifications;
-    }
-
-    //--------------------------------------------------------------------------
-    // Private
-    //--------------------------------------------------------------------------
-
-    /**
-     * Load previews of given thread. Basically consists of fetching all missing
-     * last messages of each thread.
-     *
-     * @private
-     */
-    async _loadPreviews() {
-        const threads = this.notifications
-            .filter(notification => notification.thread && notification.thread.exists())
-            .map(notification => notification.thread);
-        this.env.models['mail.thread'].loadPreviews(threads);
-    }
-
-    /**
-     * @private
-     * @param {Object} props
-     */
-    _useStoreSelector(props) {
-        const threads = this._useStoreSelectorThreads(props);
+        if (!this.messaging) {
+            return [];
+        }
+        const threads = this._getThreads(this.props);
         let threadNeedactionNotifications = [];
-        if (props.filter === 'all') {
+        if (this.props.filter === 'all') {
             // threads with needactions
-            threadNeedactionNotifications = this.env.models['mail.thread']
-                .all(t => t.model !== 'mail.box' && t.needactionMessages.length > 0)
+            threadNeedactionNotifications = this.messaging.models['mail.thread']
+                .all(t => t.model !== 'mail.box' && t.needactionMessagesAsOriginThread.length > 0)
                 .sort((t1, t2) => {
-                    if (t1.needactionMessages.length > 0 && t2.needactionMessages.length === 0) {
+                    if (t1.needactionMessagesAsOriginThread.length > 0 && t2.needactionMessagesAsOriginThread.length === 0) {
                         return -1;
                     }
-                    if (t1.needactionMessages.length === 0 && t2.needactionMessages.length > 0) {
+                    if (t1.needactionMessagesAsOriginThread.length === 0 && t2.needactionMessagesAsOriginThread.length > 0) {
                         return 1;
                     }
-                    if (t1.lastNeedactionMessage && t2.lastNeedactionMessage) {
-                        return t1.lastNeedactionMessage.date.isBefore(t2.lastNeedactionMessage.date) ? 1 : -1;
+                    if (t1.lastNeedactionMessageAsOriginThread && t2.lastNeedactionMessageAsOriginThread) {
+                        return t1.lastNeedactionMessageAsOriginThread.id < t2.lastNeedactionMessageAsOriginThread.id ? 1 : -1;
                     }
-                    if (t1.lastNeedactionMessage) {
+                    if (t1.lastNeedactionMessageAsOriginThread) {
                         return -1;
                     }
-                    if (t2.lastNeedactionMessage) {
+                    if (t2.lastNeedactionMessageAsOriginThread) {
                         return 1;
                     }
                     return t1.id < t2.id ? -1 : 1;
@@ -106,7 +63,7 @@ class NotificationList extends Component {
                     return 1;
                 }
                 if (t1.lastMessage && t2.lastMessage) {
-                    return t1.lastMessage.date.isBefore(t2.lastMessage.date) ? 1 : -1;
+                    return t1.lastMessage.id < t2.lastMessage.id ? 1 : -1;
                 }
                 if (t1.lastMessage) {
                     return -1;
@@ -124,12 +81,11 @@ class NotificationList extends Component {
                 };
             });
         let notifications = threadNeedactionNotifications.concat(threadNotifications);
-        if (props.filter === 'all') {
-            const notificationGroups = this.env.messaging.notificationGroupManager.groups;
+        if (this.props.filter === 'all') {
+            const notificationGroups = this.messaging.notificationGroupManager.groups;
             notifications = Object.values(notificationGroups)
-                .sort((group1, group2) =>
-                    group1.date.isAfter(group2.date) ? -1 : 1
-                ).map(notificationGroup => {
+                .sort((group1, group2) => group1.sequence - group2.sequence)
+                .map(notificationGroup => {
                     return {
                         notificationGroup,
                         uniqueId: notificationGroup.localId,
@@ -137,16 +93,30 @@ class NotificationList extends Component {
                 }).concat(notifications);
         }
         // native notification request
-        if (props.filter === 'all' && this.env.messaging.isNotificationPermissionDefault()) {
+        if (this.props.filter === 'all' && this.messaging.isNotificationPermissionDefault) {
             notifications.unshift({
                 type: 'odoobotRequest',
                 uniqueId: 'odoobotRequest',
             });
         }
-        return {
-            isDeviceMobile: this.env.messaging.device.isMobile,
-            notifications,
-        };
+        return notifications;
+    }
+
+    //--------------------------------------------------------------------------
+    // Private
+    //--------------------------------------------------------------------------
+
+    /**
+     * Load previews of given thread. Basically consists of fetching all missing
+     * last messages of each thread.
+     *
+     * @private
+     */
+    async _loadPreviews() {
+        const threads = this.notifications
+            .filter(notification => notification.thread && notification.thread.exists())
+            .map(notification => notification.thread);
+        this.messaging.models['mail.thread'].loadPreviews(threads);
     }
 
     /**
@@ -155,21 +125,21 @@ class NotificationList extends Component {
      * @throws {Error} in case `props.filter` is not supported
      * @returns {mail.thread[]}
      */
-    _useStoreSelectorThreads(props) {
+    _getThreads(props) {
         if (props.filter === 'mailbox') {
-            return this.env.models['mail.thread']
+            return this.messaging.models['mail.thread']
                 .all(thread => thread.isPinned && thread.model === 'mail.box')
                 .sort((mailbox1, mailbox2) => {
-                    if (mailbox1 === this.env.messaging.inbox) {
+                    if (mailbox1 === this.messaging.inbox) {
                         return -1;
                     }
-                    if (mailbox2 === this.env.messaging.inbox) {
+                    if (mailbox2 === this.messaging.inbox) {
                         return 1;
                     }
-                    if (mailbox1 === this.env.messaging.starred) {
+                    if (mailbox1 === this.messaging.starred) {
                         return -1;
                     }
-                    if (mailbox2 === this.env.messaging.starred) {
+                    if (mailbox2 === this.messaging.starred) {
                         return 1;
                     }
                     const mailbox1Name = mailbox1.displayName;
@@ -177,7 +147,7 @@ class NotificationList extends Component {
                     mailbox1Name < mailbox2Name ? -1 : 1;
                 });
         } else if (props.filter === 'channel') {
-            return this.env.models['mail.thread']
+            return this.messaging.models['mail.thread']
                 .all(thread =>
                     thread.channel_type === 'channel' &&
                     thread.isPinned &&
@@ -185,7 +155,7 @@ class NotificationList extends Component {
                 )
                 .sort((c1, c2) => c1.displayName < c2.displayName ? -1 : 1);
         } else if (props.filter === 'chat') {
-            return this.env.models['mail.thread']
+            return this.messaging.models['mail.thread']
                 .all(thread =>
                     thread.isChatChannel &&
                     thread.isPinned &&
@@ -194,7 +164,7 @@ class NotificationList extends Component {
                 .sort((c1, c2) => c1.displayName < c2.displayName ? -1 : 1);
         } else if (props.filter === 'all') {
             // "All" filter is for channels and chats
-            return this.env.models['mail.thread']
+            return this.messaging.models['mail.thread']
                 .all(thread => thread.isPinned && thread.model === 'mail.channel')
                 .sort((c1, c2) => c1.displayName < c2.displayName ? -1 : 1);
         } else {
@@ -206,7 +176,6 @@ class NotificationList extends Component {
 
 Object.assign(NotificationList, {
     _allowedFilters: ['all', 'mailbox', 'channel', 'chat'],
-    components,
     defaultProps: {
         filter: 'all',
     },
@@ -219,6 +188,4 @@ Object.assign(NotificationList, {
     template: 'mail.NotificationList',
 });
 
-return NotificationList;
-
-});
+registerMessagingComponent(NotificationList);

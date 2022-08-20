@@ -5,6 +5,7 @@ import logging
 from datetime import timedelta
 
 from odoo import api, fields, models
+from odoo.tools import plaintext2html
 
 _logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ class AlarmManager(models.AbstractModel):
             first_alarm_max_value = "(now() at time zone 'utc' + interval '%s' second )"
             tuple_params += (seconds,)
 
+        self.flush()
         self._cr.execute("""
             WITH calcul_delta AS (%s)
             SELECT *
@@ -115,67 +117,74 @@ class AlarmManager(models.AbstractModel):
         """
         result = []
         # TODO: remove event_maxdelta and if using it
-        if one_date - timedelta(minutes=(missing and 0 or event_maxdelta)) < fields.Datetime.now() + timedelta(seconds=in_the_next_X_seconds):  # if an alarm is possible for this date
-            for alarm in event.alarm_ids:
-                if alarm.alarm_type == alarm_type and \
-                    one_date - timedelta(minutes=(missing and 0 or alarm.duration_minutes)) < fields.Datetime.now() + timedelta(seconds=in_the_next_X_seconds) and \
-                        (not after or one_date - timedelta(minutes=alarm.duration_minutes) > fields.Datetime.from_string(after)):
-                    alert = {
-                        'alarm_id': alarm.id,
-                        'event_id': event.id,
-                        'notify_at': one_date - timedelta(minutes=alarm.duration_minutes),
-                    }
-                    result.append(alert)
+        past = one_date - timedelta(minutes=(missing * event_maxdelta))
+        future = fields.Datetime.now() + timedelta(seconds=in_the_next_X_seconds)
+        if future <= past:
+            return result
+        for alarm in event.alarm_ids:
+            if alarm.alarm_type != alarm_type:
+                continue
+            past = one_date - timedelta(minutes=(missing * alarm.duration_minutes))
+            if future <= past:
+                continue
+            if after and past <= fields.Datetime.from_string(after):
+                continue
+            result.append({
+                'alarm_id': alarm.id,
+                'event_id': event.id,
+                'notify_at': one_date - timedelta(minutes=alarm.duration_minutes),
+            })
         return result
 
-    @api.model
-    def get_next_mail(self):
-        return self._get_partner_next_mail(partners=None)
+    def _get_events_by_alarm_to_notify(self, alarm_type):
+        """
+        Get the events with an alarm of the given type between the cron
+        last call and now.
+
+        Please note that all new reminders created since the cron last
+        call with an alarm prior to the cron last call are skipped by
+        design. The attendees receive an invitation for any new event
+        already.
+        """
+        self.env.cr.execute('''
+            SELECT "alarm"."id", "event"."id"
+              FROM "calendar_event" AS "event"
+              JOIN "calendar_alarm_calendar_event_rel" AS "event_alarm_rel"
+                ON "event"."id" = "event_alarm_rel"."calendar_event_id"
+              JOIN "calendar_alarm" AS "alarm"
+                ON "event_alarm_rel"."calendar_alarm_id" = "alarm"."id"
+             WHERE (
+                   "alarm"."alarm_type" = %s
+               AND "event"."active"
+               AND "event"."start" - CAST("alarm"."duration" || ' ' || "alarm"."interval" AS Interval) >= %s
+               AND "event"."start" - CAST("alarm"."duration" || ' ' || "alarm"."interval" AS Interval) < now() at time zone 'utc'
+             )''', [alarm_type, self.env.context['lastcall']])
+
+        events_by_alarm = {}
+        for alarm_id, event_id in self.env.cr.fetchall():
+            events_by_alarm.setdefault(alarm_id, list()).append(event_id)
+        return events_by_alarm
 
     @api.model
-    def _get_partner_next_mail(self, partners=None):
-        last_notif_mail = fields.Datetime.to_string(self.env.context.get('lastcall') or fields.Datetime.now())
+    def _send_reminder(self):
+        # Executed via cron
+        events_by_alarm = self._get_events_by_alarm_to_notify('email')
+        if not events_by_alarm:
+            return
 
-        cron = self.env.ref('calendar.ir_cron_scheduler_alarm', raise_if_not_found=False)
-        if not cron:
-            _logger.error("Cron for " + self._name + " can not be identified !")
-            return False
-
-        interval_to_second = {
-            "weeks": 7 * 24 * 60 * 60,
-            "days": 24 * 60 * 60,
-            "hours": 60 * 60,
-            "minutes": 60,
-            "seconds": 1
-        }
-
-        if cron.interval_type not in interval_to_second:
-            _logger.error("Cron delay can not be computed !")
-            return False
-
-        cron_interval = cron.interval_number * interval_to_second[cron.interval_type]
-
-        all_meetings = self._get_next_potential_limit_alarm('email', seconds=cron_interval, partners=partners)
-
-        for meeting in self.env['calendar.event'].browse(all_meetings):
-            max_delta = all_meetings[meeting.id]['max_duration']
-
-            if meeting.recurrency and meeting.recurrence_id:
-                at_least_one = False
-                last_found = False
-                for one_date in meeting.recurrence_id._get_occurrences(meeting.start):
-                    in_date_format = one_date.replace(tzinfo=None)
-                    last_found = self.do_check_alarm_for_one_date(in_date_format, meeting, max_delta, 0, 'email', after=last_notif_mail, missing=True)
-                    for alert in last_found:
-                        self.do_mail_reminder(alert)
-                        at_least_one = True  # if it's the first alarm for this recurrent event
-                    if at_least_one and not last_found:  # if the precedent event had an alarm but not this one, we can stop the search for this event
-                        break
-            else:
-                in_date_format = meeting.start
-                last_found = self.do_check_alarm_for_one_date(in_date_format, meeting, max_delta, 0, 'email', after=last_notif_mail, missing=True)
-                for alert in last_found:
-                    self.do_mail_reminder(alert)
+        event_ids = list(set(event_id for event_ids in events_by_alarm.values() for event_id in event_ids))
+        events = self.env['calendar.event'].browse(event_ids)
+        attendees = events.attendee_ids.filtered(lambda a: a.state != 'declined')
+        alarms = self.env['calendar.alarm'].browse(events_by_alarm.keys())
+        for alarm in alarms:
+            alarm_attendees = attendees.filtered(lambda attendee: attendee.event_id.id in events_by_alarm[alarm.id])
+            alarm_attendees.with_context(
+                mail_notify_force_send=True,
+                calendar_template_ignore_recurrence=True
+            )._send_mail_to_attendees(
+                alarm.mail_template_id,
+                force_send=True
+            )
 
     @api.model
     def get_next_notif(self):
@@ -190,35 +199,12 @@ class AlarmManager(models.AbstractModel):
         for event_id in all_meetings:
             max_delta = all_meetings[event_id]['max_duration']
             meeting = self.env['calendar.event'].browse(event_id)
-            if meeting.recurrency and meeting.recurrence_id:
-                b_found = False
-                last_found = False
-                for one_date in meeting.recurrence_id._get_occurrences(meeting.start):
-                    in_date_format = one_date.replace(tzinfo=None)
-                    last_found = self.do_check_alarm_for_one_date(in_date_format, meeting, max_delta, time_limit, 'notification', after=partner.calendar_last_notif_ack)
-                    if last_found:
-                        for alert in last_found:
-                            all_notif.append(self.do_notif_reminder(alert))
-                        if not b_found:  # if it's the first alarm for this recurrent event
-                            b_found = True
-                    if b_found and not last_found:  # if the precedent event had alarm but not this one, we can stop the search fot this event
-                        break
-            else:
-                in_date_format = fields.Datetime.from_string(meeting.start)
-                last_found = self.do_check_alarm_for_one_date(in_date_format, meeting, max_delta, time_limit, 'notification', after=partner.calendar_last_notif_ack)
-                if last_found:
-                    for alert in last_found:
-                        all_notif.append(self.do_notif_reminder(alert))
+            in_date_format = fields.Datetime.from_string(meeting.start)
+            last_found = self.do_check_alarm_for_one_date(in_date_format, meeting, max_delta, time_limit, 'notification', after=partner.calendar_last_notif_ack)
+            if last_found:
+                for alert in last_found:
+                    all_notif.append(self.do_notif_reminder(alert))
         return all_notif
-
-    def do_mail_reminder(self, alert):
-        meeting = self.env['calendar.event'].browse(alert['event_id'])
-        alarm = self.env['calendar.alarm'].browse(alert['alarm_id'])
-
-        result = False
-        if alarm.alarm_type == 'email':
-            result = meeting.attendee_ids.filtered(lambda r: r.state != 'declined')._send_mail_to_attendees('calendar.calendar_template_meeting_reminder', force_send=True, ignore_recurrence=True)
-        return result
 
     def do_notif_reminder(self, alert):
         alarm = self.env['calendar.alarm'].browse(alert['alarm_id'])
@@ -226,6 +212,8 @@ class AlarmManager(models.AbstractModel):
 
         if alarm.alarm_type == 'notification':
             message = meeting.display_time
+            if alarm.body:
+                message += '<p>%s</p>' % plaintext2html(alarm.body)
 
             delta = alert['notify_at'] - fields.Datetime.now()
             delta = delta.seconds + delta.days * 3600 * 24
@@ -244,7 +232,7 @@ class AlarmManager(models.AbstractModel):
         notifications = []
         users = self.env['res.users'].search([('partner_id', 'in', tuple(partner_ids))])
         for user in users:
-            notif = self.with_user(user).get_next_notif()
-            notifications.append([(self._cr.dbname, 'calendar.alarm', user.partner_id.id), notif])
+            notif = self.with_user(user).with_context(allowed_company_ids=user.company_ids.ids).get_next_notif()
+            notifications.append([user.partner_id, 'calendar.alarm', notif])
         if len(notifications) > 0:
-            self.env['bus.bus'].sendmany(notifications)
+            self.env['bus.bus']._sendmany(notifications)

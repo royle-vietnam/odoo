@@ -151,3 +151,107 @@ class TestSaleStockReports(TestReportsCommon):
         # Checks the forecast report.
         report_values, docs, lines = self.get_report_forecast(product_template_ids=product_apple_pie.product_tmpl_id.ids)
         self.assertEqual(len(lines), 0, "Must have no line")
+
+    def test_report_forecast_3_report_line_corresponding_to_mo_highlighted(self):
+        """ When accessing the report from a MO, checks if the correct MO is highlighted in the report
+        """
+        product_banana = self.env['product.product'].create({
+            'name': 'Banana',
+            'type': 'product',
+        })
+        product_chocolate = self.env['product.product'].create({
+            'name': 'Chocolate',
+            'type': 'consu',
+        })
+
+        # We create 2 identical MO
+        mo_form = Form(self.env['mrp.production'])
+        mo_form.product_id = product_banana
+        mo_form.product_qty = 10
+        with mo_form.move_raw_ids.new() as move:
+            move.product_id = product_chocolate
+
+        mo_1 = mo_form.save()
+        mo_2 = mo_1.copy()
+        (mo_1 | mo_2).action_confirm()
+
+        # Check for both MO if the highlight (is_matched) corresponds to the correct MO
+        for mo in [mo_1, mo_2]:
+            context = mo.action_product_forecast_report()['context']
+            _, _, lines = self.get_report_forecast(product_template_ids=product_banana.product_tmpl_id.ids, context=context)
+            for line in lines:
+                if line['document_in'] == mo:
+                    self.assertTrue(line['is_matched'], "The corresponding MO line should be matched in the forecast report.")
+                else:
+                    self.assertFalse(line['is_matched'], "A line of the forecast report not linked to the MO shoud not be matched.")
+
+    def test_subkit_in_delivery_slip(self):
+        """
+        Suppose this structure:
+        Super Kit --|- Compo 01 x1
+                    |- Sub Kit x1 --|- Compo 02 x1
+                    |               |- Compo 03 x1
+
+        This test ensures that, when delivering one Super Kit, one Sub Kit, one Compo 01 and one Compo 02,
+        and when putting in pack the third component of the Super Kit, the delivery report is correct.
+        """
+        compo01, compo02, compo03, subkit, superkit = self.env['product.product'].create([{
+            'name': n,
+            'type': 'consu',
+        } for n in ['Compo 01', 'Compo 02', 'Compo 03', 'Sub Kit', 'Super Kit']])
+
+        self.env['mrp.bom'].create([{
+            'product_tmpl_id': subkit.product_tmpl_id.id,
+            'product_qty': 1,
+            'type': 'phantom',
+            'bom_line_ids': [
+                (0, 0, {'product_id': compo02.id, 'product_qty': 1}),
+                (0, 0, {'product_id': compo03.id, 'product_qty': 1}),
+            ],
+        }, {
+            'product_tmpl_id': superkit.product_tmpl_id.id,
+            'product_qty': 1,
+            'type': 'phantom',
+            'bom_line_ids': [
+                (0, 0, {'product_id': compo01.id, 'product_qty': 1}),
+                (0, 0, {'product_id': subkit.id, 'product_qty': 1}),
+            ],
+        }])
+
+        picking_form = Form(self.env['stock.picking'])
+        picking_form.picking_type_id = self.picking_type_out
+        picking_form.partner_id = self.partner
+        with picking_form.move_ids_without_package.new() as move:
+            move.product_id = superkit
+            move.product_uom_qty = 1
+        with picking_form.move_ids_without_package.new() as move:
+            move.product_id = subkit
+            move.product_uom_qty = 1
+        with picking_form.move_ids_without_package.new() as move:
+            move.product_id = compo01
+            move.product_uom_qty = 1
+        with picking_form.move_ids_without_package.new() as move:
+            move.product_id = compo02
+            move.product_uom_qty = 1
+        picking = picking_form.save()
+        picking.action_confirm()
+
+        picking.move_lines.quantity_done = 1
+        move = picking.move_lines.filtered(lambda m: m.name == "Super Kit" and m.product_id == compo03)
+        move.move_line_ids.result_package_id = self.env['stock.quant.package'].create({'name': 'Package0001'})
+        picking.button_validate()
+
+        report = self.env['ir.actions.report']._get_report_from_name('stock.report_deliveryslip')
+        html_report = report._render_qweb_html(picking.ids)[0].decode('utf-8').split('\n')
+        keys = [
+            "Package0001", "Compo 03",
+            "Products with no package assigned", "Compo 01", "Compo 02",
+            "Super Kit", "Compo 01", "Compo 02",
+            "Sub Kit", "Compo 02", "Compo 03",
+        ]
+        for line in html_report:
+            if not keys:
+                break
+            if keys[0] in line:
+                keys = keys[1:]
+        self.assertFalse(keys, "All keys should be in the report with the defined order")

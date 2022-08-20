@@ -1,14 +1,12 @@
-odoo.define('website.navbar', function (require) {
-'use strict';
+/** @odoo-module alias=website.navbar */
 
-var core = require('web.core');
-var dom = require('web.dom');
-var publicWidget = require('web.public.widget');
-var concurrency = require('web.concurrency');
-var Widget = require('web.Widget');
-var websiteRootData = require('website.root');
-
-var websiteNavbarRegistry = new publicWidget.RootWidgetRegistry();
+import core from 'web.core';
+import dom from 'web.dom';
+import publicWidget from 'web.public.widget';
+import concurrency from 'web.concurrency';
+import Widget from 'web.Widget';
+import { initAutoMoreMenu } from '@web/legacy/js/core/menu';
+import { registry } from "@web/core/registry";
 
 var WebsiteNavbar = publicWidget.RootWidget.extend({
     xmlDependencies: ['/website/static/src/xml/website.xml'],
@@ -42,13 +40,13 @@ var WebsiteNavbar = publicWidget.RootWidget.extend({
      */
     start: function () {
         var self = this;
-        dom.initAutoMoreMenu(this.$('ul.o_menu_sections'), {
+        initAutoMoreMenu(this.el.querySelector('.o_menu_sections'), {
             maxWidth: function () {
                 // The navbar contains different elements in community and
                 // enterprise, so we check for both of them here only
                 return self.$el.width()
                     - (self.$('.o_menu_systray').outerWidth(true) || 0)
-                    - (self.$('ul#oe_applications').outerWidth(true) || 0)
+                    - (self.$('#oe_applications').outerWidth(true) || 0)
                     - (self.$('.o_menu_toggle').outerWidth(true) || 0)
                     - (self.$('.o_menu_brand').outerWidth(true) || 0);
             },
@@ -78,7 +76,7 @@ var WebsiteNavbar = publicWidget.RootWidget.extend({
      * @override
      */
     _getRegistry: function () {
-        return websiteNavbarRegistry;
+        return registry.category("website_navbar_widgets");
     },
     /**
      * Searches for the automatic widget {@see RootWidget} which can handle that
@@ -180,12 +178,8 @@ var WebsiteNavbar = publicWidget.RootWidget.extend({
      * @param {Event} ev
      */
     _onActionMenuClick: function (ev) {
-        var $button = $(ev.currentTarget);
-        $button.prop('disabled', true);
-        var always = function () {
-            $button.prop('disabled', false);
-        };
-        this._handleAction($button.data('action')).then(always).guardedCatch(always);
+        const restore = dom.addButtonLoadingEffect(ev.currentTarget);
+        this._handleAction($(ev.currentTarget).data('action')).then(restore).guardedCatch(restore);
     },
     /**
      * Called when an action is asked to be executed from a child widget ->
@@ -286,11 +280,12 @@ var WebsiteNavbarActionWidget = Widget.extend({
     },
 });
 
-websiteRootData.websiteRootRegistry.add(WebsiteNavbar, '#oe_main_menu_navbar');
+registry.category("public_root_widgets").add("WebsiteNavbar", {
+    Widget: WebsiteNavbar,
+    selector: '#oe_main_menu_navbar',
+});
 
-return {
+export default {
     WebsiteNavbar: WebsiteNavbar,
-    websiteNavbarRegistry: websiteNavbarRegistry,
     WebsiteNavbarActionWidget: WebsiteNavbarActionWidget,
 };
-});

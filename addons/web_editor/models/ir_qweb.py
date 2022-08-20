@@ -8,7 +8,6 @@ as well as render a few fields differently.
 Also, adds methods to convert values back to Odoo models.
 """
 
-import ast
 import babel
 import base64
 import io
@@ -29,10 +28,10 @@ from werkzeug import urls
 
 import odoo.modules
 
-from odoo import api, models, fields
+from odoo import _, api, models, fields
 from odoo.tools import ustr, posix_to_ldml, pycompat
 from odoo.tools import html_escape as escape
-from odoo.tools.misc import get_lang
+from odoo.tools.misc import get_lang, babel_locale_parse
 from odoo.addons.base.models import ir_qweb
 
 REMOTE_CONNECTION_TIMEOUT = 2.5
@@ -47,7 +46,7 @@ class QWeb(models.AbstractModel):
 
     # compile directives
 
-    def _compile_node(self, el, options):
+    def _compile_node(self, el, options, indent):
         snippet_key = options.get('snippet-key')
         if snippet_key == options['template'] \
                 or options.get('snippet-sub-call-key') == options['template']:
@@ -64,56 +63,63 @@ class QWeb(models.AbstractModel):
                 # The first node might be a call to a sub template
                 sub_call = el.get('t-call')
                 if sub_call:
-                    el.set('t-call-options', f"{{'snippet-key': '{snippet_key}', 'snippet-sub-call-key': '{sub_call}'}}")
+                    el.set('t-options', f"{{'snippet-key': '{snippet_key}', 'snippet-sub-call-key': '{sub_call}'}}")
                 # If it already has a data-snippet it is a saved snippet.
                 # Do not override it.
                 elif 'data-snippet' not in el.attrib:
                     el.attrib['data-snippet'] = snippet_key.split('.', 1)[-1]
 
-        return super()._compile_node(el, options)
+        return super()._compile_node(el, options, indent)
 
-    def _compile_directive_snippet(self, el, options):
+    def _compile_directive_snippet(self, el, options, indent):
         key = el.attrib.pop('t-snippet')
         el.set('t-call', key)
-        el.set('t-call-options', "{'snippet-key': '" + key + "'}")
+        el.set('t-options', "{'snippet-key': '" + key + "'}")
         View = self.env['ir.ui.view'].sudo()
         view_id = View.get_view_id(key)
         name = View.browse(view_id).name
         thumbnail = el.attrib.pop('t-thumbnail', "oe-thumbnail")
-        div = u'<div name="%s" data-oe-type="snippet" data-oe-thumbnail="%s" data-oe-snippet-id="%s" data-oe-keywords="%s">' % (
+        # Forbid sanitize contains the specific reason:
+        # - "true": always forbid
+        # - "form": forbid if forms are sanitized
+        forbid_sanitize = el.attrib.get('t-forbid-sanitize')
+        div = '<div name="%s" data-oe-type="snippet" data-oe-thumbnail="%s" data-oe-snippet-id="%s" data-oe-keywords="%s" %s>' % (
             escape(pycompat.to_text(name)),
             escape(pycompat.to_text(thumbnail)),
             escape(pycompat.to_text(view_id)),
-            escape(pycompat.to_text(el.findtext('keywords')))
+            escape(pycompat.to_text(el.findtext('keywords'))),
+            f'data-oe-forbid-sanitize="{forbid_sanitize}"' if forbid_sanitize else '',
         )
-        return [self._append(ast.Str(div))] + self._compile_node(el, options) + [self._append(ast.Str(u'</div>'))]
+        self._appendText(div, options)
+        code = self._compile_node(el, options, indent)
+        self._appendText('</div>', options)
+        return code
 
-    def _compile_directive_snippet_call(self, el, options):
+    def _compile_directive_snippet_call(self, el, options, indent):
         key = el.attrib.pop('t-snippet-call')
         el.set('t-call', key)
-        el.set('t-call-options', "{'snippet-key': '" + key + "'}")
-        return self._compile_node(el, options)
+        el.set('t-options', "{'snippet-key': '" + key + "'}")
+        return self._compile_node(el, options, indent)
 
-    def _compile_directive_install(self, el, options):
+    def _compile_directive_install(self, el, options, indent):
         if self.user_has_groups('base.group_system'):
             module = self.env['ir.module.module'].search([('name', '=', el.attrib.get('t-install'))])
             if not module or module.state == 'installed':
                 return []
             name = el.attrib.get('string') or 'Snippet'
             thumbnail = el.attrib.pop('t-thumbnail', 'oe-thumbnail')
-            div = u'<div name="%s" data-oe-type="snippet" data-module-id="%s" data-oe-thumbnail="%s"><section/></div>' % (
+            div = '<div name="%s" data-oe-type="snippet" data-module-id="%s" data-oe-thumbnail="%s"><section/></div>' % (
                 escape(pycompat.to_text(name)),
                 module.id,
                 escape(pycompat.to_text(thumbnail))
             )
-            return [self._append(ast.Str(div))]
-        else:
-            return []
+            self._appendText(div, options)
+        return []
 
-    def _compile_directive_tag(self, el, options):
+    def _compile_directive_tag(self, el, options, indent):
         if el.get('t-placeholder'):
             el.set('t-att-placeholder', el.attrib.pop('t-placeholder'))
-        return super(QWeb, self)._compile_directive_tag(el, options)
+        return super(QWeb, self)._compile_directive_tag(el, options, indent)
 
     # order and ignore
 
@@ -165,7 +171,11 @@ class Integer(models.AbstractModel):
     _description = 'Qweb Field Integer'
     _inherit = 'ir.qweb.field.integer'
 
-    value_from_string = int
+    @api.model
+    def from_html(self, model, field, element):
+        lang = self.user_lang()
+        value = element.text_content().strip()
+        return int(value.replace(lang.thousands_sep, ''))
 
 
 class Float(models.AbstractModel):
@@ -228,7 +238,7 @@ class Contact(models.AbstractModel):
     # helper to call the rendering of contact field
     @api.model
     def get_record_to_html(self, ids, options=None):
-        return self.value_to_html(self.env['res.partner'].browse(ids[0]), options=options)
+        return self.value_to_html(self.env['res.partner'].search([('id', '=', ids[0])]), options=options)
 
 
 class Date(models.AbstractModel):
@@ -248,7 +258,7 @@ class Date(models.AbstractModel):
                 return attrs
 
             lg = self.env['res.lang']._lang_get(self.env.user.lang) or get_lang(self.env)
-            locale = babel.Locale.parse(lg.code)
+            locale = babel_locale_parse(lg.code)
             babel_format = value_format = posix_to_ldml(lg.date_format, locale=locale)
 
             if record[field_name]:
@@ -282,7 +292,7 @@ class DateTime(models.AbstractModel):
             value = record[field_name]
 
             lg = self.env['res.lang']._lang_get(self.env.user.lang) or get_lang(self.env)
-            locale = babel.Locale.parse(lg.code)
+            locale = babel_locale_parse(lg.code)
             babel_format = value_format = posix_to_ldml('%s %s' % (lg.date_format, lg.time_format), locale=locale)
             tz = record.env.context.get('tz') or self.env.user.tz
 
@@ -362,6 +372,15 @@ class HTML(models.AbstractModel):
     _name = 'ir.qweb.field.html'
     _description = 'Qweb Field HTML'
     _inherit = 'ir.qweb.field.html'
+
+    @api.model
+    def attributes(self, record, field_name, options, values=None):
+        attrs = super().attributes(record, field_name, options, values)
+        if options.get('inherit_branding'):
+            field = record._fields[field_name]
+            if field.sanitize:
+                attrs['data-oe-sanitize'] = 1 if field.sanitize_form else 'allow_form'
+        return attrs
 
     @api.model
     def from_html(self, model, field, element):
@@ -589,7 +608,7 @@ def _realize_padding(it):
     # leftover padding irrelevant as the output will be stripped
 
 
-def _wrap(element, output, wrapper=u''):
+def _wrap(element, output, wrapper=''):
     """ Recursively extracts text from ``element`` (via _element_to_text), and
     wraps it all in ``wrapper``. Extracted text is added to ``output``
 
@@ -605,7 +624,7 @@ def _wrap(element, output, wrapper=u''):
 
 def _element_to_text(e, output):
     if e.tag == 'br':
-        output.append(u'\n')
+        output.append('\n')
     elif e.tag in _PADDED_BLOCK:
         _wrap(e, output, 2)
     elif e.tag in _MISC_BLOCK:

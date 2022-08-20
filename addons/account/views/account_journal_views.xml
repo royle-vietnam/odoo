@@ -11,8 +11,12 @@
                     <field name='sequence' widget='handle'/>
                     <field name="name"/>
                     <field name="type"/>
-                    <field name="journal_group_ids" widget="many2many_tags" readonly="1"/>
-                    <field name="company_id" groups="base.group_multi_company"/>
+                    <field name="journal_group_ids" widget="many2many_tags" readonly="1" optional="show"/>
+                    <field name="currency_id" groups="base.group_multi_currency" optional="hide"/>
+                    <field name="code" optional="show"/>
+                    <field name="default_account_id" optional="show"/>
+                    <field name="active" optional="hide"/>
+                    <field name="company_id" groups="base.group_multi_company" optional="hide"/>
                 </tree>
             </field>
         </record>
@@ -24,10 +28,15 @@
             <field name="arch" type="xml">
                 <form string="Account Journal">
                     <sheet>
+                        <div name="button_box" class="oe_button_box">
+                            <button class="oe_stat_button" type="action"
+                                    name="%(action_account_moves_all_a)d" icon="fa-book" string="Journal Entries"
+                                    context="{'search_default_journal_id':active_id}"/>
+                        </div>
                         <widget name="web_ribbon" title="Archived" bg_color="bg-danger" attrs="{'invisible': [('active', '=', True)]}"/>
                         <div class="oe_title">
-                            <label for="name" class="oe_edit_only"/>
-                            <h1><field name="name" class="oe_inline"/></h1>
+                            <label for="name"/>
+                            <h1><field name="name" placeholder="e.g. Customer Invoices"/></h1>
                         </div>
                         <group>
                             <group>
@@ -42,7 +51,7 @@
                         <notebook>
                             <page name="bank_account" string="Journal Entries">
                                 <group>
-                                    <group string="Accounting information">
+                                    <group string="Accounting Information">
                                         <field name="default_account_type" invisible="1"/>
                                         <!-- Bank -->
                                         <field name="default_account_id" string="Bank Account"
@@ -56,18 +65,19 @@
                                         <field name="suspense_account_id"
                                                attrs="{'required': [('type', 'in', ('bank', 'cash'))], 'invisible': [('type', 'not in', ('bank', 'cash'))]}"
                                                groups="account.group_account_readonly"/>
-                                        <field name="profit_account_id" attrs="{'invisible': [('type', '!=', 'cash')]}"/>
-                                        <field name="loss_account_id" attrs="{'invisible': [('type', '!=', 'cash')]}"/>
+                                        <field name="profit_account_id" attrs="{'invisible': ['!', ('type', 'in', ('cash', 'bank'))]}"/>
+                                        <field name="loss_account_id" attrs="{'invisible': ['!', ('type', 'in', ('cash', 'bank'))]}"/>
                                         <!-- Sales -->
                                         <field name="default_account_id" string="Default Income Account"
-                                               attrs="{'required': [('id', '!=', False), ('type', '=', 'sale')], 'invisible': [('type', '!=', 'sale')]}"
+                                               attrs="{'required': [('type', '=', 'sale')], 'invisible': [('type', '!=', 'sale')]}"
                                                groups="account.group_account_readonly"/>
                                         <!-- Purchase -->
                                         <field name="default_account_id" string="Default Expense Account"
-                                               attrs="{'required': [('id', '!=', False), ('type', '=', 'purchase')], 'invisible': [('type', '!=', 'purchase')]}"
+                                               attrs="{'required': [('type', '=', 'purchase')], 'invisible': [('type', '!=', 'purchase')]}"
                                                groups="account.group_account_readonly"/>
                                         <field name="refund_sequence" attrs="{'invisible': [('type', 'not in', ['sale', 'purchase'])]}"/>
-                                        <field name="code"/>
+                                        <field name="code" placeholder="e.g. INV"/>
+                                        <field name="currency_id" options="{'no_create': True}" groups="base.group_multi_currency"/>
                                     </group>
                                     <group string="Bank Account Number" attrs="{'invisible': [('type', '!=', 'bank')]}">
                                         <field name="company_partner_id" invisible="1"/>
@@ -77,32 +87,50 @@
                                     </group>
                                 </group>
                             </page>
-                            <page name="journal_entries" string="Payments Configuration" attrs="{'invisible': [('type', 'in', ['sale', 'purchase', 'general'])]}">
-                                <group>
-                                    <group string="Incoming Payments">
-                                        <field name="payment_debit_account_id"
-                                               attrs="{'required': [('id', '!=', False), ('type', 'in', ('bank', 'cash'))], 'invisible': [('type', 'not in', ('bank', 'cash'))]}"
+                            <page id="inbound_payment_settings" string="Incoming Payments" attrs="{'invisible': [('type', 'not in', ['cash', 'bank'])]}">
+                                <field name="available_payment_method_ids" invisible="1"/>
+                                <field name="inbound_payment_method_line_ids" nolabel="1" context="{'default_payment_type': 'inbound'}">
+                                    <tree string="Payment Methods" editable="bottom">
+                                        <field name="available_payment_method_ids" invisible="1"/>
+                                        <field name="payment_type" invisible="1"/>
+                                        <field name="company_id" invisible="1"/>
+                                        <field name="sequence" widget="handle"/>
+                                        <field name="payment_method_id" options="{'no_create': True, 'no_open': True}"/>
+                                        <field name="name"/>
+                                        <field name="payment_account_id"
+                                               placeholder="Leave empty to use the default outstanding account"
+                                               string="Outstanding Receipts accounts"
+                                               optional="hide"
                                                groups="account.group_account_readonly"/>
-                                        <field name="inbound_payment_method_ids" string="Methods" widget="many2many_checkboxes" attrs="{'invisible': [('type', 'not in', ['bank', 'cash'])]}"/>
-                                    </group>
-                                    <group string="Outgoing Payments">
-                                        <field name="id" invisible="1"/>
-                                        <field name="payment_credit_account_id"
-                                               attrs="{'required': [('id', '!=', False), ('type', 'in', ('bank', 'cash'))], 'invisible': [('type', 'not in', ('bank', 'cash'))]}"
-                                               groups="account.group_account_readonly"/>
-                                        <field name="currency_id" options="{'no_create': True}" groups="base.group_multi_currency"/>
-                                        <field name="outbound_payment_method_ids" string="Methods" widget="many2many_checkboxes" attrs="{'invisible': [('type', 'not in', ['bank', 'cash'])]}"/>
-                                    </group>
+                                    </tree>
+                                </field>
+                            </page>
+                            <page id="outbound_payment_settings" string="Outgoing Payments" attrs="{'invisible': [('type', 'not in', ['cash', 'bank'])]}">
+                                    <field name="outbound_payment_method_line_ids" nolabel="1" context="{'default_payment_type': 'outbound'}">
+                                        <tree string="Payment Methods" editable="bottom" nolabel="1">
+                                            <field name="available_payment_method_ids" invisible="1"/>
+                                            <field name="payment_type" invisible="1"/>
+                                            <field name="company_id" invisible="1"/>
+                                            <field name="sequence" widget="handle"/>
+                                            <field name="payment_method_id" options="{'no_create': True, 'no_open': True}"/>
+                                            <field name="name"/>
+                                            <field name="payment_account_id"
+                                                   placeholder="Leave empty to use the default outstanding account"
+                                                   string="Outstanding Payments accounts"
+                                                   optional="hide"
+                                                   groups="account.group_account_readonly"/>
+                                        </tree>
+                                    </field>
+                                    <field name="selected_payment_method_codes" invisible="1"/>
                                     <group name="outgoing_payment" />
-                                </group>
                             </page>
                             <page name="advanced_settings" string="Advanced Settings">
                                 <group>
                                     <group string="Control-Access" groups="account.group_account_manager">
                                         <div class="text-muted" colspan="2">Keep empty for no control</div>
-                                        <field name="type_control_ids" widget="many2many_tags"/>
+                                        <field name="type_control_ids" widget="many2many_tags" options="{'no_create': True}"/>
                                         <field name="account_control_ids" widget="many2many_tags"/>
-                                        <field name="restrict_mode_hash_table" groups="account.group_account_readonly"/>
+                                        <field name="restrict_mode_hash_table" groups="account.group_account_readonly" attrs="{'invisible': [('type', 'in', ['bank', 'cash'])]}"/>
                                     </group>
                                     <!-- email alias -->
                                     <group class="oe_read_only" name="group_alias_ro" string="Create Invoices upon Emails" attrs="{'invisible': ['|', ('type', 'not in',  ('sale' ,'purchase')), ('alias_domain', '=', False)]}">

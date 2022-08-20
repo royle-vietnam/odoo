@@ -1,20 +1,19 @@
-odoo.define('mail/static/src/services/dialog_service/dialog_service.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    DialogManager: require('mail/static/src/components/dialog_manager/dialog_manager.js'),
-};
+// ensure component is registered beforehand.
+import '@mail/components/dialog_manager/dialog_manager';
+import { getMessagingComponent } from "@mail/utils/messaging_component";
 
-const AbstractService = require('web.AbstractService');
-const { bus, serviceRegistry } = require('web.core');
+import AbstractService from 'web.AbstractService';
+import { bus } from 'web.core';
 
-const DialogService = AbstractService.extend({
+export const DialogService = AbstractService.extend({
+    dependencies: ['messaging'],
     /**
      * @override {web.AbstractService}
      */
     start() {
         this._super(...arguments);
-        this._webClientReady = false;
         this._listenHomeMenu();
     },
     /**
@@ -42,8 +41,6 @@ const DialogService = AbstractService.extend({
      * @private
      */
     _listenHomeMenu() {
-        bus.on('hide_home_menu', this, this._onHideHomeMenu.bind(this));
-        bus.on('show_home_menu', this, this._onShowHomeMenu.bind(this));
         bus.on('web_client_ready', this, this._onWebClientReady.bind(this));
     },
     /**
@@ -54,7 +51,7 @@ const DialogService = AbstractService.extend({
             this.component.destroy();
             this.component = undefined;
         }
-        const DialogManagerComponent = components.DialogManager;
+        const DialogManagerComponent = getMessagingComponent("DialogManager");
         this.component = new DialogManagerComponent(null);
         const parentNode = this._getParentNode();
         await this.component.mount(parentNode);
@@ -67,35 +64,7 @@ const DialogService = AbstractService.extend({
     /**
      * @private
      */
-    async _onHideHomeMenu() {
-        if (!this._webClientReady) {
-            return;
-        }
-        if (document.querySelector('.o_DialogManager')) {
-            return;
-        }
-        await this._mount();
-    },
-    async _onShowHomeMenu() {
-        if (!this._webClientReady) {
-            return;
-        }
-        if (document.querySelector('.o_DialogManager')) {
-            return;
-        }
-        await this._mount();
-    },
-    /**
-     * @private
-     */
     async _onWebClientReady() {
         await this._mount();
-        this._webClientReady = true;
     }
-});
-
-serviceRegistry.add('dialog', DialogService);
-
-return DialogService;
-
 });

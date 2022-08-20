@@ -3,6 +3,7 @@
 
 {
     'name': 'Indonesia E-faktur',
+    'icon': '/l10n_id/static/description/icon.png',
     'version': '1.0',
     'description': """
         E-Faktur Menu(Indonesia)
@@ -39,4 +40,5 @@
     'demo': [],
     'installable': True,
     'auto_install': True,
+    'license': 'LGPL-3',
 }

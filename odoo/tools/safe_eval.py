@@ -37,7 +37,7 @@ __all__ = ['test_expr', 'safe_eval', 'const_eval']
 # lp:703841), does import time.
 _ALLOWED_MODULES = ['_strptime', 'math', 'time']
 
-_UNSAFE_ATTRIBUTES = ['f_builtins', 'f_globals', 'f_locals', 'gi_frame',
+_UNSAFE_ATTRIBUTES = ['f_builtins', 'f_globals', 'f_locals', 'gi_frame', 'gi_code',
                       'co_code', 'func_globals']
 
 def to_opcodes(opnames, _opmap=opmap):
@@ -65,6 +65,7 @@ _CONST_OPCODES = set(to_opcodes([
     'BUILD_LIST', 'BUILD_MAP', 'BUILD_TUPLE', 'BUILD_SET',
     # 3.6: literal map with constant keys https://bugs.python.org/issue27140
     'BUILD_CONST_KEY_MAP',
+    'LIST_EXTEND', 'SET_UPDATE',
 ])) - _BLACKLIST
 
 # operations which are both binary and inplace, same order as in doc'
@@ -82,6 +83,11 @@ _EXPR_OPCODES = _CONST_OPCODES.union(to_opcodes([
     # comprehensions
     'LIST_APPEND', 'MAP_ADD', 'SET_ADD',
     'COMPARE_OP',
+    # specialised comparisons
+    'IS_OP', 'CONTAINS_OP',
+    'DICT_MERGE', 'DICT_UPDATE',
+    # Basically used in any "generator literal"
+    'GEN_START',  # added in 3.10 but already removed from 3.11.
 ])) - _BLACKLIST
 
 _SAFE_OPCODES = _EXPR_OPCODES.union(to_opcodes([
@@ -106,6 +112,8 @@ _SAFE_OPCODES = _EXPR_OPCODES.union(to_opcodes([
     'LOAD_FAST', 'STORE_FAST', 'DELETE_FAST', 'UNPACK_SEQUENCE',
     'STORE_SUBSCR',
     'LOAD_GLOBAL',
+
+    'RERAISE', 'JUMP_IF_NOT_EXC_MATCH',
 ])) - _BLACKLIST
 
 _logger = logging.getLogger(__name__)
@@ -258,6 +266,7 @@ _BUILTINS = {
     'sum': sum,
     'reduce': functools.reduce,
     'filter': filter,
+    'sorted': sorted,
     'round': round,
     'len': len,
     'repr': repr,
@@ -406,7 +415,7 @@ dateutil = wrap_module(dateutil, {
     for mod in mods
 })
 json = wrap_module(__import__('json'), ['loads', 'dumps'])
-time = wrap_module(__import__('time'), ['time', 'strptime', 'strftime'])
+time = wrap_module(__import__('time'), ['time', 'strptime', 'strftime', 'sleep'])
 pytz = wrap_module(__import__('pytz'), [
     'utc', 'UTC', 'timezone',
 ])

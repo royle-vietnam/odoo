@@ -1,14 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo><data>
-    <template id="assets_frontend" inherit_id="website.assets_frontend">
-        <xpath expr="link[last()]" position="after">
-            <link rel="stylesheet" type="text/scss" href="/website_profile/static/src/scss/website_profile.scss"/>
-        </xpath>
-        <xpath expr="script[last()]" position="after">
-            <script type="text/javascript" src="/website_profile/static/src/js/website_profile.js"/>
-        </xpath>
-    </template>
-
     <!-- Sub nav -->
     <template id="user_profile_sub_nav" name="User profile subnav">
         <div class="o_wprofile_all_users_nav">
@@ -101,7 +92,7 @@
                 <div class="col-3">
                     <div class="card o_card_people">
                         <div class="card-body">
-                            <img class="o_forum_avatar_img w-100 mb-3" t-att-src="website.image_url(user, 'image_128')"/>
+                            <img class="o_forum_avatar_img w-100 mb-3" t-att-src="website.image_url(user, 'avatar_128')"/>
                             <div class="text-center">
                                 <a href="#" class="o_forum_profile_pic_edit btn btn-primary" aria-label="Edit">
                                     <i class="fa fa-pencil fa-1g float-sm-none float-md-left" title="Edit"></i>
@@ -203,7 +194,7 @@
                     <!-- ==== Header Left ==== -->
                     <div class="col-12 col-md-4 col-lg-3">
                         <div t-attf-class="d-flex align-items-start h-100 #{'justify-content-between' if (request.env.user == user) else 'justify-content-around' }">
-                            <div class="o_wprofile_pict d-inline-block mb-3 mb-md-0" t-attf-style="background-image: url(#{website.image_url(user, 'image_1024')});"/>
+                            <div class="o_wprofile_pict d-inline-block mb-3 mb-md-0" t-attf-style="background-image: url(#{website.image_url(user, 'avatar_1024')});"/>
                             <a class="btn btn-primary d-inline-block d-md-none"
                                 t-if="request.env.user == user and user.karma != 0"
                                 t-attf-href="/profile/edit?url_param=#{edit_button_url_param}&amp;user_id=#{user.id}">
@@ -403,7 +394,7 @@
                 <nav t-if="request.params.get('url_origin') and request.params.get('name_origin')" aria-label="breadcrumb">
                     <ol class="breadcrumb p-0 bg-white">
                         <li class="breadcrumb-item">
-                            <a t-att-href="request.website._get_http_domain() + request.params.get('url_origin')" t-esc="request.params.get('name_origin')"/>
+                            <a t-att-href="request.website._get_http_domain() + '/' + request.params.get('url_origin').lstrip('/')" t-esc="request.params.get('name_origin')"/>
                         </li>
                         <li class="breadcrumb-item">Badges</li>
                     </ol>
@@ -563,7 +554,7 @@
                 <div class="d-inline-block position-relative">
                     <img class="rounded-circle img-fluid"
                         style="width: 128px; height: 128px; object-fit: cover;"
-                        t-att-src="'/profile/avatar/%s?field=image_256%s' % (user['id'], '&amp;res_model=%s&amp;res_id=%s' % (record._name, record.id) if record else '')"/>
+                         t-att-src="'/profile/avatar/%s?field=avatar_256%s' % (user['id'], '&amp;res_model=%s&amp;res_id=%s' % (record._name, record.id) if record else '')"/>
                     <img class="position-absolute" t-attf-src="/website_profile/static/src/img/rank_#{user_index + 1}.svg" alt="User rank" style="bottom: 0; right: -10px"/>
                 </div>
                 <h3 class="mt-2 mb-0" t-esc="user['name']"></h3>
@@ -585,7 +576,7 @@
             <span t-esc="user['position']"/>
         </td>
         <td class="align-middle d-none d-sm-table-cell">
-            <img class="o_object_fit_cover rounded-circle o_wprofile_img_small" width="30" height="30" t-att-src="'/profile/avatar/%s?field=image_128%s' % (user['id'], '&amp;res_model=%s&amp;res_id=%s' % (record._name, record.id) if record else '')"/>
+            <img class="o_object_fit_cover rounded-circle o_wprofile_img_small" width="30" height="30" t-att-src="'/profile/avatar/%s?field=avatar_128%s' % (user['id'], '&amp;res_model=%s&amp;res_id=%s' % (record._name, record.id) if record else '')"/>
         </td>
         <td class="align-middle w-md-75">
             <span class="font-weight-bold" t-esc="user['name']"/><br/>
@@ -622,7 +613,7 @@
                 <a t-att-href=" pager['page_previous']['url'] if pager['page']['num'] != 1 else None" class="page-link"><i class="fa fa-caret-left"/></a>
             </li>
             <t t-foreach="pager['pages']" t-as="page">
-                <li t-attf-class="page-item #{'active disabled bg-primary rounded-circle' if page['num'] == pager['page']['num'] else ''}"> <a t-att-href="page['url']" class="page-link" t-raw="page['num']"></a></li>
+                <li t-attf-class="page-item #{'active disabled bg-primary rounded-circle' if page['num'] == pager['page']['num'] else ''}"> <a t-att-href="page['url']" class="page-link" t-out="page['num']"/></li>
             </t>
             <li t-attf-class="page-item o_wprofile_pager_arrow #{'disabled' if pager['page']['num'] == pager['page_count'] else ''}">
                 <a t-att-href="pager['page_next']['url'] if pager['page']['num'] != pager['page_count'] else None" class="page-link"><i class="fa fa-caret-right"/></a>
@@ -638,14 +629,14 @@
         <t t-set="done_alert_classes" t-value="done_alert_classes if done_alert_classes else 'alert alert-success alert-dismissable'"/>
 
         <div t-if="not validation_email_sent and not is_public_user and user.karma == 0" t-att-class="send_alert_classes" role="alert">
-            <button type="button" class="close validation_email_close" data-dismiss="alert" aria-label="Close">&amp;times;</button>
+            <button type="button" class="close validation_email_close" data-dismiss="alert" aria-label="Close">×</button>
             It appears your email has not been verified.<br/>
             <a class="send_validation_email alert-link" href="#" t-att-data-redirect_url="redirect_url">
                 <span t-esc="send_validation_email_message"/>
             </a>
         </div>
         <div t-if="validation_email_done" t-att-class="done_alert_classes" role="status">
-            <button type="button" class="close validated_email_close" data-dismiss="alert" aria-label="Close">&amp;times;</button>
+            <button type="button" class="close validated_email_close" data-dismiss="alert" aria-label="Close">×</button>
             <span id="email_validated_message">Congratulations! Your email has just been validated.</span>
             <span t-esc="additional_validated_email_message"/>
         </div>

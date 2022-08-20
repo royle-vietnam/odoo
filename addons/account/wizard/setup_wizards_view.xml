@@ -24,8 +24,8 @@
                     </sheet>
                     <footer>
                         <button name="action_save_onboarding_fiscal_year" string="Apply"
-                               class="oe_highlight" type="object" />
-                        <button special="cancel" string="Cancel" />
+                               class="oe_highlight" type="object" data-hotkey="q" />
+                        <button special="cancel" data-hotkey="z" string="Cancel" />
                     </footer>
                 </form>
             </field>
@@ -58,8 +58,8 @@
                         </group>
                     </sheet>
                     <footer>
-                        <button string="Create" class="oe_highlight" type="object" name="validate"/>
-                        <button string="Cancel" special="cancel"/>
+                        <button string="Create" class="oe_highlight" type="object" name="validate" data-hotkey="q"/>
+                        <button string="Cancel" special="cancel" data-hotkey="z"/>
                     </footer>
                 </form>
             </field>
@@ -69,7 +69,7 @@
             <field name="name">account.setup.opening.move.line.tree</field>
             <field name="model">account.account</field>
             <field name="arch" type="xml">
-                <tree editable="top" create="1" delete="1" multi_edit="1" decoration-muted="opening_debit == 0 and opening_credit == 0">
+                <tree editable="top" create="1" delete="1" decoration-muted="opening_debit == 0 and opening_credit == 0">
                     <field name="code"/>
                     <field name="name"/>
                     <field name="company_id" invisible="1"/>

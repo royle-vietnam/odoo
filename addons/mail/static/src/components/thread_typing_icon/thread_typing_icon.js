@@ -1,9 +1,10 @@
-odoo.define('mail/static/src/components/thread_typing_icon/thread_typing_icon.js', function (require) {
-'use strict';
+/** @odoo-module **/
+
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 
-class ThreadTypingIcon extends Component {}
+export class ThreadTypingIcon extends Component {}
 
 Object.assign(ThreadTypingIcon, {
     defaultProps: {
@@ -27,6 +28,4 @@ Object.assign(ThreadTypingIcon, {
     template: 'mail.ThreadTypingIcon',
 });
 
-return ThreadTypingIcon;
-
-});
+registerMessagingComponent(ThreadTypingIcon);

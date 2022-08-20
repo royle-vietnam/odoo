@@ -1,3 +1,4 @@
+import json
 import time
 from xmlrpc.client import Fault
 
@@ -61,13 +62,16 @@ class TestTOTP(HttpCase):
                 'res.users', 'read', [uid, ['login']]
             )
 
-        # 3. Check 2FA is required and disable it
+        # 3. Check 2FA is required
         self.start_tour('/', 'totp_login_enabled', login=None)
 
-        # 4. Finally, check that 2FA is in fact disabled
+        # 4. Check 2FA is not requested on saved device and disable it
+        self.start_tour('/', 'totp_login_device', login=None)
+
+        # 5. Finally, check that 2FA is in fact disabled
         self.start_tour('/', 'totp_login_disabled', login=None)
 
-        # 5. Check that rpc is now re-allowed
+        # 6. Check that rpc is now re-allowed
         uid = self.xmlrpc_common.authenticate(get_db_name(), 'demo', 'demo', {})
         self.assertEqual(uid, self.env.ref('base.user_demo').id)
         [r] = self.xmlrpc_object.execute_kw(
@@ -81,3 +85,31 @@ class TestTOTP(HttpCase):
         self.start_tour('/web', 'totp_tour_setup', login='demo')
         self.start_tour('/web', 'totp_admin_disables', login='admin')
         self.start_tour('/', 'totp_login_disabled', login=None)
+
+    def test_totp_authenticate(self):
+        """
+        Ensure that JSON-RPC authentication works and don't return the user id
+        without TOTP check
+        """
+
+        self.start_tour('/web', 'totp_tour_setup', login='demo')
+        self.url_open('/web/session/logout')
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "call",
+            "id": 0,
+            "params": {
+                "db": get_db_name(),
+                "login": "demo",
+                "password": "demo",
+                "context": {},
+            },
+        }
+        response = self.url_open("/web/session/authenticate", data=json.dumps(payload), headers=headers)
+        data = response.json()
+        self.assertEqual(data['result']['uid'], None)

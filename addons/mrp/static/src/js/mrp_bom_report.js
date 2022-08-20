@@ -1,9 +1,8 @@
-odoo.define('mrp.mrp_bom_report', function (require) {
-'use strict';
+/** @odoo-module **/
 
-var core = require('web.core');
-var framework = require('web.framework');
-var stock_report_generic = require('stock.stock_report_generic');
+import core from 'web.core';
+import framework from 'web.framework';
+import stock_report_generic from 'stock.stock_report_generic';
 
 var QWeb = core.qweb;
 var _t = core._t;
@@ -19,7 +18,7 @@ var MrpBomReport = stock_report_generic.extend({
         var self = this;
         var args = [
             this.given_context.active_id,
-            this.given_context.searchQty || 1,
+            this.given_context.searchQty || false,
             this.given_context.searchVariant,
         ];
         return this._rpc({
@@ -30,6 +29,9 @@ var MrpBomReport = stock_report_generic.extend({
             })
             .then(function (result) {
                 self.data = result;
+                if (! self.given_context.searchVariant) {
+                    self.given_context.searchVariant = result.is_variant_applied && Object.keys(result.variants)[0];
+                }
             });
     },
     set_html: function() {
@@ -83,11 +85,13 @@ var MrpBomReport = stock_report_generic.extend({
       var $parent = $(event.currentTarget).closest('tr');
       var activeID = $parent.data('bom-id');
       var qty = $parent.data('qty');
+      var productId = $parent.data('product_id');
       var level = $parent.data('level') || 0;
       return this._rpc({
               model: 'report.mrp.report_bom_structure',
               method: 'get_operations',
               args: [
+                  productId,
                   activeID,
                   parseFloat(qty),
                   level + 1
@@ -97,6 +101,27 @@ var MrpBomReport = stock_report_generic.extend({
               self.render_html(event, $parent, result);
           });
     },
+    get_byproducts: function(event) {
+        var self = this;
+        var $parent = $(event.currentTarget).closest('tr');
+        var activeID = $parent.data('bom-id');
+        var qty = $parent.data('qty');
+        var level = $parent.data('level') || 0;
+        var total = $parent.data('total') || 0;
+        return this._rpc({
+                model: 'report.mrp.report_bom_structure',
+                method: 'get_byproducts',
+                args: [
+                    activeID,
+                    parseFloat(qty),
+                    level + 1,
+                    parseFloat(total)
+                ]
+            })
+            .then(function (result) {
+                self.render_html(event, $parent, result);
+            });
+      },
     update_cp: function () {
         var status = {
             cp_content: {
@@ -107,26 +132,29 @@ var MrpBomReport = stock_report_generic.extend({
         return this.updateControlPanel(status);
     },
     renderSearch: function () {
-        this.$buttonPrint = $(QWeb.render('mrp.button'));
+        this.$buttonPrint = $(QWeb.render('mrp.button', {'is_variant_applied': this.data.is_variant_applied}));
         this.$buttonPrint.find('.o_mrp_bom_print').on('click', this._onClickPrint.bind(this));
+        this.$buttonPrint.find('.o_mrp_bom_print_all_variants').on('click', this._onClickPrint.bind(this));
         this.$buttonPrint.find('.o_mrp_bom_print_unfolded').on('click', this._onClickPrint.bind(this));
         this.$searchView = $(QWeb.render('mrp.report_bom_search', _.omit(this.data, 'lines')));
-        this.$searchView.find('.o_mrp_bom_report_qty').on('change', this._onChangeQty.bind(this));
-        this.$searchView.find('.o_mrp_bom_report_variants').on('change', this._onChangeVariants.bind(this));
+        this.$searchView.find('.o_mrp_bom_report_qty').on('change', this._onChangeQty.bind(this)).change();
+        this.$searchView.find('.o_mrp_bom_report_variants').on('change', this._onChangeVariants.bind(this)).change();
         this.$searchView.find('.o_mrp_bom_report_type').on('change', this._onChangeType.bind(this));
     },
     _onClickPrint: function (ev) {
         var childBomIDs = _.map(this.$el.find('.o_mrp_bom_foldable').closest('tr'), function (el) {
             return $(el).data('id');
         });
-        framework.blockUI();
+        this.searchModelConfig.env.services.ui.block();
         var reportname = 'mrp.report_bom_structure?docids=' + this.given_context.active_id +
                          '&report_type=' + this.given_context.report_type +
                          '&quantity=' + (this.given_context.searchQty || 1);
         if (! $(ev.currentTarget).hasClass('o_mrp_bom_print_unfolded')) {
             reportname += '&childs=' + JSON.stringify(childBomIDs);
         }
-        if (this.given_context.searchVariant) {
+        if ($(ev.currentTarget).hasClass('o_mrp_bom_print_all_variants')) {
+            reportname += '&all_variants=' + 1;
+        } else if (this.given_context.searchVariant) {
             reportname += '&variant=' + this.given_context.searchVariant;
         }
         var action = {
@@ -135,8 +163,8 @@ var MrpBomReport = stock_report_generic.extend({
             'report_name': reportname,
             'report_file': 'mrp.report_bom_structure',
         };
-        return this.do_action(action).then(function (){
-            framework.unblockUI();
+        return this.do_action(action).then(() => {
+            this.searchModelConfig.env.services.ui.unblock();
         });
     },
     _onChangeQty: function (ev) {
@@ -217,6 +245,4 @@ var MrpBomReport = stock_report_generic.extend({
 });
 
 core.action_registry.add('mrp_bom_report', MrpBomReport);
-return MrpBomReport;
-
-});
+export default MrpBomReport;

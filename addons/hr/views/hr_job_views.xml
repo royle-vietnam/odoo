@@ -15,15 +15,12 @@
                     <sheet>
                         <div class="oe_button_box" name="button_box"/>
                         <div class="oe_title">
-                            <label for="name" class="oe_edit_only"/>
+                            <label for="name"/>
                             <h1><field name="name" placeholder="e.g. Sales Manager"/></h1>
                         </div>
                         <notebook> 
                             <page string="Job Description">
-                                <div attrs="{'invisible': [('state', '!=', 'recruit')]}">
-                                    <label for="description"/>
-                                    <field name="description"/>
-                                </div>
+                                <field name="description" options="{'collaborative': true}" attrs="{'invisible': [('state', '!=', 'recruit')]}"/>
                             </page>
                             <page string="Recruitment">
                                 <group>
@@ -50,6 +47,7 @@
             <field name="model">hr.job</field>
             <field name="arch" type="xml">
                 <tree string="Job" sample="1">
+                    <field name="sequence" widget="handle"/>
                     <field name="name"/>
                     <field name="department_id"/>
                     <field name="no_of_employee"/>

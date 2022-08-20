@@ -4,7 +4,7 @@
 import random
 
 from odoo import api, fields, models, _
-from odoo.exceptions import AccessDenied, AccessError
+from odoo.exceptions import AccessDenied, AccessError, UserError
 from odoo.tools import html_escape
 
 
@@ -12,8 +12,8 @@ from odoo.tools import html_escape
 class CrmLead(models.Model):
     _inherit = "crm.lead"
 
-    partner_latitude = fields.Float('Geo Latitude', digits=(16, 5))
-    partner_longitude = fields.Float('Geo Longitude', digits=(16, 5))
+    partner_latitude = fields.Float('Geo Latitude', digits=(10, 7))
+    partner_longitude = fields.Float('Geo Longitude', digits=(10, 7))
     partner_assigned_id = fields.Many2one('res.partner', 'Assigned Partner', tracking=True, domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]", help="Partner this case has been forwarded/assigned to.", index=True)
     partner_declined_ids = fields.Many2many(
         'res.partner',
@@ -26,10 +26,6 @@ class CrmLead(models.Model):
         copy=True, readonly=False, store=True,
         help="Last date this case was forwarded/assigned to a partner")
 
-    def _merge_data(self, fields):
-        fields += ['partner_latitude', 'partner_longitude', 'partner_assigned_id', 'date_partner_assign']
-        return super(CrmLead, self)._merge_data(fields)
-
     @api.depends("partner_assigned_id")
     def _compute_date_partner_assign(self):
         for lead in self:
@@ -38,10 +34,15 @@ class CrmLead(models.Model):
             else:
                 lead.date_partner_assign = fields.Date.context_today(lead)
 
+    def _merge_get_fields(self):
+        fields_list = super(CrmLead, self)._merge_get_fields()
+        fields_list += ['partner_latitude', 'partner_longitude', 'partner_assigned_id', 'date_partner_assign']
+        return fields_list
+
     def assign_salesman_of_assigned_partner(self):
         salesmans_leads = {}
         for lead in self:
-            if (lead.probability > 0 and lead.probability < 100) or lead.stage_id.sequence == 1:
+            if lead.active and lead.probability < 100:
                 if lead.partner_assigned_id and lead.partner_assigned_id.user_id != lead.user_id:
                     salesmans_leads.setdefault(lead.partner_assigned_id.user_id.id, []).append(lead.id)
 
@@ -62,12 +63,13 @@ class CrmLead(models.Model):
                 partner_id = partner_dict.get(lead.id, False)
             if not partner_id:
                 tag_to_add = self.env.ref('website_crm_partner_assign.tag_portal_lead_partner_unavailable', False)
-                lead.write({'tag_ids': [(4, tag_to_add.id, False)]})
+                if tag_to_add:
+                    lead.write({'tag_ids': [(4, tag_to_add.id, False)]})
                 continue
             lead.assign_geo_localize(lead.partner_latitude, lead.partner_longitude)
             partner = self.env['res.partner'].browse(partner_id)
             if partner.user_id:
-                lead.handle_salesmen_assignment(partner.user_id.ids, team_id=partner.team_id.id)
+                lead._handle_salesmen_assignment(user_ids=partner.user_id.ids, team_id=partner.team_id.id)
             lead.write({'partner_assigned_id': partner_id})
         return res
 
@@ -93,6 +95,14 @@ class CrmLead(models.Model):
                         'partner_longitude': result[1]
                     })
         return True
+
+    def _prepare_customer_values(self, partner_name, is_company=False, parent_id=False):
+        res = super()._prepare_customer_values(partner_name, is_company=is_company, parent_id=parent_id)
+        res.update({
+            'partner_latitude': self.partner_latitude,
+            'partner_longitude': self.partner_longitude,
+        })
+        return res
 
     def search_geo_partner(self):
         Partner = self.env['res.partner']
@@ -159,18 +169,12 @@ class CrmLead(models.Model):
                     if res:
                         partner_ids = Partner.browse([res['id']])
 
-                total_weight = 0
-                toassign = []
-                for partner in partner_ids:
-                    total_weight += partner.partner_weight
-                    toassign.append((partner.id, total_weight))
+                if partner_ids:
+                    res_partner_ids[lead.id] = random.choices(
+                        partner_ids.ids,
+                        partner_ids.mapped('partner_weight'),
+                    )[0]
 
-                random.shuffle(toassign)  # avoid always giving the leads to the first ones in db natural order!
-                nearest_weight = random.randint(0, total_weight)
-                for partner_id, weight in toassign:
-                    if nearest_weight <= weight:
-                        res_partner_ids[lead.id] = partner_id
-                        break
         return res_partner_ids
 
     def partner_interested(self, comment=False):
@@ -209,7 +213,7 @@ class CrmLead(models.Model):
         for lead in self:
             lead_values = {
                 'expected_revenue': values['expected_revenue'],
-                'probability': values['probability'],
+                'probability': values['probability'] or False,
                 'priority': values['priority'],
                 'date_deadline': values['date_deadline'] or False,
             }
@@ -235,6 +239,14 @@ class CrmLead(models.Model):
                         'date_deadline': values['activity_date_deadline'],
                     })
             lead.write(lead_values)
+
+    def update_contact_details_from_portal(self, values):
+        self.check_access_rights('write')
+        fields = ['partner_name', 'phone', 'mobile', 'email_from', 'street', 'street2',
+            'city', 'zip', 'state_id', 'country_id']
+        if any([key not in fields for key in values]):
+            raise UserError(_("Not allowed to update the following field(s) : %s.") % ", ".join([key for key in values if not key in fields]))
+        return self.sudo().write(values)
 
     @api.model
     def create_opp_portal(self, values):

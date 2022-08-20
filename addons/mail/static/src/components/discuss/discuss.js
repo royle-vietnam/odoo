@@ -1,91 +1,42 @@
-odoo.define('mail/static/src/components/discuss/discuss.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    AutocompleteInput: require('mail/static/src/components/autocomplete_input/autocomplete_input.js'),
-    Composer: require('mail/static/src/components/composer/composer.js'),
-    DiscussMobileMailboxSelection: require('mail/static/src/components/discuss_mobile_mailbox_selection/discuss_mobile_mailbox_selection.js'),
-    DiscussSidebar: require('mail/static/src/components/discuss_sidebar/discuss_sidebar.js'),
-    MobileMessagingNavbar: require('mail/static/src/components/mobile_messaging_navbar/mobile_messaging_navbar.js'),
-    ModerationDiscardDialog: require('mail/static/src/components/moderation_discard_dialog/moderation_discard_dialog.js'),
-    ModerationRejectDialog: require('mail/static/src/components/moderation_reject_dialog/moderation_reject_dialog.js'),
-    NotificationList: require('mail/static/src/components/notification_list/notification_list.js'),
-    ThreadView: require('mail/static/src/components/thread_view/thread_view.js'),
-};
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
+import { link, unlink } from '@mail/model/model_field_command';
+import { useUpdate } from '@mail/component_hooks/use_update/use_update';
 
 const { Component } = owl;
-const { useRef } = owl.hooks;
 
-class Discuss extends Component {
-
+export class Discuss extends Component {
     /**
      * @override
      */
     constructor(...args) {
         super(...args);
-        useStore(props => {
-            const discuss = this.env.messaging && this.env.messaging.discuss;
-            const threadView = discuss && discuss.threadView;
-            return {
-                checkedMessages: threadView ? threadView.checkedMessages.map(message => message.__state) : [],
-                discuss: discuss ? discuss.__state : undefined,
-                isDeviceMobile: this.env.messaging && this.env.messaging.device.isMobile,
-                isMessagingInitialized: this.env.isMessagingInitialized(),
-                thread: discuss && discuss.thread ? discuss.thread.__state : undefined,
-                threadCache: (threadView && threadView.threadCache)
-                    ? threadView.threadCache.__state
-                    : undefined,
-                uncheckedMessages: threadView ? threadView.uncheckedMessages.map(message => message.__state) : [],
-            };
-        }, {
-            compareDepth: {
-                checkedMessages: 1,
-                uncheckedMessages: 1,
-            },
-        });
         this._updateLocalStoreProps();
-        /**
-         * Reference of the composer. Useful to focus it.
-         */
-        this._composerRef = useRef('composer');
-        /**
-         * Reference of the ThreadView. Useful to focus it.
-         */
-        this._threadViewRef = useRef('threadView');
         // bind since passed as props
         this._onMobileAddItemHeaderInputSelect = this._onMobileAddItemHeaderInputSelect.bind(this);
         this._onMobileAddItemHeaderInputSource = this._onMobileAddItemHeaderInputSource.bind(this);
+        useUpdate({ func: () => this._update() });
     }
 
-    mounted() {
-        this.discuss.update({ isOpen: true });
-        if (this.discuss.thread) {
-            this.trigger('o-push-state-action-manager');
-        } else if (this.env.messaging.isInitialized) {
-            this.discuss.openInitThread();
+    _update() {
+        if (!this.discuss) {
+            return;
         }
-        this._updateLocalStoreProps();
-        this._update();
-    }
-
-    patched() {
-        this.trigger('o-update-control-panel');
+        this.discuss.update({ isOpen: true });
         if (this.discuss.thread) {
             this.trigger('o-push-state-action-manager');
         }
         if (
             this.discuss.thread &&
-            this.discuss.thread === this.env.messaging.inbox &&
+            this.discuss.thread === this.messaging.inbox &&
             this.discuss.threadView &&
             this._lastThreadCache === this.discuss.threadView.threadCache.localId &&
             this._lastThreadCounter > 0 && this.discuss.thread.counter === 0
         ) {
             this.trigger('o-show-rainbow-man');
         }
-        this._activeThreadCache = this.discuss.threadView && this.discuss.threadView.threadCache;
         this._updateLocalStoreProps();
-        this._update();
     }
 
     willUnmount() {
@@ -116,7 +67,7 @@ class Discuss extends Component {
      * @returns {mail.discuss}
      */
     get discuss() {
-        return this.env.messaging && this.env.messaging.discuss;
+        return this.messaging && this.messaging.discuss;
     }
 
     /**
@@ -145,25 +96,10 @@ class Discuss extends Component {
     /**
      * @private
      */
-    _update() {
-        if (this.discuss.isDoFocus) {
-            this.discuss.update({ isDoFocus: false });
-            const composer = this._composerRef.comp;
-            if (composer) {
-                composer.focus();
-            } else {
-                const threadView = this._threadViewRef.comp;
-                if (threadView) {
-                    threadView.focus();
-                }
-            }
-        }
-    }
-
-    /**
-     * @private
-     */
     _updateLocalStoreProps() {
+        if (!this.discuss) {
+            return;
+        }
         /**
          * Locally tracked store props `activeThreadCache`.
          * Useful to set scroll position from last stored one and to display
@@ -187,20 +123,6 @@ class Discuss extends Component {
     //--------------------------------------------------------------------------
     // Handlers
     //--------------------------------------------------------------------------
-
-    /**
-     * @private
-     */
-    _onDialogClosedModerationDiscard() {
-        this.discuss.update({ hasModerationDiscardDialog: false });
-    }
-
-    /**
-     * @private
-     */
-    _onDialogClosedModerationReject() {
-        this.discuss.update({ hasModerationRejectDialog: false });
-    }
 
     /**
      * @private
@@ -243,20 +165,6 @@ class Discuss extends Component {
 
     /**
      * @private
-     */
-    _onReplyingToMessageMessagePosted() {
-        this.env.services['notification'].notify({
-            message: _.str.sprintf(
-                this.env._t(`Message posted on "%s"`),
-                owl.utils.escape(this.discuss.replyingToMessage.originThread.displayName)
-            ),
-            type: 'warning',
-        });
-        this.discuss.clearReplyingToMessage();
-    }
-
-    /**
-     * @private
      * @param {CustomEvent} ev
      * @param {Object} ev.detail
      * @param {string} ev.detail.tabId
@@ -266,26 +174,29 @@ class Discuss extends Component {
         if (this.discuss.activeMobileNavbarTabId === ev.detail.tabId) {
             return;
         }
-        this.discuss.clearReplyingToMessage();
         this.discuss.update({ activeMobileNavbarTabId: ev.detail.tabId });
-    }
-
-    /**
-     * @private
-     * @param {CustomEvent} ev
-     */
-    _onThreadRendered(ev) {
-        this.trigger('o-update-control-panel');
+        if (
+            this.discuss.activeMobileNavbarTabId === 'mailbox' &&
+            (!this.discuss.thread || this.discuss.thread.model !== 'mailbox')
+        ) {
+            this.discuss.update({ thread: link(this.messaging.inbox) });
+        }
+        if (this.discuss.activeMobileNavbarTabId !== 'mailbox') {
+            this.discuss.update({ thread: unlink() });
+        }
+        if (this.discuss.activeMobileNavbarTabId !== 'chat') {
+            this.discuss.update({ isAddingChat: false });
+        }
+        if (this.discuss.activeMobileNavbarTabId !== 'channel') {
+            this.discuss.update({ isAddingChannel: false });
+        }
     }
 
 }
 
 Object.assign(Discuss, {
-    components,
     props: {},
     template: 'mail.Discuss',
 });
 
-return Discuss;
-
-});
+registerMessagingComponent(Discuss);

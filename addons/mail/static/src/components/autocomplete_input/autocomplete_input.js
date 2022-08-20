@@ -1,9 +1,10 @@
-odoo.define('mail/static/src/components/autocomplete_input/autocomplete_input.js', function (require) {
-'use strict';
+/** @odoo-module **/
+
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 
-class AutocompleteInput extends Component {
+export class AutocompleteInput extends Component {
 
     mounted() {
         if (this.props.isFocusOnMount) {
@@ -11,6 +12,7 @@ class AutocompleteInput extends Component {
         }
 
         let args = {
+            autoFocus: true,
             select: (ev, ui) => this._onAutocompleteSelect(ev, ui),
             source: (req, res) => this._onAutocompleteSource(req, res),
             focus: ev => this._onAutocompleteFocus(ev),
@@ -21,7 +23,13 @@ class AutocompleteInput extends Component {
             args.classes = { 'ui-autocomplete': this.props.customClass };
         }
 
-        $(this.el).autocomplete(args);
+        const autoCompleteElem = $(this.el).autocomplete(args);
+        // Resize the autocomplete dropdown options to handle the long strings
+        // By setting the width of dropdown based on the width of the input element.
+        autoCompleteElem.data("ui-autocomplete")._resizeMenu = function () {
+            const ul = this.menu.element;
+            ul.outerWidth(this.element.outerWidth());
+        };
     }
 
     willUnmount() {
@@ -40,6 +48,9 @@ class AutocompleteInput extends Component {
      * @returns {boolean}
      */
     contains(node) {
+        if (!this.el) {
+            return false;
+        }
         if (this.el.contains(node)) {
             return true;
         }
@@ -58,13 +69,6 @@ class AutocompleteInput extends Component {
             return;
         }
         this.el.focus();
-    }
-
-    focusout() {
-        if (!this.el) {
-            return;
-        }
-        this.el.blur();
     }
 
     //--------------------------------------------------------------------------
@@ -89,7 +93,6 @@ class AutocompleteInput extends Component {
      * @param {Object} ui
      */
     _onAutocompleteSelect(ev, ui) {
-        ev.stopPropagation();
         if (this.props.select) {
             this.props.select(ev, ui);
         }
@@ -156,6 +159,4 @@ Object.assign(AutocompleteInput, {
     template: 'mail.AutocompleteInput',
 });
 
-return AutocompleteInput;
-
-});
+registerMessagingComponent(AutocompleteInput);

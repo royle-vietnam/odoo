@@ -8,6 +8,21 @@ from odoo.tools.misc import formatLang, format_date
 INV_LINES_PER_STUB = 9
 
 
+class AccountPaymentRegister(models.TransientModel):
+    _inherit = "account.payment.register"
+
+    @api.depends('payment_type', 'journal_id', 'partner_id')
+    def _compute_payment_method_line_id(self):
+        super()._compute_payment_method_line_id()
+        for record in self:
+            preferred = record.partner_id.with_company(record.company_id).property_payment_method_id
+            method_line = record.journal_id.outbound_payment_method_line_ids.filtered(
+                lambda l: l.payment_method_id == preferred
+            )
+            if record.payment_type == 'outbound' and method_line:
+                record.payment_method_line_id = method_line[0]
+
+
 class AccountPayment(models.Model):
     _inherit = "account.payment"
 
@@ -21,21 +36,22 @@ class AccountPayment(models.Model):
         string="Check Number",
         store=True,
         readonly=True,
+        copy=False,
         compute='_compute_check_number',
         inverse='_inverse_check_number',
         help="The selected journal is configured to print check numbers. If your pre-printed check paper already has numbers "
              "or if the current numbering is wrong, you can change it in the journal configuration page.",
     )
-    payment_method_id = fields.Many2one(index=True)
+    payment_method_line_id = fields.Many2one(index=True)
 
     @api.constrains('check_number', 'journal_id')
     def _constrains_check_number(self):
-        if not self:
+        payment_checks = self.filtered('check_number')
+        if not payment_checks:
             return
-        try:
-            self.mapped(lambda p: str(int(p.check_number)))
-        except ValueError:
-            raise ValidationError(_('Check numbers can only consist of digits'))
+        for payment_check in payment_checks:
+            if not payment_check.check_number.isdecimal():
+                raise ValidationError(_('Check numbers can only consist of digits'))
         self.flush()
         self.env.cr.execute("""
             SELECT payment.check_number, move.journal_id
@@ -48,8 +64,12 @@ class AccountPayment(models.Model):
                AND move.journal_id = other_move.journal_id
                AND payment.id != other_payment.id
                AND payment.id IN %(ids)s
+               AND move.state = 'posted'
+               AND other_move.state = 'posted'
+               AND payment.check_number IS NOT NULL
+               AND other_payment.check_number IS NOT NULL
         """, {
-            'ids': tuple(self.ids),
+            'ids': tuple(payment_checks.ids),
         })
         res = self.env.cr.dictfetchall()
         if res:
@@ -62,18 +82,18 @@ class AccountPayment(models.Model):
                 ) for r in res)
             ))
 
-    @api.depends('payment_method_id', 'currency_id', 'amount')
+    @api.depends('payment_method_line_id', 'currency_id', 'amount')
     def _compute_check_amount_in_words(self):
         for pay in self:
-            if pay.currency_id and pay.payment_method_id.code == 'check_printing':
+            if pay.currency_id:
                 pay.check_amount_in_words = pay.currency_id.amount_to_text(pay.amount)
             else:
                 pay.check_amount_in_words = False
 
-    @api.depends('journal_id')
+    @api.depends('journal_id', 'payment_method_code')
     def _compute_check_number(self):
         for pay in self:
-            if pay.journal_id.check_manual_sequencing:
+            if pay.journal_id.check_manual_sequencing and pay.payment_method_code == 'check_printing':
                 sequence = pay.journal_id.check_sequence_id
                 pay.check_number = sequence.get_next_char(sequence.number_next_actual)
             else:
@@ -82,29 +102,30 @@ class AccountPayment(models.Model):
     def _inverse_check_number(self):
         for payment in self:
             if payment.check_number:
-                sequence = payment.journal_id.check_sequence_id
+                sequence = payment.journal_id.check_sequence_id.sudo()
                 sequence.padding = len(payment.check_number)
 
     @api.depends('payment_type', 'journal_id', 'partner_id')
-    def _compute_payment_method_id(self):
-        super()._compute_payment_method_id()
+    def _compute_payment_method_line_id(self):
+        super()._compute_payment_method_line_id()
         for record in self:
             preferred = record.partner_id.with_company(record.company_id).property_payment_method_id
-            if record.payment_type == 'outbound' and preferred in record.journal_id.outbound_payment_method_ids:
-                record.payment_method_id = preferred
+            method_line = record.journal_id.outbound_payment_method_line_ids\
+                .filtered(lambda l: l.payment_method_id == preferred)
+            if record.payment_type == 'outbound' and method_line:
+                record.payment_method_line_id = method_line[0]
 
     def action_post(self):
-        res = super(AccountPayment, self).action_post()
         payment_method_check = self.env.ref('account_check_printing.account_payment_method_check')
         for payment in self.filtered(lambda p: p.payment_method_id == payment_method_check and p.check_manual_sequencing):
             sequence = payment.journal_id.check_sequence_id
             payment.check_number = sequence.next_by_id()
-        return res
+        return super(AccountPayment, self).action_post()
 
     def print_checks(self):
         """ Check that the recordset is valid, set the payments state to sent and call print_checks() """
         # Since this method can be called via a client_action_multi, we need to make sure the received records are what we expect
-        self = self.filtered(lambda r: r.payment_method_id.code == 'check_printing' and r.state != 'reconciled')
+        self = self.filtered(lambda r: r.payment_method_line_id.code == 'check_printing' and r.state != 'reconciled')
 
         if len(self) == 0:
             raise UserError(_("Payments to print as a checks must have 'Check' selected as payment method and "
@@ -120,7 +141,8 @@ class AccountPayment(models.Model):
                     FROM account_payment payment
                     JOIN account_move move ON movE.id = payment.move_id
                    WHERE journal_id = %(journal_id)s
-                ORDER BY check_number::INTEGER DESC
+                   AND payment.check_number IS NOT NULL
+                ORDER BY payment.check_number::INTEGER DESC
                    LIMIT 1
             """, {
                 'journal_id': self.journal_id.id,
@@ -201,26 +223,66 @@ class AccountPayment(models.Model):
         """ The stub is the summary of paid invoices. It may spill on several pages, in which case only the check on
             first page is valid. This function returns a list of stub lines per page.
         """
-        if len(self.move_id._get_reconciled_invoices()) == 0:
-            return None
+        self.ensure_one()
 
-        multi_stub = self.company_id.account_check_printing_multi_stub
+        def prepare_vals(invoice, partials):
+            number = ' - '.join([invoice.name, invoice.ref] if invoice.ref else [invoice.name])
 
-        invoices = self.move_id._get_reconciled_invoices().sorted(key=lambda r: r.invoice_date_due)
-        debits = invoices.filtered(lambda r: r.move_type == 'in_invoice')
-        credits = invoices.filtered(lambda r: r.move_type == 'in_refund')
+            if invoice.is_outbound():
+                invoice_sign = 1
+                partial_field = 'debit_amount_currency'
+            else:
+                invoice_sign = -1
+                partial_field = 'credit_amount_currency'
 
-        # Prepare the stub lines
-        if not credits:
-            stub_lines = [self._check_make_stub_line(inv) for inv in invoices]
-        else:
+            if invoice.currency_id.is_zero(invoice.amount_residual):
+                amount_residual_str = '-'
+            else:
+                amount_residual_str = formatLang(self.env, invoice_sign * invoice.amount_residual, currency_obj=invoice.currency_id)
+
+            return {
+                'due_date': format_date(self.env, invoice.invoice_date_due),
+                'number': number,
+                'amount_total': formatLang(self.env, invoice_sign * invoice.amount_total, currency_obj=invoice.currency_id),
+                'amount_residual': amount_residual_str,
+                'amount_paid': formatLang(self.env, invoice_sign * sum(partials.mapped(partial_field)), currency_obj=self.currency_id),
+                'currency': invoice.currency_id,
+            }
+
+        # Decode the reconciliation to keep only invoices.
+        term_lines = self.line_ids.filtered(lambda line: line.account_id.internal_type in ('receivable', 'payable'))
+        invoices = (term_lines.matched_debit_ids.debit_move_id.move_id + term_lines.matched_credit_ids.credit_move_id.move_id)\
+            .filtered(lambda x: x.is_outbound())
+        invoices = invoices.sorted(lambda x: x.invoice_date_due or x.date)
+
+        # Group partials by invoices.
+        invoice_map = {invoice: self.env['account.partial.reconcile'] for invoice in invoices}
+        for partial in term_lines.matched_debit_ids:
+            invoice = partial.debit_move_id.move_id
+            if invoice in invoice_map:
+                invoice_map[invoice] |= partial
+        for partial in term_lines.matched_credit_ids:
+            invoice = partial.credit_move_id.move_id
+            if invoice in invoice_map:
+                invoice_map[invoice] |= partial
+
+        # Prepare stub_lines.
+        if 'out_refund' in invoices.mapped('move_type'):
             stub_lines = [{'header': True, 'name': "Bills"}]
-            stub_lines += [self._check_make_stub_line(inv) for inv in debits]
+            stub_lines += [prepare_vals(invoice, partials)
+                           for invoice, partials in invoice_map.items()
+                           if invoice.move_type == 'in_invoice']
             stub_lines += [{'header': True, 'name': "Refunds"}]
-            stub_lines += [self._check_make_stub_line(inv) for inv in credits]
+            stub_lines += [prepare_vals(invoice, partials)
+                           for invoice, partials in invoice_map.items()
+                           if invoice.move_type == 'out_refund']
+        else:
+            stub_lines = [prepare_vals(invoice, partials)
+                          for invoice, partials in invoice_map.items()
+                          if invoice.move_type == 'in_invoice']
 
         # Crop the stub lines or split them on multiple pages
-        if not multi_stub:
+        if not self.company_id.account_check_printing_multi_stub:
             # If we need to crop the stub, leave place for an ellipsis line
             num_stub_lines = len(stub_lines) > INV_LINES_PER_STUB and INV_LINES_PER_STUB - 1 or INV_LINES_PER_STUB
             stub_pages = [stub_lines[:num_stub_lines]]
@@ -237,30 +299,3 @@ class AccountPayment(models.Model):
                 i += num_stub_lines
 
         return stub_pages
-
-    def _check_make_stub_line(self, invoice):
-        """ Return the dict used to display an invoice/refund in the stub
-        """
-        # Find the account.partial.reconcile which are common to the invoice and the payment
-        if invoice.move_type in ['in_invoice', 'out_refund']:
-            invoice_sign = 1
-            invoice_payment_reconcile = invoice.line_ids.mapped('matched_debit_ids').filtered(lambda r: r.debit_move_id in self.line_ids)
-        else:
-            invoice_sign = -1
-            invoice_payment_reconcile = invoice.line_ids.mapped('matched_credit_ids').filtered(lambda r: r.credit_move_id in self.line_ids)
-
-        if self.currency_id != self.journal_id.company_id.currency_id:
-            amount_paid = abs(sum(invoice_payment_reconcile.mapped('amount_currency')))
-        else:
-            amount_paid = abs(sum(invoice_payment_reconcile.mapped('amount')))
-
-        amount_residual = invoice_sign * invoice.amount_residual
-
-        return {
-            'due_date': format_date(self.env, invoice.invoice_date_due),
-            'number': invoice.ref and invoice.name + ' - ' + invoice.ref or invoice.name,
-            'amount_total': formatLang(self.env, invoice_sign * invoice.amount_total, currency_obj=invoice.currency_id),
-            'amount_residual': formatLang(self.env, amount_residual, currency_obj=invoice.currency_id) if amount_residual * 10**4 != 0 else '-',
-            'amount_paid': formatLang(self.env, invoice_sign * amount_paid, currency_obj=self.currency_id),
-            'currency': invoice.currency_id,
-        }

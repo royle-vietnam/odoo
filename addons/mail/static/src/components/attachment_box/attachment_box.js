@@ -1,18 +1,12 @@
-odoo.define('mail/static/src/components/attachment_box/attachment_box.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    AttachmentList: require('mail/static/src/components/attachment_list/attachment_list.js'),
-    DropZone: require('mail/static/src/components/drop_zone/drop_zone.js'),
-    FileUploader: require('mail/static/src/components/file_uploader/file_uploader.js'),
-};
-const useDragVisibleDropZone = require('mail/static/src/component_hooks/use_drag_visible_dropzone/use_drag_visible_dropzone.js');
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
+import { useDragVisibleDropZone } from '@mail/component_hooks/use_drag_visible_dropzone/use_drag_visible_dropzone';
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
 
 const { Component } = owl;
 const { useRef } = owl.hooks;
 
-class AttachmentBox extends Component {
+export class AttachmentBox extends Component {
 
     /**
      * @override
@@ -20,15 +14,6 @@ class AttachmentBox extends Component {
     constructor(...args) {
         super(...args);
         this.isDropZoneVisible = useDragVisibleDropZone();
-        useStore(props => {
-            const thread = this.env.models['mail.thread'].get(props.threadLocalId);
-            return {
-                attachments: thread
-                    ? thread.allAttachments.map(attachment => attachment.__state)
-                    : [],
-                thread: thread ? thread.__state : undefined,
-            };
-        });
         /**
          * Reference of the file uploader.
          * Useful to programmatically prompts the browser file uploader.
@@ -41,22 +26,10 @@ class AttachmentBox extends Component {
     //--------------------------------------------------------------------------
 
     /**
-     * Get an object which is passed to FileUploader component to be used when
-     * creating attachment.
-     *
-     * @returns {Object}
+     * @returns {mail.chatter|undefined}
      */
-    get newAttachmentExtraData() {
-        return {
-            originThread: [['link', this.thread]],
-        };
-    }
-
-    /**
-     * @returns {mail.thread|undefined}
-     */
-    get thread() {
-        return this.env.models['mail.thread'].get(this.props.threadLocalId);
+    get chatter() {
+        return this.messaging && this.messaging.models['mail.chatter'].get(this.props.chatterLocalId);
     }
 
     //--------------------------------------------------------------------------
@@ -106,13 +79,10 @@ class AttachmentBox extends Component {
 }
 
 Object.assign(AttachmentBox, {
-    components,
     props: {
-        threadLocalId: String,
+        chatterLocalId: String,
     },
     template: 'mail.AttachmentBox',
 });
 
-return AttachmentBox;
-
-});
+registerMessagingComponent(AttachmentBox);

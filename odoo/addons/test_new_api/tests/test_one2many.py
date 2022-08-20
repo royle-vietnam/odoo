@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from odoo.tests.common import TransactionCase
-from odoo.exceptions import ValidationError
+from odoo.exceptions import MissingError
+from odoo import Command
 
 
 class One2manyCase(TransactionCase):
@@ -89,7 +90,7 @@ class One2manyCase(TransactionCase):
     def test_rpcstyle_one_by_one(self):
         """Check lines created with RPC style and appended one by one."""
         for name in range(10):
-            self.multi.lines = [(0, 0, {"name": str(name)})]
+            self.multi.lines = [Command.create({"name": str(name)})]
         self.operations()
 
     def test_rpcstyle_one_by_one_on_new(self):
@@ -97,19 +98,19 @@ class One2manyCase(TransactionCase):
             "name": "What is up?"
         })
         for name in range(10):
-            self.multi.lines = [(0, 0, {"name": str(name)})]
+            self.multi.lines = [Command.create({"name": str(name)})]
         self.operations()
 
     def test_rpcstyle_single(self):
         """Check lines created with RPC style and added in one step"""
-        self.multi.lines = [(0, 0, {'name': str(name)}) for name in range(10)]
+        self.multi.lines = [Command.create({'name': str(name)}) for name in range(10)]
         self.operations()
 
     def test_rpcstyle_single_on_new(self):
         self.multi = self.env["test_new_api.multi"].new({
             "name": "What is up?"
         })
-        self.multi.lines = [(0, 0, {'name': str(name)}) for name in range(10)]
+        self.multi.lines = [Command.create({'name': str(name)}) for name in range(10)]
         self.operations()
 
     def test_many2one_integer(self):
@@ -233,10 +234,10 @@ class One2manyCase(TransactionCase):
         This is the behaviour of the form view."""
         parent = self.env['test_new_api.model_parent_m2o'].create({
             'name': 'parent',
-            'child_ids': [(0, 0, {'name': 'A'})],
+            'child_ids': [Command.create({'name': 'A'})],
         })
         a = parent.child_ids[0]
-        parent.write({'child_ids': [(4, a.id), (0, 0, {'name': 'B'})]})
+        parent.write({'child_ids': [Command.link(a.id), Command.create({'name': 'B'})]})
 
     def test_recomputation_ends(self):
         """ Regression test for neverending recomputation. """
@@ -247,3 +248,38 @@ class One2manyCase(TransactionCase):
         # delete parent, and check that recomputation ends
         parent.unlink()
         parent.flush()
+
+    def test_compute_stored_many2one_one2many(self):
+        container = self.env['test_new_api.compute.container'].create({'name': 'Foo'})
+        self.assertFalse(container.member_ids)
+        member = self.env['test_new_api.compute.member'].create({'name': 'Foo'})
+        # at this point, member.container_id must be computed for member to
+        # appear in container.member_ids
+        self.assertEqual(container.member_ids, member)
+
+    def test_reward_line_delete(self):
+        order = self.env['test_new_api.order'].create({
+            'line_ids': [
+                Command.create({'product': 'a'}),
+                Command.create({'product': 'b'}),
+                Command.create({'product': 'b', 'reward': True}),
+            ],
+        })
+        line0, line1, line2 = order.line_ids
+
+        # this is what the client sends to delete the 2nd line; it should not
+        # crash when deleting the 2nd line automatically deletes the 3rd line
+        order.write({
+            'line_ids': [
+                Command.link(line0.id),
+                Command.delete(line1.id),
+                Command.link(line2.id),
+            ],
+        })
+        self.assertEqual(order.line_ids, line0)
+
+        # but linking a missing line on purpose is an error
+        with self.assertRaises(MissingError):
+            order.write({
+                'line_ids': [Command.link(line0.id), Command.link(line1.id)],
+            })

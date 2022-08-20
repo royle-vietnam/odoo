@@ -7,6 +7,7 @@ var time = require('web.time');
 var core = require('web.core');
 var Dialog = require('web.Dialog');
 var dom = require('web.dom');
+var utils = require('web.utils');
 
 var _t = core._t;
 
@@ -35,6 +36,12 @@ publicWidget.registry.SurveyFormWidget = publicWidget.Widget.extend({
             self.options = self.$target.find('form').data();
             self.readonly = self.options.readonly;
             self.selectedAnswers = self.options.selectedAnswers;
+
+            // Add Survey cookie to retrieve the survey if you quit the page and restart the survey.
+            if (!utils.get_cookie('survey_' + self.options.surveyToken)) {
+                utils.set_cookie('survey_' + self.options.surveyToken, self.options.answerToken, 60*60*24);
+            }
+
             // Init fields
             if (!self.options.isStartScreen && !self.readonly) {
                 self._initTimer();
@@ -81,8 +88,13 @@ publicWidget.registry.SurveyFormWidget = publicWidget.Widget.extend({
      * @param {Event} event
      */
     _onKeyDown: function (event) {
+        var self = this;
+        var keyCode = event.keyCode;
+
         // If user is answering a text input, do not handle keydown
-        if (this.$("textarea").is(":focus") || this.$('input').is(':focus')) {
+        // CTRL+enter will force submission
+        if ((this.$("textarea").is(":focus") || this.$('input').is(':focus')) &&
+            (!event.ctrlKey || keyCode !== 13)) {
             return;
         }
         // If in session mode and question already answered, do not handle keydown
@@ -90,8 +102,6 @@ publicWidget.registry.SurveyFormWidget = publicWidget.Widget.extend({
             return;
         }
 
-        var self = this;
-        var keyCode = event.keyCode;
         var letter = String.fromCharCode(keyCode).toUpperCase();
 
         // Handle Start / Next / Submit
@@ -110,11 +120,7 @@ publicWidget.registry.SurveyFormWidget = publicWidget.Widget.extend({
                    && letter.match(/[a-z]/i)) {
             var $choiceInput = this.$(`input[data-selection-key=${letter}]`);
             if ($choiceInput.length === 1) {
-                if ($choiceInput.attr('type') === 'radio') {
-                    $choiceInput.prop("checked", true).trigger('change');
-                } else {
-                    $choiceInput.prop("checked", !$choiceInput.prop("checked")).trigger('change');
-                }
+                $choiceInput.prop("checked", !$choiceInput.prop("checked")).trigger('change');
 
                 // Avoid selection key to be typed into the textbox if 'other' is selected by key
                 event.preventDefault();
@@ -300,12 +306,9 @@ publicWidget.registry.SurveyFormWidget = publicWidget.Widget.extend({
         var nextPageEvent = false;
         if (notifications && notifications.length !== 0) {
             notifications.forEach(function (notification) {
-                if (notification.length >= 2) {
-                    var event = notification[1];
-                    if (event.type === 'next_question' ||
-                        event.type === 'end_session') {
-                        nextPageEvent = event;
-                    }
+                if (notification.type === 'next_question' ||
+                    notification.type === 'end_session') {
+                    nextPageEvent = notification;
                 }
             });
         }
@@ -318,7 +321,7 @@ publicWidget.registry.SurveyFormWidget = publicWidget.Widget.extend({
 
         if (nextPageEvent) {
             if (nextPageEvent.type === 'next_question') {
-                var serverDelayMS = moment.utc().valueOf() - moment.unix(nextPageEvent.question_start).utc().valueOf();
+                var serverDelayMS = moment.utc().valueOf() - moment.unix(nextPageEvent.payload.question_start).utc().valueOf();
                 if (serverDelayMS < 0) {
                     serverDelayMS = 0;
                 } else if (serverDelayMS > 1000) {
@@ -422,6 +425,7 @@ publicWidget.registry.SurveyFormWidget = publicWidget.Widget.extend({
         var selectorsToFadeout = ['.o_survey_form_content'];
         if (options.isFinish) {
             selectorsToFadeout.push('.breadcrumb', '.o_survey_timer');
+            utils.set_cookie('survey_' + self.options.surveyToken, '', -1);  // delete cookie
         }
         self.$(selectorsToFadeout.join(',')).fadeOut(this.fadeInOutDelay, function () {
             resolveFadeOut();
@@ -568,6 +572,11 @@ publicWidget.registry.SurveyFormWidget = publicWidget.Widget.extend({
                         }
                     }
                     break;
+                case 'text_box':
+                    if (questionRequired && !$input.val()) {
+                        errors[questionId] = constrErrorMsg;
+                    }
+                    break;
                 case 'numerical_box':
                     if (questionRequired && !data[questionId]) {
                         errors[questionId] = constrErrorMsg;
@@ -585,7 +594,8 @@ publicWidget.registry.SurveyFormWidget = publicWidget.Widget.extend({
                     if (questionRequired && !data[questionId]) {
                         errors[questionId] = constrErrorMsg;
                     } else if (data[questionId]) {
-                        var momentDate = moment($input.val());
+                        var datetimepickerFormat = $input.data('questionType') === 'datetime' ? time.getLangDatetimeFormat() : time.getLangDateFormat();
+                        var momentDate = moment($input.val(), datetimepickerFormat);
                         if (!momentDate.isValid()) {
                             errors[questionId] = validationDateMsg;
                         } else {
@@ -848,9 +858,19 @@ publicWidget.registry.SurveyFormWidget = publicWidget.Widget.extend({
      * @private
      */
     _initSessionManagement: function () {
+        var self = this;
         if (this.options.surveyToken && this.options.sessionInProgress) {
             this.call('bus_service', 'addChannel', this.options.surveyToken);
             this.call('bus_service', 'startPolling');
+
+            if (!this._checkIsMasterTab()) {
+                this.shouldReloadMasterTab = true;
+                this.masterTabCheckInterval = setInterval(function() {
+                     if (self._checkIsMasterTab()) {
+                        clearInterval(self.masterTabCheckInterval);
+                     }
+                }, 2000);
+            }
 
             this.call('bus_service', 'onNotification', this, this._onNotification);
         }
@@ -866,6 +886,7 @@ publicWidget.registry.SurveyFormWidget = publicWidget.Widget.extend({
         var questionTimeLimitReached = $timerData.data('questionTimeLimitReached');
         var timeLimitMinutes = $timerData.data('timeLimitMinutes');
         var hasAnswered = $timerData.data('hasAnswered');
+        const serverTime = $timerData.data('serverTime');
 
         if (!questionTimeLimitReached && !hasAnswered && timeLimitMinutes) {
             var timer = $timerData.data('timer');
@@ -874,6 +895,7 @@ publicWidget.registry.SurveyFormWidget = publicWidget.Widget.extend({
             });
             this.$('.o_survey_timer_container').append($timer);
             this.surveyTimerWidget = new publicWidget.registry.SurveyTimerWidget(this, {
+                'serverTime': serverTime,
                 'timer': timer,
                 'timeLimitMinutes': timeLimitMinutes
             });
@@ -900,7 +922,7 @@ publicWidget.registry.SurveyFormWidget = publicWidget.Widget.extend({
 
         var minDate = minDateData
             ? this._formatDateTime(minDateData, datetimepickerFormat)
-            : moment({ y: 1 });
+            : moment({ y: 1000 });
 
         var maxDate = maxDateData
             ? this._formatDateTime(maxDateData, datetimepickerFormat)
@@ -971,6 +993,29 @@ publicWidget.registry.SurveyFormWidget = publicWidget.Widget.extend({
         if ($firstTextInput.length > 0) {
             $firstTextInput.focus();
         }
+    },
+
+    /**
+    * This method check if the current tab is the master tab at the bus level.
+    * If not, the survey could not receive next question notification anymore from session manager.
+    * We then ask the participant to close all other tabs on the same hostname before letting them continue.
+    *
+    * @private
+    */
+    _checkIsMasterTab: function () {
+        var isMasterTab = this.call('bus_service', 'isMasterTab');
+        var $errorModal = this.$('#MasterTabErrorModal');
+        if (isMasterTab) {
+            // Force reload the page when survey is ready to be followed, to force restart long polling
+            if (this.shouldReloadMasterTab) {
+                window.location.reload();
+            }
+           return true;
+        } else if (!$errorModal.modal._isShown){
+            $errorModal.find('.text-danger').text(window.location.hostname);
+            $errorModal.modal('show');
+        }
+        return false;
     },
 
     // CONDITIONAL QUESTIONS MANAGEMENT TOOLS

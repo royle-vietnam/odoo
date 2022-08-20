@@ -1,19 +1,20 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-import base64
-import json
-import logging
-import werkzeug
-import math
-
 from ast import literal_eval
 from collections import defaultdict
 
+import base64
+import json
+import logging
+import math
+import werkzeug
+
 from odoo import http, tools, _
-from odoo.addons.http_routing.models.ir_http import slug
-from odoo.addons.website_profile.controllers.main import WebsiteProfile
+from odoo.addons.http_routing.models.ir_http import slug, unslug
+from odoo.addons.website.controllers.main import QueryURL
 from odoo.addons.website.models.ir_http import sitemap_qs2dom
+from odoo.addons.website_profile.controllers.main import WebsiteProfile
 from odoo.exceptions import AccessError, UserError
 from odoo.http import request
 from odoo.osv import expression
@@ -58,9 +59,9 @@ class WebsiteSlides(WebsiteProfile):
         if request.env.user._is_public() or not slide.website_published or not slide.channel_id.is_member:
             viewed_slides = request.session.setdefault('viewed_slides', list())
             if slide.id not in viewed_slides:
-                slide.sudo().public_views += 1
-                viewed_slides.append(slide.id)
-                request.session['viewed_slides'] = viewed_slides
+                if tools.sql.increment_field_skiplock(slide, 'public_views'):
+                    viewed_slides.append(slide.id)
+                    request.session['viewed_slides'] = viewed_slides
         else:
             slide.action_set_viewed(quiz_attempts_inc=quiz_attempts_inc)
         return True
@@ -68,28 +69,25 @@ class WebsiteSlides(WebsiteProfile):
     def _set_completed_slide(self, slide):
         # quiz use their specific mechanism to be marked as done
         if slide.slide_type == 'quiz' or slide.question_ids:
-            raise werkzeug.exceptions.Forbidden(_("Slide with questions must be marked as done when submitting all good answers "))
+            raise UserError(_("Slide with questions must be marked as done when submitting all good answers "))
         if slide.website_published and slide.channel_id.is_member:
             slide.action_set_completed()
         return True
 
     def _get_slide_detail(self, slide):
         base_domain = self._get_channel_slides_base_domain(slide.channel_id)
-        if slide.channel_id.channel_type == 'documentation':
-            related_domain = expression.AND([base_domain, [('category_id', '=', slide.category_id.id)]])
+        category_data = slide.channel_id._get_categorized_slides(
+            base_domain,
+            order=request.env['slide.slide']._order_by_strategy['sequence'],
+            force_void=True
+        )
 
+        if slide.channel_id.channel_type == 'documentation':
             most_viewed_slides = request.env['slide.slide'].search(base_domain, limit=self._slides_per_aside, order='total_views desc')
+            related_domain = expression.AND([base_domain, [('category_id', '=', slide.category_id.id)]])
             related_slides = request.env['slide.slide'].search(related_domain, limit=self._slides_per_aside)
-            category_data = []
-            uncategorized_slides = request.env['slide.slide']
         else:
             most_viewed_slides, related_slides = request.env['slide.slide'], request.env['slide.slide']
-            category_data = slide.channel_id._get_categorized_slides(
-                base_domain, order=request.env['slide.slide']._order_by_strategy['sequence'],
-                force_void=True)
-            # temporarily kept for fullscreen, to remove asap
-            uncategorized_domain = expression.AND([base_domain, [('channel_id', '=', slide.channel_id.id), ('category_id', '=', False)]])
-            uncategorized_slides = request.env['slide.slide'].search(uncategorized_domain)
 
         channel_slides_ids = slide.channel_id.slide_content_ids.ids
         slide_index = channel_slides_ids.index(slide.id)
@@ -104,7 +102,6 @@ class WebsiteSlides(WebsiteProfile):
             'related_slides': related_slides,
             'previous_slide': previous_slide,
             'next_slide': next_slide,
-            'uncategorized_slides': uncategorized_slides,
             'category_data': category_data,
             # user
             'user': request.env.user,
@@ -134,7 +131,7 @@ class WebsiteSlides(WebsiteProfile):
                     'id': answer.id,
                     'text_value': answer.text_value,
                     'is_correct': answer.is_correct if slide_completed or request.website.is_publisher() else None,
-                    'comment': answer.comment if request.website.is_publisher else None
+                    'comment': answer.comment if request.website.is_publisher() else None
                 } for answer in question.sudo().answer_ids],
             } for question in slide.question_ids]
         }
@@ -201,48 +198,6 @@ class WebsiteSlides(WebsiteProfile):
 
         return channel_progress
 
-    def _extract_channel_tag_search(self, **post):
-        tags = request.env['slide.channel.tag']
-        if post.get('tags'):
-            try:
-                tag_ids = literal_eval(post['tags'])
-            except:
-                pass
-            else:
-                # perform a search to filter on existing / valid tags implicitely
-                tags = request.env['slide.channel.tag'].search([('id', 'in', tag_ids)])
-        return tags
-
-    def _build_channel_domain(self, base_domain, slide_type=None, my=False, **post):
-        search_term = post.get('search')
-        tags = self._extract_channel_tag_search(**post)
-
-        domain = base_domain
-        if search_term:
-            domain = expression.AND([
-                domain,
-                ['|', ('name', 'ilike', search_term), ('description', 'ilike', search_term)]])
-
-        if tags:
-            # Group by group_id
-            grouped_tags = defaultdict(list)
-            for tag in tags:
-                grouped_tags[tag.group_id].append(tag)
-
-            # OR inside a group, AND between groups.
-            group_domain_list = []
-            for group in grouped_tags:
-                group_domain_list.append([('tag_ids', 'in', [tag.id for tag in grouped_tags[group]])])
-
-            domain = expression.AND([domain, *group_domain_list])
-
-        if slide_type and 'nbr_%s' % slide_type in request.env['slide.channel']:
-            domain = expression.AND([domain, [('nbr_%s' % slide_type, '>', 0)]])
-
-        if my:
-            domain = expression.AND([domain, [('partner_ids', '=', request.env.user.partner_id.id)]])
-        return domain
-
     def _channel_remove_session_answers(self, channel, slide=False):
         """ Will remove the answers saved in the session for a specific channel / slide. """
 
@@ -262,31 +217,64 @@ class WebsiteSlides(WebsiteProfile):
     # TAG UTILITIES
     # --------------------------------------------------
 
+    def _slugify_tags(self, tag_ids, toggle_tag_id=None):
+        """ Prepares a comma separated slugified tags for the sake of readable
+        URLs.
+
+        :param toggle_tag_id: add the tag being clicked (current_tag) to the already
+          selected tags (tag_ids) as well as in URL; if tag is already selected
+          by the user it is removed from the selected tags (and so from the URL);
+        """
+        tag_ids = list(tag_ids)  # required to avoid using the same list
+        if toggle_tag_id and toggle_tag_id in tag_ids:
+            tag_ids.remove(toggle_tag_id)
+        elif toggle_tag_id:
+            tag_ids.append(toggle_tag_id)
+        return ','.join(slug(tag) for tag in request.env['slide.channel.tag'].browse(tag_ids))
+
+    def _channel_search_tags_ids(self, search_tags):
+        """ Input: %5B4%5D """
+        ChannelTag = request.env['slide.channel.tag']
+        try:
+            tag_ids = literal_eval(search_tags or '')
+        except Exception:
+            return ChannelTag
+        # perform a search to filter on existing / valid tags implicitly
+        return ChannelTag.search([('id', 'in', tag_ids)]) if tag_ids else ChannelTag
+
+    def _channel_search_tags_slug(self, search_tags):
+        """ Input: hotels-1,adventure-2 """
+        ChannelTag = request.env['slide.channel.tag']
+        try:
+            tag_ids = list(filter(None, [unslug(tag)[1] for tag in (search_tags or '').split(',')]))
+        except Exception:
+            return ChannelTag
+        # perform a search to filter on existing / valid tags implicitly
+        return ChannelTag.search([('id', 'in', tag_ids)]) if tag_ids else ChannelTag
+
     def _create_or_get_channel_tag(self, tag_id, group_id):
         if not tag_id:
             return request.env['slide.channel.tag']
         # handle creation of new channel tag
         if tag_id[0] == 0:
-            group_id = self._create_or_get_channel_tag_group(group_id)
+            group_id = self._create_or_get_channel_tag_group_id(group_id)
             if not group_id:
                 return {'error': _('Missing "Tag Group" for creating a new "Tag".')}
 
-            new_tag = request.env['slide.channel.tag'].create({
+            return request.env['slide.channel.tag'].create({
                 'name': tag_id[1]['name'],
                 'group_id': group_id,
             })
-            return new_tag
         return request.env['slide.channel.tag'].browse(tag_id[0])
 
-    def _create_or_get_channel_tag_group(self, group_id):
+    def _create_or_get_channel_tag_group_id(self, group_id):
         if not group_id:
             return False
         # handle creation of new channel tag group
         if group_id[0] == 0:
-            tag_group = request.env['slide.channel.tag.group'].create({
+            return request.env['slide.channel.tag.group'].create({
                 'name': group_id[1]['name'],
-            })
-            group_id = tag_group.id
+            }).id
         # use existing channel tag group
         return group_id[0]
 
@@ -336,50 +324,79 @@ class WebsiteSlides(WebsiteProfile):
             'top3_users': self._get_top3_users(),
             'challenges': challenges,
             'challenges_done': challenges_done,
-            'search_tags': request.env['slide.channel.tag']
+            'search_tags': request.env['slide.channel.tag'],
+            'slide_query_url': QueryURL('/slides/all', ['tag']),
+            'slugify_tags': self._slugify_tags,
         })
 
         return request.render('website_slides.courses_home', values)
 
-    @http.route('/slides/all', type='http', auth="public", website=True, sitemap=True)
-    def slides_channel_all(self, slide_type=None, my=False, **post):
+    @http.route(['/slides/all', '/slides/all/tag/<string:slug_tags>'], type='http', auth="public", website=True, sitemap=True)
+    def slides_channel_all(self, slide_type=None, slug_tags=None, my=False, **post):
         """ Home page displaying a list of courses displayed according to some
         criterion and search terms.
 
           :param string slide_type: if provided, filter the course to contain at
            least one slide of type 'slide_type'. Used notably to display courses
            with certifications;
+          :param string slug_tags: if provided, filter the slide.channels having
+            the tag(s) (in comma separated slugified form);
           :param bool my: if provided, filter the slide.channels for which the
            current user is a member of
           :param dict post: post parameters, including
 
            * ``search``: filter on course description / name;
-           * ``channel_tag_id``: filter on courses containing this tag;
-           * ``channel_tag_group_id_<id>``: filter on courses containing this tag
-             in the tag group given by <id> (used in navigation based on tag group);
         """
-        domain = request.website.website_domain()
-        domain = self._build_channel_domain(domain, slide_type=slide_type, my=my, **post)
 
+        if slug_tags and request.httprequest.method == 'GET':
+            # Redirect `tag-1,tag-2` to `tag-1` to disallow multi tags
+            # in GET request for proper bot indexation;
+            # if the search term is available, do not remove any existing
+            # tags because it is user who provided search term with GET
+            # request and so clearly it's not SEO bot.
+            tag_list = slug_tags.split(',')
+            if len(tag_list) > 1 and not post.get('search'):
+                url = QueryURL('/slides/all', ['tag'], tag=tag_list[0], my=my, slide_type=slide_type)()
+                return request.redirect(url, code=302)
+
+        options = {
+            'displayDescription': True,
+            'displayDetail': False,
+            'displayExtraDetail': False,
+            'displayExtraLink': False,
+            'displayImage': False,
+            'allowFuzzy': not post.get('noFuzzy'),
+            'my': my,
+            'tag': slug_tags or post.get('tag'),
+            'slide_type': slide_type,
+        }
+        search = post.get('search')
         order = self._channel_order_by_criterion.get(post.get('sorting'))
-
-        channels = request.env['slide.channel'].search(domain, order=order)
-        # channels_layouted = list(itertools.zip_longest(*[iter(channels)] * 4, fillvalue=None))
+        _, details, fuzzy_search_term = request.website._search_with_fuzzy("slide_channels_only", search,
+            limit=1000, order=order, options=options)
+        channels = details[0].get('results', request.env['slide.channel'])
 
         tag_groups = request.env['slide.channel.tag.group'].search(
             ['&', ('tag_ids', '!=', False), ('website_published', '=', True)])
-        search_tags = self._extract_channel_tag_search(**post)
+        if slug_tags:
+            search_tags = self._channel_search_tags_slug(slug_tags)
+        elif post.get('tags'):
+            search_tags = self._channel_search_tags_ids(post['tags'])
+        else:
+            search_tags = request.env['slide.channel.tag']
 
         values = self._prepare_user_values(**post)
         values.update({
             'channels': channels,
             'tag_groups': tag_groups,
-            'search_term': post.get('search'),
+            'search_term': fuzzy_search_term or search,
+            'original_search': fuzzy_search_term and search,
             'search_slide_type': slide_type,
             'search_my': my,
             'search_tags': search_tags,
-            'search_channel_tag_id': post.get('channel_tag_id'),
             'top3_users': self._get_top3_users(),
+            'slugify_tags': self._slugify_tags,
+            'slide_query_url': QueryURL('/slides/all', ['tag']),
         })
 
         return request.render('website_slides.courses_all', values)
@@ -390,8 +407,7 @@ class WebsiteSlides(WebsiteProfile):
     def _get_top3_users(self):
         return request.env['res.users'].sudo().search_read([
             ('karma', '>', 0),
-            ('website_published', '=', True),
-            ('image_1920', '!=', False)], ['id'], limit=3, order='karma desc')
+            ('website_published', '=', True)], ['id'], limit=3, order='karma desc')
 
     @http.route([
         '/slides/<model("slide.channel"):channel>',
@@ -405,9 +421,6 @@ class WebsiteSlides(WebsiteProfile):
         """
         Will return all necessary data to display the requested slide_channel along with a possible category.
         """
-        if not channel.can_access_from_current_website():
-            raise werkzeug.exceptions.NotFound()
-
         domain = self._get_channel_slides_base_domain(channel)
 
         pager_url = "/slides/%s" % (channel.id)
@@ -473,49 +486,14 @@ class WebsiteSlides(WebsiteProfile):
             'slide_types': slide_types,
             'sorting': actual_sorting,
             'search': search,
-            # chatter
-            'rating_avg': channel.rating_avg,
-            'rating_count': channel.rating_count,
             # display data
             'user': request.env.user,
             'pager': pager,
             'is_public_user': request.website.is_public_user(),
             # display upload modal
             'enable_slide_upload': 'enable_slide_upload' in kw,
+            ** self._slide_channel_prepare_review_values(channel),
         }
-        if not request.env.user._is_public():
-            last_message = request.env['mail.message'].search([
-                ('model', '=', channel._name),
-                ('res_id', '=', channel.id),
-                ('author_id', '=', request.env.user.partner_id.id),
-                ('message_type', '=', 'comment'),
-                ('is_internal', '=', False)
-            ], order='write_date DESC', limit=1)
-            if last_message:
-                last_message_values = last_message.read(['body', 'rating_value', 'attachment_ids'])[0]
-                last_message_attachment_ids = last_message_values.pop('attachment_ids', [])
-                if last_message_attachment_ids:
-                    # use sudo as portal user cannot read access_token, necessary for updating attachments
-                    # through frontend chatter -> access is already granted and limited to current user message
-                    last_message_attachment_ids = json.dumps(
-                        request.env['ir.attachment'].sudo().browse(last_message_attachment_ids).read(
-                            ['id', 'name', 'mimetype', 'file_size', 'access_token']
-                        )
-                    )
-            else:
-                last_message_values = {}
-                last_message_attachment_ids = []
-            values.update({
-                'last_message_id': last_message_values.get('id'),
-                'last_message': tools.html2plaintext(last_message_values.get('body', '')),
-                'last_rating_value': last_message_values.get('rating_value'),
-                'last_message_attachment_ids': last_message_attachment_ids,
-            })
-            if channel.can_review:
-                values.update({
-                    'message_post_hash': channel._sign_token(request.env.user.partner_id.id),
-                    'message_post_pid': request.env.user.partner_id.id,
-                })
 
         # fetch slides and handle uncategorized slides; done as sudo because we want to display all
         # of them but unreachable ones won't be clickable (+ slide controller will crash anyway)
@@ -560,7 +538,7 @@ class WebsiteSlides(WebsiteProfile):
     @http.route('/slides/channel/add', type='http', auth='user', methods=['POST'], website=True)
     def slide_channel_create(self, *args, **kw):
         channel = request.env['slide.channel'].create(self._slide_channel_prepare_values(**kw))
-        return werkzeug.utils.redirect("/slides/%s" % (slug(channel)))
+        return request.redirect("/slides/%s" % (slug(channel)))
 
     def _slide_channel_prepare_values(self, **kw):
         # `tag_ids` is a string representing a list of int with coma. i.e.: '2,5,7'
@@ -578,13 +556,57 @@ class WebsiteSlides(WebsiteProfile):
             'allow_comment': bool(kw.get('allow_comment')),
         }
 
+    def _slide_channel_prepare_review_values(self, channel):
+        values = {
+            'rating_avg': channel.rating_avg,
+            'rating_count': channel.rating_count,
+        }
+
+        if not request.env.user._is_public():
+            last_message = request.env['mail.message'].search([
+                ('model', '=', channel._name),
+                ('res_id', '=', channel.id),
+                ('author_id', '=', request.env.user.partner_id.id),
+                ('message_type', '=', 'comment'),
+                ('is_internal', '=', False)
+            ], order='write_date DESC', limit=1)
+
+            if last_message:
+                last_message_values = last_message.read(['body', 'rating_value', 'attachment_ids'])[0]
+                last_message_attachment_ids = last_message_values.pop('attachment_ids', [])
+                if last_message_attachment_ids:
+                    # use sudo as portal user cannot read access_token, necessary for updating attachments
+                    # through frontend chatter -> access is already granted and limited to current user message
+                    last_message_attachment_ids = json.dumps(
+                        request.env['ir.attachment'].sudo().browse(last_message_attachment_ids).read(
+                            ['id', 'name', 'mimetype', 'file_size', 'access_token']
+                        )
+                    )
+            else:
+                last_message_values = {}
+                last_message_attachment_ids = []
+
+            values.update({
+                'last_message_id': last_message_values.get('id'),
+                'last_message': tools.html2plaintext(last_message_values.get('body', '')),
+                'last_rating_value': last_message_values.get('rating_value'),
+                'last_message_attachment_ids': last_message_attachment_ids,
+            })
+            if channel.can_review:
+                values.update({
+                    'message_post_hash': channel._sign_token(request.env.user.partner_id.id),
+                    'message_post_pid': request.env.user.partner_id.id,
+                })
+
+        return values
+
     @http.route('/slides/channel/enroll', type='http', auth='public', website=True)
     def slide_channel_join_http(self, channel_id):
         # TDE FIXME: why 2 routes ?
         if not request.website.is_public_user():
             channel = request.env['slide.channel'].browse(int(channel_id))
             channel.action_add_member()
-        return werkzeug.utils.redirect("/slides/%s" % (slug(channel)))
+        return request.redirect("/slides/%s" % (slug(channel)))
 
     @http.route(['/slides/channel/join'], type='json', auth='public', website=True)
     def slide_channel_join(self, channel_id):
@@ -670,6 +692,9 @@ class WebsiteSlides(WebsiteProfile):
     def slide_view(self, slide, **kwargs):
         if not slide.channel_id.can_access_from_current_website() or not slide.active:
             raise werkzeug.exceptions.NotFound()
+        # redirection to channel's homepage for category slides
+        if slide.is_category:
+            return request.redirect(slide.channel_id.website_url)
         self._set_viewed_slide(slide)
 
         values = self._get_slide_detail(slide)
@@ -690,12 +715,13 @@ class WebsiteSlides(WebsiteProfile):
 
         values['channel'] = slide.channel_id
         values = self._prepare_additional_channel_values(values, **kwargs)
-        values.pop('channel', None)
-
         values['signup_allowed'] = request.env['res.users'].sudo()._get_signup_invitation_scope() == 'b2c'
 
         if kwargs.get('fullscreen') == '1':
+            values.update(self._slide_channel_prepare_review_values(slide.channel_id))
             return request.render("website_slides.slide_fullscreen", values)
+
+        values.pop('channel', None)
         return request.render("website_slides.slide_main", values)
 
     @http.route('''/slides/slide/<model("slide.slide"):slide>/pdf_content''',
@@ -755,7 +781,7 @@ class WebsiteSlides(WebsiteProfile):
         next_slide = None
         if next_slide_id:
             next_slide = self._fetch_slide(next_slide_id).get('slide', None)
-        return werkzeug.utils.redirect("/slides/slide/%s" % (slug(next_slide) if next_slide else slug(slide)))
+        return request.redirect("/slides/slide/%s" % (slug(next_slide) if next_slide else slug(slide)))
 
     @http.route('/slides/slide/set_completed', website=True, type="json", auth="public")
     def slide_set_completed(self, slide_id):
@@ -991,7 +1017,7 @@ class WebsiteSlides(WebsiteProfile):
             'can_create': can_create,
         }
 
-    @http.route('/slides/category/add', type="http", website=True, auth="user")
+    @http.route('/slides/category/add', type="http", website=True, auth="user", methods=['POST'])
     def slide_category_add(self, channel_id, name):
         """ Adds a category to the specified channel. Slide is added at the end
         of slide list based on sequence. """
@@ -1001,7 +1027,7 @@ class WebsiteSlides(WebsiteProfile):
 
         request.env['slide.slide'].create(self._get_new_slide_category_values(channel, name))
 
-        return werkzeug.utils.redirect("/slides/%s" % (slug(channel)))
+        return request.redirect("/slides/%s" % (slug(channel)))
 
     # --------------------------------------------------
     # SLIDE.UPLOAD
@@ -1114,13 +1140,13 @@ class WebsiteSlides(WebsiteProfile):
         # slide, the error will be the website.403 page instead of the one of the website_slides.embed_slide.
         # Do not forget the rendering here will be displayed in the embedded iframe
 
-        # determine if it is embedded from external web page
-        referrer_url = request.httprequest.headers.get('Referer', '')
-        base_url = request.env['ir.config_parameter'].sudo().get_param('web.base.url')
-        is_embedded = referrer_url and not bool(base_url in referrer_url) or False
         # try accessing slide, and display to corresponding template
         try:
             slide = request.env['slide.slide'].browse(slide_id)
+            # determine if it is embedded from external web page
+            referrer_url = request.httprequest.headers.get('Referer', '')
+            base_url = slide.get_base_url()
+            is_embedded = referrer_url and not bool(base_url in referrer_url) or False
             if is_embedded:
                 request.env['slide.embed'].sudo()._add_embed_url(slide.id, referrer_url)
             values = self._get_slide_detail(slide)

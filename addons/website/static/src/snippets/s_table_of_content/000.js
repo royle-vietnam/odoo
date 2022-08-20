@@ -39,7 +39,10 @@ const TableOfContent = publicWidget.Widget.extend({
         const isHorizontalNavbar = this.$target.hasClass('s_table_of_content_horizontal_navbar');
         this.$target.css('top', isHorizontalNavbar ? position : '');
         this.$target.find('.s_table_of_content_navbar').css('top', isHorizontalNavbar ? '' : position + 20);
-        $().getScrollingElement().scrollspy({target: '.s_table_of_content_navbar', method: 'offset', offset: position + 100});
+        const $mainNavBar = $('#oe_main_menu_navbar');
+        position += $mainNavBar.length ? $mainNavBar.outerHeight() : 0;
+        position += isHorizontalNavbar ? this.$target.outerHeight() : 0;
+        $().getScrollingElement().scrollspy({target: '.s_table_of_content_navbar', method: 'offset', offset: position + 100, alwaysKeepFirstActive: true});
     },
 });
 

@@ -4,6 +4,7 @@
 from odoo import api, models, _
 from odoo.tools import config
 from odoo.tools import format_datetime
+from markupsafe import Markup
 
 
 rec = 0
@@ -89,10 +90,10 @@ class MrpStockReport(models.TransientModel):
             res_model = 'stock.picking'
             res_id = picking_id.id
             ref = picking_id.name
-        elif move_line.move_id.inventory_id:
-            res_model = 'stock.inventory'
-            res_id = move_line.move_id.inventory_id.id
-            ref = 'Inv. Adj.: ' + move_line.move_id.inventory_id.name
+        elif move_line.move_id.is_inventory:
+            res_model = 'stock.move'
+            res_id = move_line.move_id.id
+            ref = 'Inventory Adjustment'
         elif move_line.move_id.scrapped and move_line.move_id.scrap_ids:
             res_model = 'stock.scrap'
             res_id = move_line.move_id.scrap_ids[0].id
@@ -200,7 +201,8 @@ class MrpStockReport(models.TransientModel):
             lines.append(self._final_vals_to_lines(final_vals, line['level'])[0])
         return lines
 
-    def get_pdf(self, line_data=[]):
+    def get_pdf(self, line_data=None):
+        line_data = [] if line_data is None else line_data
         lines = self.with_context(print_mode=True).get_pdf_lines(line_data)
         base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
         rcontext = {
@@ -211,6 +213,8 @@ class MrpStockReport(models.TransientModel):
         context = dict(self.env.context)
         if not config['test_enable']:
             context['commit_assetsbundle'] = True
+        if context.get('active_id') and context.get('active_model'):
+            rcontext['reference'] = self.env[context.get('active_model')].browse(int(context.get('active_id'))).display_name
 
         body = self.env['ir.ui.view'].with_context(context)._render_template(
             "stock.report_stock_inventory_print",
@@ -218,13 +222,13 @@ class MrpStockReport(models.TransientModel):
         )
 
         header = self.env['ir.actions.report']._render_template("web.internal_layout", values=rcontext)
-        header = self.env['ir.actions.report']._render_template("web.minimal_layout", values=dict(rcontext, subst=True, body=header))
+        header = self.env['ir.actions.report']._render_template("web.minimal_layout", values=dict(rcontext, subst=True, body=Markup(header.decode())))
 
         return self.env['ir.actions.report']._run_wkhtmltopdf(
             [body],
-            header=header,
+            header=header.decode(),
             landscape=True,
-            specific_paperformat_args={'data-report-margin-top': 10, 'data-report-header-spacing': 10}
+            specific_paperformat_args={'data-report-margin-top': 17, 'data-report-header-spacing': 12}
         )
 
     def _get_html(self):

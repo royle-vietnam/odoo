@@ -93,14 +93,14 @@ def check_git_branch():
                 local_branch = subprocess.check_output(git + ['symbolic-ref', '-q', '--short', 'HEAD']).decode('utf-8').rstrip()
 
                 if db_branch != local_branch:
-                    subprocess.check_call(["sudo", "mount", "-o", "remount,rw", "/"])
+                    subprocess.call(["sudo", "mount", "-o", "remount,rw", "/"])
                     subprocess.check_call(["rm", "-rf", "/home/pi/odoo/addons/hw_drivers/iot_handlers/drivers/*"])
                     subprocess.check_call(["rm", "-rf", "/home/pi/odoo/addons/hw_drivers/iot_handlers/interfaces/*"])
                     subprocess.check_call(git + ['branch', '-m', db_branch])
                     subprocess.check_call(git + ['remote', 'set-branches', 'origin', db_branch])
                     os.system('/home/pi/odoo/addons/point_of_sale/tools/posbox/configuration/posbox_update.sh')
-                    subprocess.check_call(["sudo", "mount", "-o", "remount,ro", "/"])
-                    subprocess.check_call(["sudo", "mount", "-o", "remount,rw", "/root_bypass_ramdisks/etc/cups"])
+                    subprocess.call(["sudo", "mount", "-o", "remount,ro", "/"])
+                    subprocess.call(["sudo", "mount", "-o", "remount,rw", "/root_bypass_ramdisks/etc/cups"])
 
         except Exception as e:
             _logger.error('Could not reach configured server')
@@ -134,19 +134,37 @@ def get_img_name():
     return 'iotboxv%s_%s.zip' % (major, minor)
 
 def get_ip():
-    try:
-        return netifaces.ifaddresses('eth0')[netifaces.AF_INET][0]['addr']
-    except:
-        return netifaces.ifaddresses('wlan0')[netifaces.AF_INET][0]['addr']
+    while True:
+        try:
+            return netifaces.ifaddresses('eth0')[netifaces.AF_INET][0]['addr']
+        except KeyError:
+            pass
+
+        try:
+            return netifaces.ifaddresses('wlan0')[netifaces.AF_INET][0]['addr']
+        except KeyError:
+            pass
+
+        _logger.warning("Couldn't get IP, sleeping and retrying.")
+        time.sleep(5)
 
 def get_mac_address():
-    try:
-        return netifaces.ifaddresses('eth0')[netifaces.AF_LINK][0]['addr']
-    except:
-        return netifaces.ifaddresses('wlan0')[netifaces.AF_LINK][0]['addr']
+    while True:
+        try:
+            return netifaces.ifaddresses('eth0')[netifaces.AF_LINK][0]['addr']
+        except KeyError:
+            pass
+
+        try:
+            return netifaces.ifaddresses('wlan0')[netifaces.AF_LINK][0]['addr']
+        except KeyError:
+            pass
+
+        _logger.warning("Couldn't get MAC address, sleeping and retrying.")
+        time.sleep(5)
 
 def get_ssid():
-    ap = subprocess.call(['systemctl', 'is-active', 'hostapd']) # if service is active return 0 else inactive
+    ap = subprocess.call(['systemctl', 'is-active', '--quiet', 'hostapd']) # if service is active return 0 else inactive
     if not ap:
         return subprocess.check_output(['grep', '-oP', '(?<=ssid=).*', '/etc/hostapd/hostapd.conf']).decode('utf-8').rstrip()
     process_iwconfig = subprocess.Popen(['iwconfig'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -154,7 +172,7 @@ def get_ssid():
     return subprocess.check_output(['sed', 's/.*"\\(.*\\)"/\\1/'], stdin=process_grep.stdout).decode('utf-8').rstrip()
 
 def get_odoo_server_url():
-    ap = subprocess.call(['systemctl', 'is-active', 'hostapd']) # if service is active return 0 else inactive
+    ap = subprocess.call(['systemctl', 'is-active', '--quiet', 'hostapd']) # if service is active return 0 else inactive
     if not ap:
         return False
     return read_file_first_line('odoo-remote-server.conf')
@@ -200,15 +218,15 @@ def load_certificate():
         result = json.loads(response.data.decode('utf8'))['result']
         if result:
             write_file('odoo-subject.conf', result['subject_cn'])
-            subprocess.check_call(["sudo", "mount", "-o", "remount,rw", "/"])
-            subprocess.check_call(["sudo", "mount", "-o", "remount,rw", "/root_bypass_ramdisks/"])
+            subprocess.call(["sudo", "mount", "-o", "remount,rw", "/"])
+            subprocess.call(["sudo", "mount", "-o", "remount,rw", "/root_bypass_ramdisks/"])
             Path('/etc/ssl/certs/nginx-cert.crt').write_text(result['x509_pem'])
             Path('/root_bypass_ramdisks/etc/ssl/certs/nginx-cert.crt').write_text(result['x509_pem'])
             Path('/etc/ssl/private/nginx-cert.key').write_text(result['private_key_pem'])
             Path('/root_bypass_ramdisks/etc/ssl/private/nginx-cert.key').write_text(result['private_key_pem'])
-            subprocess.check_call(["sudo", "mount", "-o", "remount,ro", "/"])
-            subprocess.check_call(["sudo", "mount", "-o", "remount,ro", "/root_bypass_ramdisks/"])
-            subprocess.check_call(["sudo", "mount", "-o", "remount,rw", "/root_bypass_ramdisks/etc/cups"])
+            subprocess.call(["sudo", "mount", "-o", "remount,ro", "/"])
+            subprocess.call(["sudo", "mount", "-o", "remount,ro", "/root_bypass_ramdisks/"])
+            subprocess.call(["sudo", "mount", "-o", "remount,rw", "/root_bypass_ramdisks/etc/cups"])
             subprocess.check_call(["sudo", "service", "nginx", "restart"])
 
 def download_iot_handlers(auto=True):
@@ -223,12 +241,12 @@ def download_iot_handlers(auto=True):
         try:
             resp = pm.request('POST', server, fields={'mac': get_mac_address(), 'auto': auto})
             if resp.data:
-                subprocess.check_call(["sudo", "mount", "-o", "remount,rw", "/"])
+                subprocess.call(["sudo", "mount", "-o", "remount,rw", "/"])
                 drivers_path = Path.home() / 'odoo/addons/hw_drivers/iot_handlers'
                 zip_file = zipfile.ZipFile(io.BytesIO(resp.data))
                 zip_file.extractall(drivers_path)
-                subprocess.check_call(["sudo", "mount", "-o", "remount,ro", "/"])
-                subprocess.check_call(["sudo", "mount", "-o", "remount,rw", "/root_bypass_ramdisks/etc/cups"])
+                subprocess.call(["sudo", "mount", "-o", "remount,ro", "/"])
+                subprocess.call(["sudo", "mount", "-o", "remount,rw", "/root_bypass_ramdisks/etc/cups"])
         except Exception as e:
             _logger.error('Could not reach configured server')
             _logger.error('A error encountered : %s ' % e)
@@ -264,16 +282,16 @@ def read_file_first_line(filename):
     return ''
 
 def unlink_file(filename):
-    subprocess.check_call(["sudo", "mount", "-o", "remount,rw", "/"])
+    subprocess.call(["sudo", "mount", "-o", "remount,rw", "/"])
     path = Path.home() / filename
     if path.exists():
         path.unlink()
-    subprocess.check_call(["sudo", "mount", "-o", "remount,ro", "/"])
-    subprocess.check_call(["sudo", "mount", "-o", "remount,rw", "/root_bypass_ramdisks/etc/cups"])
+    subprocess.call(["sudo", "mount", "-o", "remount,ro", "/"])
+    subprocess.call(["sudo", "mount", "-o", "remount,rw", "/root_bypass_ramdisks/etc/cups"])
 
 def write_file(filename, text):
-    subprocess.check_call(["sudo", "mount", "-o", "remount,rw", "/"])
+    subprocess.call(["sudo", "mount", "-o", "remount,rw", "/"])
     path = Path.home() / filename
     path.write_text(text)
-    subprocess.check_call(["sudo", "mount", "-o", "remount,ro", "/"])
-    subprocess.check_call(["sudo", "mount", "-o", "remount,rw", "/root_bypass_ramdisks/etc/cups"])
+    subprocess.call(["sudo", "mount", "-o", "remount,ro", "/"])
+    subprocess.call(["sudo", "mount", "-o", "remount,rw", "/root_bypass_ramdisks/etc/cups"])

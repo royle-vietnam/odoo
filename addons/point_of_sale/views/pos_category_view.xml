@@ -8,14 +8,14 @@
                 <sheet>
                     <field name="image_128" widget="image" class="oe_avatar"/>
                     <div class="oe_title">
-                        <label for="name" class="oe_edit_only"/>
+                        <label for="name"/>
                         <h1>
-                            <field name="name" placeholder="e.g. Soft Drinks" required="True"/>
+                            <field name="name" class="o_text_overflow" placeholder="e.g. Soft Drinks" required="True"/>
                         </h1>
                     </div>
                     <group>
                         <group>
-                            <field name="parent_id"/>
+                            <field name="parent_id" class="o_text_overflow"/>
                             <field name="sequence" groups="base.group_no_one" />
                         </group>
                     </group>

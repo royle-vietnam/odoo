@@ -1,26 +1,16 @@
-odoo.define('mail/static/src/components/composer/composer.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
-const components = {
-    AttachmentList: require('mail/static/src/components/attachment_list/attachment_list.js'),
-    ComposerSuggestedRecipientList: require('mail/static/src/components/composer_suggested_recipient_list/composer_suggested_recipient_list.js'),
-    DropZone: require('mail/static/src/components/drop_zone/drop_zone.js'),
-    EmojisPopover: require('mail/static/src/components/emojis_popover/emojis_popover.js'),
-    FileUploader: require('mail/static/src/components/file_uploader/file_uploader.js'),
-    TextInput: require('mail/static/src/components/composer_text_input/composer_text_input.js'),
-    ThreadTextualTypingStatus: require('mail/static/src/components/thread_textual_typing_status/thread_textual_typing_status.js'),
-};
-const useDragVisibleDropZone = require('mail/static/src/component_hooks/use_drag_visible_dropzone/use_drag_visible_dropzone.js');
-const useStore = require('mail/static/src/component_hooks/use_store/use_store.js');
-const {
+import { useDragVisibleDropZone } from '@mail/component_hooks/use_drag_visible_dropzone/use_drag_visible_dropzone';
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
+import {
     isEventHandled,
     markEventHandled,
-} = require('mail/static/src/utils/utils.js');
+} from '@mail/utils/utils';
 
 const { Component } = owl;
 const { useRef } = owl.hooks;
 
-class Composer extends Component {
+export class Composer extends Component {
 
     /**
      * @override
@@ -28,16 +18,6 @@ class Composer extends Component {
     constructor(...args) {
         super(...args);
         this.isDropZoneVisible = useDragVisibleDropZone();
-        useStore(props => {
-            const composer = this.env.models['mail.composer'].get(props.composerLocalId);
-            return {
-                composer: composer ? composer.__state : undefined,
-                isDeviceMobile: this.env.messaging.device.isMobile,
-                thread: composer && composer.thread
-                    ? composer.thread.__state
-                    : undefined,
-            };
-        });
         /**
          * Reference of the emoji popover. Useful to include emoji popover as
          * contained "inside" the composer.
@@ -49,23 +29,15 @@ class Composer extends Component {
          */
         this._fileUploaderRef = useRef('fileUploader');
         /**
-         * Reference of the text input component.
+         * Reference of the text input component. Useful to save state in store
+         * before inserting emoji.
          */
         this._textInputRef = useRef('textInput');
-        /**
-         * Reference of the subject input. Useful to set content.
-         */
-        this._subjectRef = useRef('subject');
         this._onClickCaptureGlobal = this._onClickCaptureGlobal.bind(this);
     }
 
     mounted() {
         document.addEventListener('click', this._onClickCaptureGlobal, true);
-        this._update();
-    }
-
-    patched() {
-        this._update();
     }
 
     willUnmount() {
@@ -77,10 +49,10 @@ class Composer extends Component {
     //--------------------------------------------------------------------------
 
     /**
-     * @returns {mail.composer}
+     * @returns {mail.composer_view}
      */
-    get composer() {
-        return this.env.models['mail.composer'].get(this.props.composerLocalId);
+    get composerView() {
+        return this.messaging && this.messaging.models['mail.composer_view'].get(this.props.composerViewLocalId);
     }
 
     /**
@@ -96,7 +68,7 @@ class Composer extends Component {
         if (emojisPopover && emojisPopover.contains(node)) {
             return true;
         }
-        return this.el.contains(node);
+        return Boolean(this.el && this.el.contains(node));
     }
 
     /**
@@ -105,31 +77,14 @@ class Composer extends Component {
      * @returns {string}
      */
     get currentPartnerAvatar() {
-        const avatar = this.env.messaging.currentUser
+        const avatar = this.messaging.currentUser
             ? this.env.session.url('/web/image', {
-                    field: 'image_128',
-                    id: this.env.messaging.currentUser.id,
+                    field: 'avatar_128',
+                    id: this.messaging.currentUser.id,
                     model: 'res.users',
                 })
-            : '/web/static/src/img/user_menu_avatar.png';
+            : '/web/static/img/user_menu_avatar.png';
         return avatar;
-    }
-
-    /**
-     * Focus the composer.
-     */
-    focus() {
-        if (this.env.messaging.device.isMobile) {
-            this.el.scrollIntoView();
-        }
-        this._textInputRef.comp.focus();
-    }
-
-    /**
-     * Focusout the composer.
-     */
-    focusout() {
-        this._textInputRef.comp.focusout();
     }
 
     /**
@@ -138,9 +93,13 @@ class Composer extends Component {
      * @returns {boolean}
      */
     get hasFooter() {
+        if (!this.composerView) {
+            return false;
+        }
         return (
             this.props.hasThreadTyping ||
-            this.composer.attachments.length > 0 ||
+            this.composerView.composer.attachments.length > 0 ||
+            this.composerView.messageViewInEditing ||
             !this.props.isCompact
         );
     }
@@ -151,22 +110,14 @@ class Composer extends Component {
      * @returns {boolean}
      */
     get hasHeader() {
+        if (!this.composerView) {
+            return false;
+        }
         return (
-            (this.props.hasThreadName && this.composer.thread) ||
-            (this.props.hasFollowers && !this.composer.isLog)
+            (this.props.hasThreadName && this.composerView.composer.thread) ||
+            (this.props.hasFollowers && !this.composerView.composer.isLog) ||
+            this.composerView.threadView && this.composerView.threadView.replyingToMessageView
         );
-    }
-
-    /**
-     * Get an object which is passed to FileUploader component to be used when
-     * creating attachment.
-     *
-     * @returns {Object}
-     */
-    get newAttachmentExtraData() {
-        return {
-            composers: [['replace', this.composer]],
-        };
     }
 
     //--------------------------------------------------------------------------
@@ -181,9 +132,9 @@ class Composer extends Component {
      *
      * @private
      */
-    async _postMessage() {
-        if (!this.composer.canPostMessage) {
-            if (this.composer.hasUploadingAttachment) {
+    _postMessage() {
+        if (!this.composerView.composer.canPostMessage) {
+            if (this.composerView.composer.hasUploadingAttachment) {
                 this.env.services['notification'].notify({
                     message: this.env._t("Please wait while the file is uploading."),
                     type: 'warning',
@@ -191,19 +142,11 @@ class Composer extends Component {
             }
             return;
         }
-        await this.composer.postMessage();
-        // TODO: we might need to remove trigger and use the store to wait for the post rpc to be done
-        // task-2252858
-        this.trigger('o-message-posted');
-    }
-
-    /**
-     * @private
-     */
-    _update() {
-        if (this._subjectRef.el) {
-            this._subjectRef.el.value = this.composer.subjectContent;
+        if (this.composerView.messageViewInEditing) {
+            this.composerView.updateMessage();
+            return;
         }
+        this.composerView.postMessage();
     }
 
     //--------------------------------------------------------------------------
@@ -217,7 +160,9 @@ class Composer extends Component {
      */
     _onClickAddAttachment() {
         this._fileUploaderRef.comp.openBrowserFileUploader();
-        this.focus();
+        if (!this.messaging.device.isMobileDevice) {
+            this.composerView.update({ doFocus: true });
+        }
     }
 
     /**
@@ -226,11 +171,19 @@ class Composer extends Component {
      * @private
      * @param {MouseEvent} ev
      */
-    _onClickCaptureGlobal(ev) {
+    async _onClickCaptureGlobal(ev) {
         if (this.contains(ev.target)) {
             return;
         }
-        this.composer.discard();
+        // Let event be handled by bubbling handlers first
+        await new Promise(this.env.browser.setTimeout);
+        if (isEventHandled(ev, 'MessageActionList.replyTo')) {
+            return;
+        }
+        if (!this.composerView) {
+            return;
+        }
+        this.composerView.discard();
     }
 
     /**
@@ -239,7 +192,7 @@ class Composer extends Component {
      * @private
      */
     _onClickFullComposer() {
-        this.composer.openFullComposer();
+        this.composerView.openFullComposer();
     }
 
     /**
@@ -249,7 +202,7 @@ class Composer extends Component {
      * @param {MouseEvent} ev
      */
     _onClickDiscard(ev) {
-        this.composer.discard();
+        this.composerView.discard();
     }
 
     /**
@@ -259,13 +212,7 @@ class Composer extends Component {
      */
     _onClickSend() {
         this._postMessage();
-    }
-
-    /**
-     * @private
-     */
-    _onComposerSuggestionClicked() {
-        this.focus();
+        this.composerView.update({ doFocus: true });
     }
 
     /**
@@ -290,8 +237,7 @@ class Composer extends Component {
     }
 
     /**
-     * Called when selection an emoji from the emoji popover (from the emoji
-     * button).
+     * Handles `o-emoji-selection` event from the emoji popover.
      *
      * @private
      * @param {CustomEvent} ev
@@ -301,15 +247,10 @@ class Composer extends Component {
     _onEmojiSelection(ev) {
         ev.stopPropagation();
         this._textInputRef.comp.saveStateInStore();
-        this.composer.insertIntoTextInput(ev.detail.unicode);
-        this.focus();
-    }
-
-    /**
-     * @private
-     */
-    _onInputSubject() {
-        this.composer.update({ subjectContent: this._subjectRef.el.value });
+        this.composerView.insertIntoTextInput(ev.detail.unicode);
+        if (!this.messaging.device.isMobileDevice) {
+            this.composerView.update({ doFocus: true });
+        }
     }
 
     /**
@@ -325,7 +266,7 @@ class Composer extends Component {
                 return;
             }
             ev.preventDefault();
-            this.composer.discard();
+            this.composerView.discard();
         }
     }
 
@@ -337,7 +278,7 @@ class Composer extends Component {
         if (ev.key === 'Escape') {
             if (this._emojisPopoverRef.comp) {
                 this._emojisPopoverRef.comp.close();
-                this.focus();
+                this.composerView.update({ doFocus: true });
                 markEventHandled(ev, 'Composer.closeEmojisPopover');
             }
         }
@@ -357,9 +298,7 @@ class Composer extends Component {
 }
 
 Object.assign(Composer, {
-    components,
     defaultProps: {
-        attachmentLocalIds: [],
         hasCurrentPartnerAvatar: true,
         hasDiscardButton: false,
         hasFollowers: false,
@@ -370,15 +309,7 @@ Object.assign(Composer, {
         isExpandable: false,
     },
     props: {
-        attachmentLocalIds: {
-            type: Array,
-            element: String,
-        },
-        attachmentsDetailsMode: {
-            type: String,
-            optional: true,
-        },
-        composerLocalId: String,
+        composerViewLocalId: String,
         hasCurrentPartnerAvatar: Boolean,
         hasDiscardButton: Boolean,
         hasFollowers: Boolean,
@@ -397,15 +328,6 @@ Object.assign(Composer, {
             type: Boolean,
             optional: true,
         },
-        initialAttachmentLocalIds: {
-            type: Array,
-            element: String,
-            optional: true,
-        },
-        initialTextInputHtmlContent: {
-            type: String,
-            optional: true,
-        },
         isCompact: Boolean,
         isExpandable: Boolean,
         /**
@@ -421,6 +343,4 @@ Object.assign(Composer, {
     template: 'mail.Composer',
 });
 
-return Composer;
-
-});
+registerMessagingComponent(Composer, { propsCompareDepth: { textInputSendShortcuts: 1 } });

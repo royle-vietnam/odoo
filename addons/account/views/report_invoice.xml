@@ -4,10 +4,11 @@
         <template id="report_invoice_document">
             <t t-call="web.external_layout">
                 <t t-set="o" t-value="o.with_context(lang=lang)" />
+                <t t-set="forced_vat" t-value="o.fiscal_position_id.foreign_vat"/> <!-- So that it appears in the footer of the report instead of the company VAT if it's set -->
                 <t t-set="address">
                     <address t-field="o.partner_id" t-options='{"widget": "contact", "fields": ["address", "name"], "no_marker": True}' />
                     <div t-if="o.partner_id.vat" class="mt16">
-                        <t t-if="o.company_id.country_id.vat_label" t-esc="o.company_id.country_id.vat_label" id="inv_tax_id_label"/>
+                        <t t-if="o.company_id.account_fiscal_country_id.vat_label" t-esc="o.company_id.account_fiscal_country_id.vat_label" id="inv_tax_id_label"/>
                         <t t-else="">Tax ID</t>: <span t-field="o.partner_id.vat"/></div>
                 </t>
                 <div class="page">
@@ -21,24 +22,24 @@
                         <span t-if="o.name != '/'" t-field="o.name"/>
                     </h2>
 
-                    <div id="informations" class="row mt32 mb32">
-                        <div class="col-auto mw-100 mb-2" t-if="o.invoice_date" name="invoice_date">
+                    <div id="informations" class="row mt-4 mb-4">
+                        <div class="col-auto col-3 mw-100 mb-2" t-if="o.invoice_date" name="invoice_date">
                             <strong>Invoice Date:</strong>
                             <p class="m-0" t-field="o.invoice_date"/>
                         </div>
-                        <div class="col-auto mw-100 mb-2" t-if="o.invoice_date_due and o.move_type == 'out_invoice' and o.state == 'posted'" name="due_date">
+                        <div class="col-auto col-3 mw-100 mb-2" t-if="o.invoice_date_due and o.move_type == 'out_invoice' and o.state == 'posted'" name="due_date">
                             <strong>Due Date:</strong>
                             <p class="m-0" t-field="o.invoice_date_due"/>
                         </div>
-                        <div class="col-auto mw-100 mb-2" t-if="o.invoice_origin" name="origin">
+                        <div class="col-auto col-3 mw-100 mb-2" t-if="o.invoice_origin" name="origin">
                             <strong>Source:</strong>
                             <p class="m-0" t-field="o.invoice_origin"/>
                         </div>
-                        <div class="col-auto mw-100 mb-2" t-if="o.partner_id.ref" name="customer_code">
+                        <div class="col-auto col-3 mw-100 mb-2" t-if="o.partner_id.ref" name="customer_code">
                             <strong>Customer Code:</strong>
                             <p class="m-0" t-field="o.partner_id.ref"/>
                         </div>
-                        <div class="col-auto mw-100 mb-2" t-if="o.ref" name="reference">
+                        <div class="col-auto col-3 mw-100 mb-2" t-if="o.ref" name="reference">
                             <strong>Reference:</strong>
                             <p class="m-0" t-field="o.ref"/>
                         </div>
@@ -124,39 +125,12 @@
                         <div id="total" class="row">
                             <div t-attf-class="#{'col-6' if report_type != 'html' else 'col-sm-7 col-md-6'} ml-auto">
                                 <table class="table table-sm" style="page-break-inside: avoid;">
-                                    <tr class="border-black o_subtotal" style="">
-                                        <td><strong>Subtotal</strong></td>
-                                        <td class="text-right">
-                                            <span t-field="o.amount_untaxed"/>
-                                        </td>
-                                    </tr>
-                                    <t t-foreach="o.amount_by_group" t-as="amount_by_group">
-                                        <tr style="">
-                                            <t t-if="len(o.line_ids.filtered(lambda line: line.tax_line_id)) in [0, 1] and o.amount_untaxed == amount_by_group[2]">
-                                                <td><span class="text-nowrap" t-esc="amount_by_group[0]"/></td>
-                                                <td class="text-right o_price_total">
-                                                    <span class="text-nowrap" t-esc="amount_by_group[3]" />
-                                                </td>
-                                            </t>
-                                            <t t-else="">
-                                                <td>
-                                                    <span t-esc="amount_by_group[0]"/>
-                                                    <span class="text-nowrap"> on
-                                                        <t t-esc="amount_by_group[4]"/>
-                                                    </span>
-                                                </td>
-                                                <td class="text-right o_price_total">
-                                                    <span class="text-nowrap" t-esc="amount_by_group[3]"/>
-                                                </td>
-                                            </t>
-                                        </tr>
-                                    </t>
-                                    <tr class="border-black o_total">
-                                        <td><strong>Total</strong></td>
-                                        <td class="text-right">
-                                            <span class="text-nowrap" t-field="o.amount_total"/>
-                                        </td>
-                                    </tr>
+
+                                    <!--Tax totals-->
+                                    <t t-set="tax_totals" t-value="json.loads(o.tax_totals_json)"/>
+                                    <t t-call="account.document_tax_totals"/>
+
+                                    <!--Payments-->
                                     <t t-if="print_with_payments">
                                         <t t-if="o.payment_state != 'invoicing_legacy'">
                                             <t t-set="payments_vals" t-value="o.sudo()._get_reconciled_info_JSON_values()"/>
@@ -190,16 +164,16 @@
                     <p t-if="o.invoice_payment_term_id" name="payment_term">
                         <span t-field="o.invoice_payment_term_id.note"/>
                     </p>
-                    <p t-if="o.narration" name="comment">
+                    <div t-if="not is_html_empty(o.narration)" name="comment">
                         <span t-field="o.narration"/>
-                    </p>
-                    <p t-if="o.fiscal_position_id.note" name="note">
+                    </div>
+                    <p t-if="not is_html_empty(o.fiscal_position_id.note)" name="note">
                         <span t-field="o.fiscal_position_id.note"/>
                     </p>
                     <p t-if="o.invoice_incoterm_id" name="incoterm">
                         <strong>Incoterm: </strong><span t-field="o.invoice_incoterm_id.code"/> - <span t-field="o.invoice_incoterm_id.name"/>
                     </p>
-                    <div id="qrcode" t-if="o.display_qr_code">
+                    <div id="qrcode" t-if="o.display_qr_code and o.amount_residual > 0">
                         <p t-if="qr_code_urls.get(o.id)">
                             <strong class="text-center">Scan me with your banking app.</strong><br/><br/>
                             <img class="border border-dark rounded" t-att-src="qr_code_urls[o.id]"/>
@@ -209,11 +183,76 @@
             </t>
         </template>
 
+        <template id="document_tax_totals">
+            <!--
+                Generic template to display tax totals in pdf reports.
+                Used by invoices, SO and PO.
+
+                ARGUMENTS:
+                - tax_totals: dict in the form generated by account.move's _get_tax_totals.
+            -->
+            <t t-foreach="tax_totals['subtotals']" t-as="subtotal">
+                <tr class="border-black o_subtotal">
+                    <td><strong t-esc="subtotal['name']"/></td>
+
+                    <td class="text-right">
+                        <span
+                            t-att-class="oe_subtotal_footer_separator"
+                            t-esc="subtotal['formatted_amount']"
+                        />
+                    </td>
+                </tr>
+
+                <t t-set="subtotal_to_show" t-value="subtotal['name']"/>
+                <t t-call="account.tax_groups_totals"/>
+            </t>
+
+            <!--Total amount with all taxes-->
+            <tr class="border-black o_total">
+                <td><strong>Total</strong></td>
+                <td class="text-right">
+                    <span t-esc="tax_totals['formatted_amount_total']"/>
+                </td>
+            </tr>
+        </template>
+
+        <template id="tax_groups_totals">
+            <!--
+                Generic template to display a list of tax groups with the related amounts.
+
+                ARGUMENTS:
+                - tax_totals: dict in the form generated by account.move's _get_tax_totals.
+                - subtotal_to_show: The subtotal we need to render the groups from
+            -->
+            <t t-foreach="tax_totals['groups_by_subtotal'][subtotal_to_show]" t-as="amount_by_group">
+                <tr>
+                    <t t-if="len(tax_totals['groups_by_subtotal'][subtotal_to_show]) > 1">
+                        <td>
+                            <span t-esc="amount_by_group['tax_group_name']"/>
+                            <span class="text-nowrap"> on
+                                <t t-esc="amount_by_group['formatted_tax_group_base_amount']"/>
+                            </span>
+                        </td>
+                        <td class="text-right o_price_total">
+                            <span class="text-nowrap" t-esc="amount_by_group['formatted_tax_group_amount']"/>
+                        </td>
+                    </t>
+                    <t t-else="">
+                        <td><span class="text-nowrap" t-esc="amount_by_group['tax_group_name']"/></td>
+                        <td class="text-right o_price_total">
+                            <span class="text-nowrap" t-esc="amount_by_group['formatted_tax_group_amount']" />
+                        </td>
+                    </t>
+                </tr>
+            </t>
+        </template>
+
         <template id="report_invoice">
             <t t-call="web.html_container">
                 <t t-foreach="docs" t-as="o">
-                    <t t-set="lang" t-value="o.invoice_user_id.sudo().lang if o.move_type in ('in_invoice', 'in_refund') else o.partner_id.lang"/>
-                    <t t-call="#{ o._get_name_invoice_report() }" t-lang="lang"/>
+                    <t t-set="lang" t-value="o.partner_id.lang"/>
+                    <t t-if="o._get_name_invoice_report() == 'account.report_invoice_document'"
+                        t-call="account.report_invoice_document" t-lang="lang"/>
                 </t>
             </t>
         </template>
@@ -221,9 +260,10 @@
         <template id="report_invoice_with_payments">
             <t t-call="web.html_container">
                 <t t-foreach="docs" t-as="o">
-                    <t t-set="lang" t-value="o.invoice_user_id.sudo().lang if o.move_type in ('in_invoice', 'in_refund') else o.partner_id.lang"/>
+                    <t t-set="lang" t-value="o.partner_id.lang"/>
                     <t t-set="print_with_payments" t-value="True"/>
-                    <t t-call="#{ o._get_name_invoice_report() }" t-lang="lang"/>
+                    <t t-if="o._get_name_invoice_report() == 'account.report_invoice_document'"
+                        t-call="account.report_invoice_document" t-lang="lang"/>
                 </t>
             </t>
         </template>

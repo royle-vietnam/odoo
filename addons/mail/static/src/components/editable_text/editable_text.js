@@ -1,9 +1,11 @@
-odoo.define('mail/static/src/components/editable_text/editable_text.js', function (require) {
-'use strict';
+/** @odoo-module **/
+
+import { registerMessagingComponent } from '@mail/utils/messaging_component';
+import { markEventHandled } from '@mail/utils/utils';
 
 const { Component } = owl;
 
-class EditableText extends Component {
+export class EditableText extends Component {
 
     mounted() {
         this.el.focus();
@@ -31,6 +33,7 @@ class EditableText extends Component {
      * @param {MouseEvent} ev
      */
     _onClick(ev) {
+        markEventHandled(ev, 'EditableText.click');
         this.trigger('o-clicked');
     }
 
@@ -54,6 +57,9 @@ class EditableText extends Component {
      * @param {KeyboardEvent} ev
      */
     _onKeydownEnter(ev) {
+        if (!this.el) {
+            return;
+        }
         const value = this.el.value;
         const newName = value || this.props.placeholder;
         if (this.props.value !== newName) {
@@ -77,6 +83,4 @@ Object.assign(EditableText, {
     template: 'mail.EditableText',
 });
 
-return EditableText;
-
-});
+registerMessagingComponent(EditableText);

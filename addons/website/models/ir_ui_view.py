@@ -45,15 +45,42 @@ class View(models.Model):
         for view in self:
             view.first_page_id = self.env['website.page'].search([('view_id', '=', view.id)], limit=1)
 
+    @api.model_create_multi
+    def create(self, vals_list):
+        """
+        SOC for ir.ui.view creation. If a view is created without a website_id,
+        it should get one if one is present in the context. Also check that
+        an explicit website_id in create values matches the one in the context.
+        """
+        website_id = self.env.context.get('website_id', False)
+        if not website_id:
+            return super().create(vals_list)
+
+        for vals in vals_list:
+            if 'website_id' not in vals:
+                # Automatic addition of website ID during view creation if not
+                # specified but present in the context
+                vals['website_id'] = website_id
+            else:
+                # If website ID specified, automatic check that it is the same as
+                # the one in the context. Otherwise raise an error.
+                new_website_id = vals['website_id']
+                if not new_website_id:
+                    raise ValueError(f"Trying to create a generic view from a website {website_id} environment")
+                elif new_website_id != website_id:
+                    raise ValueError(f"Trying to create a view for website {new_website_id} from a website {website_id} environment")
+        return super().create(vals_list)
+
     def name_get(self):
-        if (not self._context.get('display_website') and not self.env.user.has_group('website.group_multi_website')) or \
-                not self._context.get('display_website'):
+        if not (self._context.get('display_key') or self._context.get('display_website')):
             return super(View, self).name_get()
 
         res = []
         for view in self:
             view_name = view.name
-            if view.website_id:
+            if self._context.get('display_key'):
+                view_name += ' <%s>' % view.key
+            if self._context.get('display_website') and view.website_id:
                 view_name += ' [%s]' % view.website_id.name
             res.append((view.id, view_name))
         return res
@@ -70,11 +97,24 @@ class View(models.Model):
         # We need to consider inactive views when handling multi-website cow
         # feature (to copy inactive children views, to search for specific
         # views, ...)
-        for view in self.with_context(active_test=False):
+        # Website-specific views need to be updated first because they might
+        # be relocated to new ids by the cow if they are involved in the
+        # inheritance tree.
+        for view in self.with_context(active_test=False).sorted(key='website_id', reverse=True):
             # Make sure views which are written in a website context receive
             # a value for their 'key' field
             if not view.key and not vals.get('key'):
                 view.with_context(no_cow=True).key = 'website.key_%s' % str(uuid.uuid4())[:6]
+
+            pages = view.page_ids
+
+            # Disable cache of page if we guess some dynamic content (form with csrf, ...)
+            if vals.get('arch'):
+                to_invalidate = pages.filtered(
+                    lambda p: p.cache_time and not p._can_be_cached(vals['arch'])
+                )
+                to_invalidate and _logger.info('Disable cache for page %s', to_invalidate)
+                to_invalidate.cache_time = 0
 
             # No need of COW if the view is already specific
             if view.website_id:
@@ -87,7 +127,6 @@ class View(models.Model):
             # but in reality the values were only meant to go on the specific
             # page. Invalidate all fields and not only those in vals because
             # other fields could have been changed implicitly too.
-            pages = view.page_ids
             pages.flush(records=pages)
             pages.invalidate_cache(ids=pages.ids)
 
@@ -130,6 +169,14 @@ class View(models.Model):
             super(View, website_specific_view).write(vals)
 
         return True
+
+    def _load_records_write_on_cow(self, cow_view, inherit_id, values):
+        inherit_id = self.search([
+            ('key', '=', self.browse(inherit_id).key),
+            ('website_id', 'in', (False, cow_view.website_id.id)),
+        ], order='website_id', limit=1).id
+        values['inherit_id'] = inherit_id
+        cow_view.with_context(no_cow=True).write(values)
 
     def _create_all_specific_views(self, processed_modules):
         """ When creating a generic child view, we should
@@ -199,6 +246,10 @@ class View(models.Model):
             })
             page.menu_ids.filtered(lambda m: m.website_id.id == website.id).page_id = new_page.id
 
+    def _get_top_level_view(self):
+        self.ensure_one()
+        return self.inherit_id._get_top_level_view() if self.inherit_id else self
+
     @api.model
     def get_related_views(self, key, bundles=False):
         '''Make this only return most specific views for website.'''
@@ -255,8 +306,8 @@ class View(models.Model):
             return view_id if view_id._name == 'ir.ui.view' else self.env['ir.ui.view']
 
     @api.model
-    def _get_inheriting_views_arch_domain(self, model):
-        domain = super(View, self)._get_inheriting_views_arch_domain(model)
+    def _get_inheriting_views_domain(self):
+        domain = super(View, self)._get_inheriting_views_domain()
         current_website = self.env['website'].browse(self._context.get('website_id'))
         website_views_domain = current_website.website_domain()
         # when rendering for the website we have to include inactive views
@@ -266,11 +317,11 @@ class View(models.Model):
         return expression.AND([website_views_domain, domain])
 
     @api.model
-    def get_inheriting_views_arch(self, model):
+    def _get_inheriting_views(self):
         if not self._context.get('website_id'):
-            return super(View, self).get_inheriting_views_arch(model)
+            return super(View, self)._get_inheriting_views()
 
-        views = super(View, self.with_context(active_test=False)).get_inheriting_views_arch(model)
+        views = super(View, self.with_context(active_test=False))._get_inheriting_views()
         # prefer inactive website-specific views over active generic ones
         return views.filter_duplicate().filtered('active')
 
@@ -324,22 +375,6 @@ class View(models.Model):
             return view.id
         return super(View, self.sudo()).get_view_id(xml_id)
 
-    @api.model
-    def read_template(self, xml_id):
-        view = self._view_obj(self.get_view_id(xml_id))
-        if view.visibility and view._handle_visibility(do_raise=False):
-            self = self.sudo()
-        return super(View, self).read_template(xml_id)
-
-    def _get_original_view(self):
-        """Given a view, retrieve the original view it was COW'd from.
-        The given view might already be the original one. In that case it will
-        (and should) return itself.
-        """
-        self.ensure_one()
-        domain = [('key', '=', self.key), ('model_data_id', '!=', None)]
-        return self.with_context(active_test=False).search(domain, limit=1)  # Useless limit has multiple xmlid should not be possible
-
     def _handle_visibility(self, do_raise=True):
         """ Check the visibility set on the main view and raise 403 if you should not have access.
             Order is: Public, Connected, Has group, Password
@@ -362,11 +397,11 @@ class View(models.Model):
                 else:
                     error = werkzeug.exceptions.Forbidden('website_visibility_password_required')
 
-            # elif self.visibility == 'restricted_group' and self.groups_id: or if groups_id set from backend
-            try:
-                self._check_view_access()
-            except AccessError:
-                error = werkzeug.exceptions.Forbidden()
+            if self.visibility not in ('password', 'connected'):
+                try:
+                    self._check_view_access()
+                except AccessError:
+                    error = werkzeug.exceptions.Forbidden()
 
         if error:
             if do_raise:
@@ -394,7 +429,7 @@ class View(models.Model):
             if values and 'main_object' in values:
                 if request.env.user.has_group('website.group_website_publisher'):
                     func = getattr(values['main_object'], 'get_backend_menu_id', False)
-                    values['backend_menu_id'] = func and func() or self.env['ir.model.data'].xmlid_to_res_id('website.menu_website_configuration')
+                    values['backend_menu_id'] = func and func() or self.env['ir.model.data']._xmlid_to_res_id('website.menu_website_configuration')
 
         if self._context != new_context:
             self = self.with_context(new_context)
@@ -432,7 +467,7 @@ class View(models.Model):
                 main_object=self,
                 website=request.website,
                 is_view_active=request.website.is_view_active,
-                res_company=request.website.company_id.sudo(),
+                res_company=request.env['res.company'].browse(request.website._get_cached('company_id')).sudo(),
                 translatable=translatable,
                 editable=editable,
             ))

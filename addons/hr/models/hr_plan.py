@@ -10,10 +10,11 @@ class HrPlanActivityType(models.Model):
     _description = 'Plan activity type'
     _rec_name = 'summary'
 
+
     activity_type_id = fields.Many2one(
         'mail.activity.type', 'Activity Type',
         default=lambda self: self.env.ref('mail.mail_activity_data_todo'),
-        domain=lambda self: ['|', ('res_model_id', '=', False), ('res_model_id', '=', self.env['ir.model']._get('hr.employee').id)],
+        domain=lambda self: ['|', ('res_model', '=', False), ('res_model', '=', 'hr.employee')],
         ondelete='restrict'
     )
     summary = fields.Char('Summary', compute="_compute_default_summary", store=True, readonly=False)
@@ -22,8 +23,10 @@ class HrPlanActivityType(models.Model):
         ('manager', 'Manager'),
         ('employee', 'Employee'),
         ('other', 'Other')], default='employee', string='Responsible', required=True)
-    responsible_id = fields.Many2one('res.users', 'Responsible Person', help='Specific responsible of activity if not linked to the employee.')
+    # sgv todo change back to 'Responsible Person'
+    responsible_id = fields.Many2one('res.users', 'Name', help='Specific responsible of activity if not linked to the employee.')
     note = fields.Html('Note')
+
 
     @api.depends('activity_type_id')
     def _compute_default_summary(self):

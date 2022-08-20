@@ -87,6 +87,15 @@ odoo.define('pos_restaurant.tour.FloorScreen', function (require) {
     NumberPopup.do.clickConfirm();
     FloorScreen.check.tableSeatIs('T4', '9');
 
+    // change number of seat when the input is already selected
+    FloorScreen.do.clickTable('T4');
+    FloorScreen.check.selectedTableIs('T4');
+    FloorScreen.do.clickSeats();
+    NumberPopup.do.pressNumpad('1 5');
+    NumberPopup.check.inputShownIs('15');
+    NumberPopup.do.clickConfirm();
+    FloorScreen.check.tableSeatIs('T4', '15');
+
     // change shape
     FloorScreen.do.changeShapeTo('round');
 
@@ -101,9 +110,9 @@ odoo.define('pos_restaurant.tour.FloorScreen', function (require) {
 
     // Opening product screen in second floor should go back to second floor
     FloorScreen.do.clickFloor('Second Floor');
-    FloorScreen.check.hasTable('T1');
-    FloorScreen.do.clickTable('T1');
-    Chrome.check.backToFloorTextIs('Second Floor', 'T1');
+    FloorScreen.check.hasTable('T3');
+    FloorScreen.do.clickTable('T3');
+    Chrome.check.backToFloorTextIs('Second Floor', 'T3');
 
     Tour.register('FloorScreenTour', { test: true, url: '/pos/ui' }, getSteps());
 });

@@ -14,15 +14,15 @@ class StockValuationLayer(models.Model):
     _rec_name = 'product_id'
 
     company_id = fields.Many2one('res.company', 'Company', readonly=True, required=True)
-    product_id = fields.Many2one('product.product', 'Product', readonly=True, required=True, check_company=True)
+    product_id = fields.Many2one('product.product', 'Product', readonly=True, required=True, check_company=True, auto_join=True)
     categ_id = fields.Many2one('product.category', related='product_id.categ_id')
     product_tmpl_id = fields.Many2one('product.template', related='product_id.product_tmpl_id')
-    quantity = fields.Float('Quantity', digits=0, help='Quantity', readonly=True)
+    quantity = fields.Float('Quantity', help='Quantity', readonly=True, digits='Product Unit of Measure')
     uom_id = fields.Many2one(related='product_id.uom_id', readonly=True, required=True)
     currency_id = fields.Many2one('res.currency', 'Currency', related='company_id.currency_id', readonly=True, required=True)
     unit_cost = fields.Monetary('Unit Value', readonly=True)
     value = fields.Monetary('Total Value', readonly=True)
-    remaining_qty = fields.Float(digits=0, readonly=True)
+    remaining_qty = fields.Float(readonly=True, digits='Product Unit of Measure')
     remaining_value = fields.Monetary('Remaining Value', readonly=True)
     description = fields.Char('Description', readonly=True)
     stock_valuation_layer_id = fields.Many2one('stock.valuation.layer', 'Linked To', readonly=True, check_company=True)
@@ -36,3 +36,22 @@ class StockValuationLayer(models.Model):
             self._table, ['product_id', 'remaining_qty', 'stock_move_id', 'company_id', 'create_date']
         )
 
+    def _validate_accounting_entries(self):
+        am_vals = []
+        for svl in self:
+            if not svl.product_id.valuation == 'real_time':
+                continue
+            if svl.currency_id.is_zero(svl.value):
+                continue
+            am_vals += svl.stock_move_id._account_entry_move(svl.quantity, svl.description, svl.id, svl.value)
+        if am_vals:
+            account_moves = self.env['account.move'].sudo().create(am_vals)
+            account_moves._post()
+        for svl in self:
+            # Eventually reconcile together the invoice and valuation accounting entries on the stock interim accounts
+            if svl.company_id.anglo_saxon_accounting:
+                svl.stock_move_id._get_related_invoices()._stock_account_anglo_saxon_reconcile_valuation(product=svl.product_id)
+
+    def _validate_analytic_accounting_entries(self):
+        for svl in self:
+            svl.stock_move_id._account_analytic_entry_move()

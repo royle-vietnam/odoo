@@ -31,10 +31,10 @@ const ForecastWidgetField = AbstractField.extend({
         if (data.forecast_expected_date && data.date_deadline) {
             data.forecast_is_late = data.forecast_expected_date > data.date_deadline;
         }
-        data.will_be_fulfilled = utils.round_decimals(data.forecast_availability, this.record.fields.forecast_availability.digits[1]) >= utils.round_decimals(data.product_qty, this.record.fields.product_qty.digits[1]);
+        data.will_be_fulfilled = utils.round_decimals(data.forecast_availability, this.record.fields.forecast_availability.digits[1]) >= utils.round_decimals(data.product_qty, this.record.fields.forecast_availability.digits[1]);
 
         this.$el.html(QWeb.render('stock.forecastWidget', data));
-        this.$el.on('click', this._onOpenReport.bind(this));
+        this.$('.o_forecast_report_button').on('click', this._onOpenReport.bind(this));
     },
 
     isSet: function () {
@@ -53,23 +53,38 @@ const ForecastWidgetField = AbstractField.extend({
     _onOpenReport: function (ev) {
         ev.preventDefault();
         ev.stopPropagation();
-        const productId = this.recordData.product_id.res_id;
-        const resModel = 'product.product';
+        if (!this.recordData.id) {
+            return;
+        }
         this._rpc({
-            model: resModel,
+            model: 'stock.move',
             method: 'action_product_forecast_report',
-            args: [productId],
+            args: [this.recordData.id],
         }).then(action => {
-            action.context = {
-                active_model: resModel,
-                active_id: productId,
-            };
+            action.context = Object.assign(action.context || {}, {
+                active_model: 'product.product',
+                active_id: this.recordData.product_id.res_id,
+            });
             this.do_action(action);
         });
     },
 });
 
+const JsonWidget = AbstractField.extend({
+    supportedFieldTypes: ['char'],
+
+    _render: function () {
+        var value = JSON.parse(this.value);
+        if (!value || !value.template) {
+            this.$el.html('');
+            return;
+        }
+        $(QWeb.render(value.template, value)).appendTo(this.$el);
+    },
+});
+
 fieldRegistry.add('forecast_widget', ForecastWidgetField);
+fieldRegistry.add('json_widget', JsonWidget);
 
 return ForecastWidgetField;
 });

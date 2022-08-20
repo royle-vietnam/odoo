@@ -95,7 +95,7 @@ class TestSaleTimesheet(TestCommonSaleTimesheet):
             'employee_id': self.employee_user.id,
         })
         self.assertEqual(so_line_ordered_project_only.qty_delivered, 0.0, 'Timesheet directly on project does not increase delivered quantity on so line')
-        self.assertEqual(timesheet3.timesheet_invoice_type, 'non_billable_project', "Timesheets without task shoulbe be 'no project found'")
+        self.assertEqual(timesheet3.timesheet_invoice_type, 'non_billable', "Timesheets without SO should be be 'non-billable'")
         self.assertFalse(timesheet3.timesheet_invoice_id, "The timesheet should not be linked to the invoice, since we are in ordered quantity")
 
         # log timesheet on task in global project (higher than the initial ordrered qty)
@@ -270,7 +270,7 @@ class TestSaleTimesheet(TestCommonSaleTimesheet):
         })
         self.assertTrue(float_is_zero(so_line_deliver_only_project.qty_delivered, precision_digits=2), "Timesheeting on project should not incremented the delivered quantity on the SO line")
         self.assertEqual(sale_order.invoice_status, 'to invoice', 'Sale Timesheet: "invoice on delivery" timesheets should have quantity to invoice')
-        self.assertEqual(timesheet3.timesheet_invoice_type, 'non_billable_project', "Timesheets without task shoulbe be 'no project found'")
+        self.assertEqual(timesheet3.timesheet_invoice_type, 'billable_time', "Timesheets with an amount > 0 should be 'billable time'")
         self.assertFalse(timesheet3.timesheet_invoice_id, "The timesheet3 should not be linked to the invoice yet")
 
         # let's log some timesheets on the task (new task/new project)
@@ -357,7 +357,7 @@ class TestSaleTimesheet(TestCommonSaleTimesheet):
         self.assertEqual(sale_order.invoice_status, 'no', 'Sale Timesheet: "invoice on delivery" should not need to be invoiced on so confirmation')
 
         self.assertEqual(timesheet1.timesheet_invoice_type, 'billable_fixed', "Timesheets linked to SO line with ordered product shoulbe be billable fixed since it is a milestone")
-        self.assertEqual(timesheet2.timesheet_invoice_type, 'non_billable_project', "Timesheets without task shoulbe be 'no project found'")
+        self.assertEqual(timesheet2.timesheet_invoice_type, 'non_billable', "Timesheets without SO should be be 'non-billable'")
         self.assertFalse(timesheet1.timesheet_invoice_id, "The timesheet1 should not be linked to the invoice")
         self.assertFalse(timesheet2.timesheet_invoice_id, "The timesheet2 should not be linked to the invoice")
 
@@ -530,14 +530,15 @@ class TestSaleTimesheet(TestCommonSaleTimesheet):
         Task = self.env['project.task']
         today = Date.context_today(self.env.user)
 
-        task = Task.with_context(default_project_id=self.project_global.id).create({
+        task = Task.with_context(default_project_id=self.project_template.id).create({
             'name': 'first task',
-            'partner_id': self.partner_a.id,
+            'partner_id': self.partner_b.id,
             'planned_hours': 10,
+            'sale_line_id': self.so.order_line[0].id
         })
 
         Timesheet.create({
-            'project_id': self.project_global.id,
+            'project_id': self.project_template.id,
             'task_id': task.id,
             'name': 'my first timesheet',
             'unit_amount': 4,
@@ -545,51 +546,11 @@ class TestSaleTimesheet(TestCommonSaleTimesheet):
 
         timesheet_count1 = Timesheet.search_count([('project_id', '=', self.project_global.id)])
         timesheet_count2 = Timesheet.search_count([('project_id', '=', self.project_template.id)])
-        self.assertEqual(timesheet_count1, 1, "One timesheet in project_global")
-        self.assertEqual(timesheet_count2, 0, "No timesheet in project_template")
+        self.assertEqual(timesheet_count1, 0, "No timesheet in project_global")
+        self.assertEqual(timesheet_count2, 1, "One timesheet in project_template")
         self.assertEqual(len(task.timesheet_ids), 1, "The timesheet should be linked to task")
 
         # change project of task, as the timesheet is not yet invoiced, the timesheet will change his project
-        task.write({
-            'project_id': self.project_template.id
-        })
-
-        timesheet_count1 = Timesheet.search_count([('project_id', '=', self.project_global.id)])
-        timesheet_count2 = Timesheet.search_count([('project_id', '=', self.project_template.id)])
-        self.assertEqual(timesheet_count1, 0, "No timesheet in project_global")
-        self.assertEqual(timesheet_count2, 1, "One timesheet in project_template")
-        self.assertEqual(len(task.timesheet_ids), 1, "The timesheet still should be linked to task")
-
-        wizard = self.env['project.task.create.sale.order'].with_context(active_id=task.id, active_model='project.task').create({
-            'product_id': self.product_delivery_timesheet3.id
-        })
-
-        # We create the SO and the invoice
-        action = wizard.action_create_sale_order()
-        sale_order = self.env['sale.order'].browse(action['res_id'])
-        self.context = {
-            'active_model': 'sale.order',
-            'active_ids': [sale_order.id],
-            'active_id': sale_order.id,
-            'default_journal_id': self.company_data['default_journal_sale'].id
-        }
-        wizard = self.env['sale.advance.payment.inv'].with_context(self.context).create({
-            'advance_payment_method': 'delivered',
-            'date_start_invoice_timesheet': today - timedelta(days=4),
-            'date_end_invoice_timesheet': today
-        })
-        wizard.create_invoices()
-
-        Timesheet.create({
-            'project_id': self.project_template.id,
-            'task_id': task.id,
-            'name': 'my second timesheet',
-            'unit_amount': 6,
-        })
-
-        self.assertEqual(Timesheet.search_count([('project_id', '=', self.project_template.id)]), 2, "2 timesheets in project_template")
-
-        # change project of task, the timesheet not yet invoiced will change its project. The timesheet already invoiced will not change his project.
         task.write({
             'project_id': self.project_global.id
         })
@@ -597,5 +558,211 @@ class TestSaleTimesheet(TestCommonSaleTimesheet):
         timesheet_count1 = Timesheet.search_count([('project_id', '=', self.project_global.id)])
         timesheet_count2 = Timesheet.search_count([('project_id', '=', self.project_template.id)])
         self.assertEqual(timesheet_count1, 1, "One timesheet in project_global")
-        self.assertEqual(timesheet_count2, 1, "Still one timesheet in project_template")
-        self.assertEqual(len(task.timesheet_ids), 2, "The 2 timesheet still should be linked to task")
+        self.assertEqual(timesheet_count2, 0, "No timesheet in project_template")
+        self.assertEqual(len(task.timesheet_ids), 1, "The timesheet still should be linked to task")
+
+        # Create an invoice
+        context = {
+            'active_model': 'sale.order',
+            'active_ids': [self.so.id],
+            'active_id': self.so.id,
+            'default_journal_id': self.company_data['default_journal_sale'].id
+        }
+        wizard = self.env['sale.advance.payment.inv'].with_context(context).create({
+            'advance_payment_method': 'delivered',
+            'date_start_invoice_timesheet': today - timedelta(days=4),
+            'date_end_invoice_timesheet': today,
+        })
+        wizard.create_invoices()
+
+        Timesheet.create({
+            'project_id': self.project_global.id,
+            'task_id': task.id,
+            'name': 'my second timesheet',
+            'unit_amount': 6,
+        })
+
+        self.assertEqual(Timesheet.search_count([('project_id', '=', self.project_global.id)]), 2, "2 timesheets in project_global")
+
+        # change project of task, the timesheet not yet invoiced will change its project. The timesheet already invoiced will not change his project.
+        task.write({
+            'project_id': self.project_template.id
+        })
+
+        timesheet_count1 = Timesheet.search_count([('project_id', '=', self.project_global.id)])
+        timesheet_count2 = Timesheet.search_count([('project_id', '=', self.project_template.id)])
+        self.assertEqual(timesheet_count1, 1, "Still one timesheet in project_global")
+        self.assertEqual(timesheet_count2, 1, "One timesheet in project_template")
+        self.assertEqual(len(task.timesheet_ids), 2, "The 2 timesheets still should be linked to task")
+
+    def test_change_customer_and_SOL_after_invoiced_timesheet(self):
+        sale_order1 = self.env['sale.order'].create({
+            'partner_id': self.partner_a.id,
+            'partner_invoice_id': self.partner_a.id,
+            'partner_shipping_id': self.partner_a.id,
+            'pricelist_id': self.company_data['default_pricelist'].id,
+        })
+        sale_order2 = self.env['sale.order'].create({
+            'partner_id': self.partner_b.id,
+            'partner_invoice_id': self.partner_b.id,
+            'partner_shipping_id': self.partner_b.id,
+            'pricelist_id': self.company_data['default_pricelist'].id,
+        })
+        so1_product_global_project_so_line = self.env['sale.order.line'].create({
+            'name': self.product_delivery_timesheet2.name,
+            'product_id': self.product_delivery_timesheet2.id,
+            'product_uom_qty': 50,
+            'product_uom': self.product_delivery_timesheet2.uom_id.id,
+            'price_unit': self.product_delivery_timesheet2.list_price,
+            'order_id': sale_order1.id,
+        })
+        so2_product_global_project_so_line = self.env['sale.order.line'].create({
+            'name': self.product_delivery_timesheet2.name,
+            'product_id': self.product_delivery_timesheet2.id,
+            'product_uom_qty': 20,
+            'product_uom': self.product_delivery_timesheet2.uom_id.id,
+            'price_unit': self.product_delivery_timesheet2.list_price,
+            'order_id': sale_order2.id,
+        })
+
+        sale_order1.action_confirm()
+        sale_order2.action_confirm()
+
+        task_so1 = self.env['project.task'].search([('sale_line_id', '=', so1_product_global_project_so_line.id)])
+        task_so2 = self.env['project.task'].search([('sale_line_id', '=', so2_product_global_project_so_line.id)])
+
+        self.assertEqual(self.partner_a, task_so1.partner_id, "The Customer of the first task should be equal to partner_a.")
+        self.assertEqual(self.partner_b, task_so2.partner_id, "The Customer of the second task should be equal to partner_b.")
+        self.assertEqual(sale_order1.partner_id, task_so1.partner_id, "The Customer of the first task should be equal to the Customer of the first Sales Order.")
+        self.assertEqual(sale_order2.partner_id, task_so2.partner_id, "The Customer of the second task should be equal to the Customer of the second Sales Order.")
+
+        task_so1_timesheet1 = self.env['account.analytic.line'].create({
+            'name': 'Test Line1',
+            'project_id': task_so1.project_id.id,
+            'task_id': task_so1.id,
+            'unit_amount': 5,
+            'employee_id': self.employee_user.id,
+        })
+
+        invoice = sale_order1._create_invoices()
+        invoice.action_post()
+
+        self.assertEqual(self.partner_a, task_so1_timesheet1.partner_id, "The Task's Timesheet entry should have the same partner than on the task 1 and Sales Order 1.")
+
+        task_so1_timesheet2 = self.env['account.analytic.line'].create({
+            'name': 'Test Line2',
+            'project_id': task_so1.project_id.id,
+            'task_id': task_so1.id,
+            'unit_amount': 3,
+            'employee_id': self.employee_user.id,
+        })
+
+        task_so1.write({
+            'partner_id': self.partner_b.id,
+            'sale_line_id': so2_product_global_project_so_line.id,
+        })
+
+        self.assertEqual(self.partner_a, task_so1_timesheet1.partner_id, "The Task's first Timesheet entry should not have changed as it was already invoiced (its partner should still be partner_a).")
+        self.assertEqual(self.partner_b, task_so1_timesheet2.partner_id, "The Task's second Timesheet entry should have its partner changed, as it was not invoiced and the Task's partner/customer changed.")
+        self.assertEqual(so1_product_global_project_so_line, task_so1_timesheet1.so_line, "The Task's first Timesheet entry should not have changed as it was already invoiced (its so_line should still be equal to the first Sales Order line).")
+        self.assertEqual(so2_product_global_project_so_line, task_so1_timesheet2.so_line, "The Task's second Timesheet entry should have it's so_line changed, as the Sales Order Item of the Task changed, and this entry was not invoiced.")
+
+    def test_timesheet_upsell(self):
+        """ Test timesheet upselling and email """
+
+        sale_order = self.env['sale.order'].with_context(mail_notrack=True, mail_create_nolog=True).create({
+            'partner_id': self.partner_a.id,
+            'partner_invoice_id': self.partner_a.id,
+            'partner_shipping_id': self.partner_a.id,
+            'user_id': self.user_employee_company_B.id,
+        })
+        # create SO and confirm it
+        uom_days = self.env.ref('uom.product_uom_day')
+        sale_order_line = self.env['sale.order.line'].create({
+            'order_id': sale_order.id,
+            'name': self.product_order_timesheet3.name,
+            'product_id': self.product_order_timesheet3.id,
+            'product_uom_qty': 1,
+            'product_uom': uom_days.id,
+            'price_unit': self.product_order_timesheet3.list_price,
+        })
+        sale_order.action_confirm()
+        task = sale_order_line.task_id
+
+        # let's log some timesheets
+        self.env['account.analytic.line'].create({
+            'name': 'Test Line',
+            'project_id': task.project_id.id,
+            'task_id': task.id,
+            'unit_amount': 8,
+            'employee_id': self.employee_manager.id,
+        })
+
+        sale_order._create_invoices()
+        last_message_id = self.env['mail.message'].search([('model', '=', 'sale.order'), ('res_id', '=', sale_order.id)], limit=1).id or 0
+        self.env['account.analytic.line'].create({
+            'name': 'Test Line',
+            'project_id': task.project_id.id,
+            'task_id': task.id,
+            'unit_amount': 5,
+            'employee_id': self.employee_user.id,
+        })
+
+        self.assertEqual(sale_order.invoice_status, 'upselling', 'Sale Timesheet: "invoice on delivery" timesheets should not modify the invoice_status of the so')
+        message_sent = self.env['mail.message'].search([
+            ('id', '>', last_message_id),
+            ('subject', 'like', 'Upsell'),
+            ('model', '=', 'sale.order'),
+            ('res_id', '=', sale_order.id),
+        ])
+
+        self.assertEqual(len(message_sent), 1, 'Sale Timesheet: An email should always be sent to the saleperson when the state of the sale order change to upselling')
+
+        self.env['account.analytic.line'].create({
+            'name': 'Test Line',
+            'project_id': task.project_id.id,
+            'task_id': task.id,
+            'unit_amount': 5,
+            'employee_id': self.employee_user.id,
+        })
+
+        message_sent = self.env['mail.message'].search([
+            ('id', '>', last_message_id),
+            ('subject', 'like', 'Upsell'),
+            ('model', '=', 'sale.order'),
+            ('res_id', '=', sale_order.id),
+        ])
+        self.assertEqual(len(message_sent), 1, 'Sale Timesheet: An email should only be sent to the saleperson when the state of the sale order change to upselling')
+
+    def test_unlink_timesheet(self):
+        sale_order = self.env['sale.order'].create({
+            'partner_id': self.partner_a.id,
+            'partner_invoice_id': self.partner_a.id,
+            'partner_shipping_id': self.partner_a.id,
+            'pricelist_id': self.company_data['default_pricelist'].id,
+        })
+        so_line = self.env['sale.order.line'].create({
+            'name': self.product_delivery_timesheet2.name,
+            'product_id': self.product_delivery_timesheet2.id,
+            'product_uom_qty': 50,
+            'product_uom': self.product_delivery_timesheet2.uom_id.id,
+            'price_unit': self.product_delivery_timesheet2.list_price,
+            'order_id': sale_order.id,
+        })
+        sale_order.action_confirm()
+        task = so_line.task_id
+
+        # let's log some timesheets
+        analytic_line = self.env['account.analytic.line'].create({
+            'name': 'Test Line',
+            'project_id': task.project_id.id,
+            'task_id': task.id,
+            'unit_amount': 50,
+            'employee_id': self.employee_manager.id,
+        })
+
+        move = sale_order._create_invoices()
+        self.assertEqual(analytic_line.timesheet_invoice_id, move, "The timesheet should be linked to move")
+
+        move.with_context(check_move_validity=False).line_ids[0].unlink()
+        self.assertFalse(analytic_line.timesheet_invoice_id,"The timesheet should have been unlinked from move")

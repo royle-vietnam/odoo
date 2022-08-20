@@ -13,6 +13,23 @@ logger = logging.getLogger(__name__)
 class Http(models.AbstractModel):
     _inherit = 'ir.http'
 
+    def session_info(self):
+        session_info = super().session_info()
+        return self._add_public_key_to_session_info(session_info)
+
+    @api.model
+    def get_frontend_session_info(self):
+        frontend_session_info = super().get_frontend_session_info()
+        return self._add_public_key_to_session_info(frontend_session_info)
+
+    @api.model
+    def _add_public_key_to_session_info(self, session_info):
+        """Add the ReCaptcha public key to the given session_info object"""
+        public_key = self.env['ir.config_parameter'].sudo().get_param('recaptcha_public_key')
+        if public_key:
+            session_info['recaptcha_public_key'] = public_key
+        return session_info
+
     @api.model
     def _verify_request_recaptcha_token(self, action):
         """ Verify the recaptcha token for the current request.
@@ -21,7 +38,7 @@ class Http(models.AbstractModel):
         """
         ip_addr = request.httprequest.remote_addr
         token = request.params.pop('recaptcha_token_response', False)
-        recaptcha_result = request.env['ir.http']._verify_recaptcha_token(ip_addr, token, 'website_form')
+        recaptcha_result = request.env['ir.http']._verify_recaptcha_token(ip_addr, token, action)
         if recaptcha_result in ['is_human', 'no_secret']:
             return True
         if recaptcha_result == 'wrong_secret':

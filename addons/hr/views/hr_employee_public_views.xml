@@ -31,6 +31,7 @@
             <field name="model">hr.employee.public</field>
             <field name="arch" type="xml">
                 <form string="Employee" create="0" write="0" js_class="hr_employee_form">
+                    <field name="image_128" invisible="1" />
                     <header/>
                     <sheet>
                         <field name="user_id" invisible="1"/>
@@ -40,11 +41,11 @@
                             <!-- Used by other modules-->
                         </div>
                         <widget name="web_ribbon" title="Archived" bg_color="bg-danger" attrs="{'invisible': [('active', '=', True)]}"/>
-                        <field name="image_1920" widget='image' class="oe_avatar" options='{"zoom": true, "preview_image":"image_128"}'/>
+                        <field name="avatar_1920" widget='image' class="oe_avatar" options='{"zoom": true, "preview_image":"avatar_128"}'/>
                             <div class="oe_title">
-                                <label for="name" class="oe_edit_only"/>
+                                <label for="name" string="Employee Name"/>
                                 <h1>
-                                    <field name="name" placeholder="Employee's Name" required="True"/>
+                                    <field name="name" placeholder="e.g. John Doe" required="True"/>
                                     <a title="Chat" icon="fa-comments" href="#" class="ml8 o_employee_chat_btn" invisible="not context.get('chat_icon')" attrs="{'invisible': [('user_id','=', False)]}" role="button"><i class="fa fa-comments"/></a>
                                 </h1>
                                 <h2>
@@ -56,10 +57,10 @@
                                     <field name="mobile_phone" widget="phone" options="{'enable_sms': false}"/>
                                     <field name="work_phone" widget="phone" options="{'enable_sms': false}"/>
                                     <field name="work_email" widget="email"/>
-                                    <field name="work_location"/>
                                 </group>
                                 <group>
                                     <field name="department_id"/>
+                                    <field name="employee_type"/>
                                     <field name="company_id" groups="base.group_multi_company"/>
                                     <field name="parent_id"/>
                                     <field name="coach_id"/>
@@ -69,10 +70,11 @@
                             <page name="public" string="Work Information">
                                 <div id="o_work_employee_container"> <!-- These two div are used to position org_chart -->
                                     <div id="o_work_employee_main">
-                                        <group string="Location">
+                                        <group string="Location" name="location">
                                             <field name="address_id"
                                                 context="{'show_address': 1}"
                                                 options='{"always_reload": True, "highlight_first_line": True}'/>
+                                            <field name="work_location_id"/>
                                         </group>
                                         <group name="managers" string="Approvers" invisible="1">
                                             <!-- overridden in other modules -->
@@ -118,10 +120,11 @@
                     <field name="user_partner_id"/>
                     <field name="last_activity"/>
                     <field name="hr_icon_display"/>
+                    <field name="image_128" />
                     <templates>
                         <t t-name="kanban-box">
                         <div class="oe_kanban_global_click o_kanban_record_has_image_fill o_hr_kanban_record">
-                            <field name="image_128" widget="image" class="o_kanban_image_fill_left" options="{'zoom': true, 'zoom_delay': 1000, 'background': true, 'preventClicks': false}"/>
+                            <field name="avatar_128" widget="image" class="o_kanban_image_fill_left" options="{'zoom': true, 'zoom_delay': 1000, 'background': true, 'preventClicks': false}"/>
 
                             <div class="oe_kanban_details">
                                 <div class="o_kanban_record_top">
@@ -167,7 +170,7 @@
                                     <li t-if="record.work_email.raw_value"><field name="work_email" /></li>
                                     <li t-if="record.work_phone.raw_value" class="o_force_ltr"><field name="work_phone" /></li>
                                 </ul>
-                                <div class="oe_kanban_content">
+                                <div class="oe_kanban_content position-absolute fixed-bottom mr-2">
                                     <div class="o_kanban_record_bottom">
                                         <div class="oe_kanban_bottom_left"/>
                                         <div class="oe_kanban_bottom_right">

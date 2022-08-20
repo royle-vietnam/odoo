@@ -1,5 +1,4 @@
-odoo.define('mail/static/src/model/model_core.js', function (require) {
-'use strict';
+/** @odoo-module **/
 
 /**
  * Module that contains registry for adding new models or patching models.
@@ -39,7 +38,7 @@ function _getEntryFromModelName(modelName) {
  * @param {string} patchName
  * @param {Object} patch
  * @param {Object} [param3={}]
- * @param {string} [param3.type='instance'] 'instance', 'class' or 'field'
+ * @param {string} [param3.type='instance'] 'instance', 'class', 'field' or 'identifyingFields'
  */
 function _registerPatchModel(modelName, patchName, patch, { type = 'instance' } = {}) {
     const entry = _getEntryFromModelName(modelName);
@@ -79,6 +78,17 @@ function registerFieldPatchModel(modelName, patchName, patch) {
 }
 
 /**
+ * Register a patch for identifyignFields in model.
+ *
+ * @param {string} modelName
+ * @param {string} patchName
+ * @param {function} patch
+ */
+function registerIdentifyingFieldsPatch(modelName, patchName, patch) {
+    _registerPatchModel(modelName, patchName, patch, { type: 'identifyingFields' });
+}
+
+/**
  * Register a patch for instance methods in model.
  *
  * @param {string} modelName
@@ -114,12 +124,12 @@ function registerNewModel(name, factory, dependencies = []) {
 // Export
 //------------------------------------------------------------------------------
 
-return {
+export {
     registerClassPatchModel,
     registerFieldPatchModel,
     registerInstancePatchModel,
+    registerIdentifyingFieldsPatch,
     registerNewModel,
     registry,
 };
 
-});

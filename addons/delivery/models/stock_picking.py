@@ -89,6 +89,7 @@ class StockPicking(models.Model):
         help="Total weight of packages and products not in a package. Packages with no shipping weight specified will default to their products' total weight. This is the weight used to compute the cost of the shipping.")
     is_return_picking = fields.Boolean(compute='_compute_return_picking')
     return_label_ids = fields.One2many('ir.attachment', compute='_compute_return_label')
+    destination_country_code = fields.Char(related='partner_id.country_id.code', string="Destination Country")
 
     @api.depends('carrier_id', 'carrier_tracking_ref')
     def _compute_carrier_tracking_url(self):
@@ -124,22 +125,22 @@ class StockPicking(models.Model):
 
     def _send_confirmation_email(self):
         for pick in self:
-            if pick.carrier_id:
-                if pick.carrier_id.integration_level == 'rate_and_ship' and pick.picking_type_code != 'incoming':
-                    pick.send_to_shipper()
+            if pick.carrier_id and pick.carrier_id.integration_level == 'rate_and_ship' and pick.picking_type_code != 'incoming' and not pick.carrier_tracking_ref and pick.picking_type_id.print_label:
+                pick.sudo().send_to_shipper()
+            pick._check_carrier_details_compliance()
         return super(StockPicking, self)._send_confirmation_email()
 
     def _pre_put_in_pack_hook(self, move_line_ids):
         res = super(StockPicking, self)._pre_put_in_pack_hook(move_line_ids)
         if not res:
             if self.carrier_id:
-                return self._set_delivery_packaging()
+                return self._set_delivery_package_type()
         else:
             return res
 
-    def _set_delivery_packaging(self):
-        """ This method returns an action allowing to set the product packaging and the shipping weight
-         on the stock.quant.package.
+    def _set_delivery_package_type(self):
+        """ This method returns an action allowing to set the package type and the shipping weight
+        on the stock.quant.package.
         """
         self.ensure_one()
         view_id = self.env.ref('delivery.choose_delivery_package_view_form').id
@@ -172,7 +173,15 @@ class StockPicking(models.Model):
             res['exact_price'] = 0.0
         self.carrier_price = res['exact_price'] * (1.0 + (self.carrier_id.margin / 100.0))
         if res['tracking_number']:
-            self.carrier_tracking_ref = res['tracking_number']
+            previous_pickings = self.env['stock.picking']
+            previous_moves = self.move_lines.move_orig_ids
+            while previous_moves:
+                previous_pickings |= previous_moves.picking_id
+                previous_moves = previous_moves.move_orig_ids
+            without_tracking = previous_pickings.filtered(lambda p: not p.carrier_tracking_ref)
+            (self + without_tracking).carrier_tracking_ref = res['tracking_number']
+            for p in previous_pickings - without_tracking:
+                p.carrier_tracking_ref += "," + res['tracking_number']
         order_currency = self.sale_id.currency_id or self.company_id.currency_id
         msg = _(
             "Shipment sent to carrier %(carrier_name)s for shipping with tracking number %(ref)s<br/>Cost: %(price).2f %(currency)s",
@@ -183,6 +192,11 @@ class StockPicking(models.Model):
         )
         self.message_post(body=msg)
         self._add_delivery_cost_to_so()
+
+    def _check_carrier_details_compliance(self):
+        """Hook to check if a delivery is compliant in regard of the carrier.
+        """
+        return
 
     def print_return_label(self):
         self.ensure_one()
@@ -195,14 +209,13 @@ class StockPicking(models.Model):
             delivery_lines = sale_order.order_line.filtered(lambda l: l.is_delivery and l.currency_id.is_zero(l.price_unit) and l.product_id == self.carrier_id.product_id)
             carrier_price = self.carrier_price * (1.0 + (float(self.carrier_id.margin) / 100.0))
             if not delivery_lines:
-                sale_order._create_delivery_line(self.carrier_id, carrier_price)
-            else:
-                delivery_line = delivery_lines[0]
-                delivery_line[0].write({
-                    'price_unit': carrier_price,
-                    # remove the estimated price from the description
-                    'name': sale_order.carrier_id.with_context(lang=self.partner_id.lang).name,
-                })
+                delivery_lines = [sale_order._create_delivery_line(self.carrier_id, carrier_price)]
+            delivery_line = delivery_lines[0]
+            delivery_line[0].write({
+                'price_unit': carrier_price,
+                # remove the estimated price from the description
+                'name': sale_order.carrier_id.with_context(lang=self.partner_id.lang).name,
+            })
 
     def open_website_url(self):
         self.ensure_one()
