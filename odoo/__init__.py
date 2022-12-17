@@ -8,6 +8,7 @@
 # odoo must be a namespace package for odoo.addons to become one too
 # https://packaging.python.org/guides/packaging-namespace-packages/
 #----------------------------------------------------------
+from . import profiler
 import pkgutil
 import os.path
 __path__ = [
