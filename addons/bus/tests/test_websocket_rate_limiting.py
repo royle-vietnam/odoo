@@ -28,11 +28,12 @@ class TestWebsocketRateLimiting(WebsocketCase):
         # 1013 close code results in a protocol exception while it is a
         # valid, registered close code ("TRY LATER") :
         # https://www.iana.org/assignments/websocket/websocket.xhtml
-        with self.assertRaises(WebSocketProtocolException) as cm:
+        try:
             for _ in range(Websocket.RL_BURST + 1):
                 ws.send(json.dumps({'event_name': 'test_rate_limiting'}))
             self.assert_close_with_code(ws, CloseCode.TRY_LATER)
-        self.assertEqual(str(cm.exception), 'Invalid close opcode.')
+        except Exception as e:
+            self.fail(str(e))
 
     def test_rate_limiting_opening_burst(self):
         ws = self.websocket_connect()
@@ -58,9 +59,10 @@ class TestWebsocketRateLimiting(WebsocketCase):
         # 1013 close code results in a protocol exception while it is a
         # valid, registered close code ("TRY LATER") :
         # https://www.iana.org/assignments/websocket/websocket.xhtml
-        with self.assertRaises(WebSocketProtocolException) as cm:
+        try:
             # those requests are illicit and should not be accepted.
             for _ in range(Websocket.RL_BURST * 2):
                 ws.send(json.dumps({'event_name': 'test_rate_limiting'}))
             self.assert_close_with_code(ws, CloseCode.TRY_LATER)
-        self.assertEqual(str(cm.exception), 'Invalid close opcode.')
+        except Exception as e:
+            self.fail(str(e))
