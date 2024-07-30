@@ -233,7 +233,7 @@ class PaymentAcquirer(models.Model):
                     ],
                     limit=1,
                 )
-                if acquirer.id:
+                if acquirer.id and acquirer.provider != 'transfer':
                     acquirer._ensure_payment_method_line()
 
     def _inverse_journal_id(self):
