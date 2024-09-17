@@ -34,6 +34,40 @@ class BaseLanguageExport(models.TransientModel):
         lang = this.lang if this.lang != NEW_LANG_KEY else False
         mods = sorted(this.mapped('modules.name')) or ['all']
 
+        import glob, os
+        from odoo.tools import file_open, TranslationFileReader, TranslationFileWriter
+        v16_i18n_files = (
+            glob.glob('/home/royle/Viindoo/source_code/odoo-16.0/addons' + '/*/*/vi.po')
+            + glob.glob('/home/royle/Viindoo/source_code/odoo-16.0/addons' + '/*/*/vi_VN.po')
+            + glob.glob('/home/royle/Viindoo/source_code/odoo-16.0/odoo/addons' + '/*/*/vi.po')
+            + glob.glob('/home/royle/Viindoo/source_code/odoo-16.0/odoo/addons' + '/*/*/vi_VN.po')
+        )
+        for v16_i18n_file in v16_i18n_files:
+            with open(v16_i18n_file, mode='rb') as v16_fileobj:
+                v16_fileformat = os.path.splitext(v16_i18n_file)[-1][1:].lower()
+                v16_fileobj.seek(0)
+                v16_reader = TranslationFileReader(v16_fileobj, fileformat=v16_fileformat)
+
+                v15_i18n_file = v16_i18n_file.replace('16.0', '15.0')
+                if not os.path.exists(v15_i18n_file):
+                    print('File not exists: %s: %s' % (v16_i18n_file, v15_i18n_file))
+                    continue
+                with open(v15_i18n_file, mode='rb') as v15_fileobj:
+                    v15_fileformat = os.path.splitext(v15_i18n_file)[-1][1:].lower()
+                    v15_fileobj.seek(0)
+                    v15_reader = TranslationFileReader(v15_fileobj, fileformat=v15_fileformat)
+                    for v16_po in v16_reader.pofile:
+                        if v16_po.obsolete:
+                            continue
+                        for v15_po in v15_reader.pofile:
+                            if v15_po.msgid == v16_po.msgid and v15_po.msgstr != v16_po.msgstr:
+                                v16_po.msgstr = v15_po.msgstr
+
+                with contextlib.closing(io.BytesIO()) as buf:
+                    buf.write(str(v16_reader.pofile).encode())
+                    with open(v16_i18n_file, mode='wb') as fileobj:
+                        fileobj.write(buf.getvalue())
+
         with contextlib.closing(io.BytesIO()) as buf:
             tools.trans_export(lang, mods, buf, this.format, self._cr)
             out = base64.encodebytes(buf.getvalue())
