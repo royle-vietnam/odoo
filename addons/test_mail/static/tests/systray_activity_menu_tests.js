@@ -80,6 +80,7 @@ QUnit.test("activity menu widget: activity menu with 2 models", async (assert) =
     await contains(".o-mail-ActivityMenu-counter", { text: "5" });
     const actionChecks = {
         context: { force_search_count: 1,
+                   exclude_done_activities: true,
                    search_default_activities_overdue: 1,
                    search_default_activities_today: 1
         },
