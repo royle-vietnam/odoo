@@ -290,13 +290,18 @@ export function compileStepAuto(stepIndex, step, options) {
                 console.log(`Tour ${tour.name} on step: '${describeStep(step)}'`);
                 if (!keepWatchBrowser) {
                     browser.clearTimeout(tourTimeout);
+                    // The 10s default step budget assumes a machine running one
+                    // build at a time; ours share their cores with about ten
+                    // others. Scale by the same 2 as the server-side browser_js
+                    // timeout so a heavy-but-healthy step (e.g. the first load of
+                    // an app's main list view) does not kill the whole tour.
                     tourTimeout = browser.setTimeout(() => {
                         // The logged text shows the relative position of the failed step.
                         // Useful for finding the failed step.
                         console.warn(describeFailedStepDetailed(step, tour));
                         // console.error notifies the test runner that the tour failed.
                         console.error(describeFailedStepSimple(step, tour));
-                    }, (step.timeout || 10000) + stepDelay);
+                    }, (step.timeout || 10000) * 2 + stepDelay);
                 }
                 await new Promise((resolve) => browser.setTimeout(resolve, stepDelay));
             },

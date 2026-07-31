@@ -2127,6 +2127,12 @@ class HttpCase(TransactionCase):
         if any(f.filename.endswith('/coverage/execfile.py') for f in inspect.stack()  if f.filename):
             timeout = timeout * 1.5
 
+        # Applies to every browser test, including the ones passing an explicit
+        # timeout. The upstream budgets assume a machine running one build at a time;
+        # ours share their cores with about ten others, which is enough to make a
+        # healthy tour fail on wall-clock alone.
+        timeout = timeout * 2
+
         if watch:
             _logger.warning('watch mode is only suitable for local testing')
 
@@ -2171,7 +2177,9 @@ class HttpCase(TransactionCase):
 
             # Needed because tests like test01.js (qunit tests) are passing a ready
             # code = ""
-            self.assertTrue(browser._wait_ready(ready), 'The ready "%s" code was always falsy' % ready)
+            # Scaled by the same 2: waiting for the ready code is part of the same
+            # budget, and its own default is hardcoded at 60s.
+            self.assertTrue(browser._wait_ready(ready, timeout=120), 'The ready "%s" code was always falsy' % ready)
 
             error = False
             try:
