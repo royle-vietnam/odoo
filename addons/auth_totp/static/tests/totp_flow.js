@@ -275,7 +275,7 @@ registry.category("web_tour.tours").add('totp_admin_disables', {
     trigger: '[data-menu-xmlid="base.menu_administration"]'
 }, {
     content: 'Wait for page',
-    trigger: '.o_menu_brand:contains("Settings")',
+    trigger: '.o_form_view .app_settings_block',
     run() {}
 }, {
     content: "Open Users menu",
