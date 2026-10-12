@@ -70,6 +70,12 @@ class TestTitleToSlug(BaseCase):
             self._slugify("hétérogénéité")
         )
 
+    def test_vietnamese_d(self):
+        self.assertEqual(
+            "dong-vang-70-50",
+            self._slugify("Đồng vàng 70/50")
+        )
+
     def test_underscore(self):
         self.assertEqual(
             "one-two",

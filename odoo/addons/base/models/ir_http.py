@@ -132,6 +132,9 @@ class FasterRule(werkzeug.routing.Rule):
         return LazyCompiledBuilder(self, super()._compile_builder, append_unknown)
 
 
+_VIETNAMESE_D = str.maketrans({'đ': 'd', 'Đ': 'D'})
+
+
 class IrHttp(models.AbstractModel):
     _name = 'ir.http'
     _description = "HTTP Routing"
@@ -144,6 +147,10 @@ class IrHttp(models.AbstractModel):
             converting unicode chars to ascii, lowering all chars and replacing spaces
             and underscore with hyphen "-".
         """
+        # 'đ' is a letter of its own, not 'd' with a mark: NFKD keeps it and the ascii pass below would drop it
+        # ("Đồng vàng" -> "ong-vang"). Viindoo up to 16.0: viin_unicode_slugify.
+        if isinstance(value, str):
+            value = value.translate(_VIETNAMESE_D)
         if slugify_lib:
             # There are 2 different libraries only python-slugify is supported
             try:
